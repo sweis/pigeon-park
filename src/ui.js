@@ -105,7 +105,10 @@ export class UI {
       case 'settings': this.$('settings').classList.toggle('hidden'); this.renderSettings(); break;
       case 'speed': S.speed = +arg; this.renderSettings(); g.save(); break;
       case 'mut': S.mut = arg; this.renderSettings(); g.save(); break;
-      case 'reset': if (a.dataset.confirm) { g.resetAll(); this.$('settings').classList.add('hidden'); } else { a.dataset.confirm = 1; a.textContent = 'Really? Tap again to start over'; } break;
+      case 'reset': // two-tap confirm; the armed state lives here because the panel re-renders every 0.4 s
+        if (this.resetArmed && performance.now() - this.resetArmed < 5000) { this.resetArmed = 0; g.resetAll(); this.$('settings').classList.add('hidden'); }
+        else { this.resetArmed = performance.now(); this.renderSettings(); }
+        break;
       case 'intro-ok': this.introDone = true; this.$('intro').classList.add('hidden'); g.save(); break;
       case 'clone': { const q = S.clonePigeon(+arg); if (q) g.select(q.id); break; }
       case 'roost-add': S.roostAdd(+arg); this.roostSel = S.roost.length - 1; g.select(null, true); break;
@@ -199,7 +202,7 @@ export class UI {
         <div><b>${alive}</b><span>residents</span></div><div><b>${S.stats.births}</b><span>hatched</span></div>
         <div><b>${S.stats.flown}</b><span>departed</span></div><div><b>gen ${S.stats.maxGen}</b><span>deepest line</span></div>
       </div>
-      <button class="btn ghost small" data-act="reset">Start over with fresh ferals</button>`;
+      <button class="btn ghost small" data-act="reset">${this.resetArmed && performance.now() - this.resetArmed < 5000 ? 'Really? Tap again to start over' : 'Start over with fresh ferals'}</button>`;
   }
 
   // ---------- dialogs ----------
@@ -226,6 +229,18 @@ export class UI {
       `<div class="grid pedia">${items.map(i => `<div class="entry ${i.got ? '' : 'dim'}"><div class="entry-top"><b>${esc(i.title)}</b><span class="chip ${chip(i.tier)} tiny">${TIER_NAME[i.tier] || 'odd'}</span></div><div class="note">${esc(i.note)}</div></div>`).join('')}</div>
        <div class="foot">Field notes are written the first time a trait hatches in your park.</div>`;
   }
+  // Trait groups a breed needs that the player hasn't observed yet (each group: any one allele counts).
+  missingTraits(b) {
+    const S = this.sim, COLOR_NEEDS = { blueSd: ['spread:spread', 'dilute:dilute'], blued: ['dilute:dilute'], indigoS: ['indigo:indigo', 'spread:spread'] };
+    const groups = [];
+    for (const [k, v] of Object.entries(b.req)) {
+      if (k === 'accessory') continue;
+      if (k === 'colorKey') { for (const t of COLOR_NEEDS[v] || []) groups.push([t]); continue; }
+      const keys = (Array.isArray(v) ? v : [v]).map(x => k + ':' + x).filter(key => M.ALLELE_META[key]);
+      if (keys.length) groups.push(keys);
+    }
+    return groups.filter(g => !g.some(key => S.discovered[key]));
+  }
   dlg_breeds() {
     const S = this.sim, P = this.g.portraits;
     const list = M.BREEDS.map(b => ({ b, got: S.breeds[b.id] })).sort((x, y) => (!!y.got - !!x.got));
@@ -236,7 +251,7 @@ export class UI {
           <img src="${P.get(M.breedSample(b))}" class="${got ? '' : 'silhouette'}" alt="">
           <b>${got ? esc(b.name) : '???'}</b>
           <span class="chip tiny ${b.legend ? 'chip-breed' : b.real ? 'chip-t1' : 'chip-t3'}">${b.legend ? 'legendary' : b.real ? (b.exotic ? 'exotic' : 'real breed') : 'cryptid'}</span>
-          <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : 'Recipe: ' + esc(M.breedHint(b)) + '.'}</div>
+          <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : (() => { const n = this.missingTraits(b).length; return n ? `Recipe unknown — needs ${n} trait${n > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'; })()}</div>
           ${got ? `<div class="by">first bred by ${esc(got.by)}</div><button class="btn small" data-act="clone-breed" data-arg="${b.id}">${I.clone} Clone into park</button>` : ''}
         </div>`).join('')}</div>
        <div class="foot">Match a real fancy-pigeon breed to register it. The cryptids are your problem.</div>`;
@@ -254,7 +269,7 @@ export class UI {
           <li><b>Clone</b> birds that carry what you want (check “Hidden in the DNA”) to flood the gene pool.</li>
           <li><b>Dismiss</b> birds that dilute it. The park holds ${S.cap}; when it fills up, birds fly off on their own.</li>
           <li>The <b>Roost</b> keeps ${ROOST_SIZE} favourites safe. Release or clone them back any time.</li>
-          <li>Registry cards list each breed's recipe. Found breeds can be cloned straight into the park.</li>
+          <li>A registry card reveals its recipe once you've observed every trait it needs. Found breeds can be cloned straight into the park.</li>
           <li>Fantasy colours only appear through mutation — turn Mutations up to <b>${MUTATIONS[2].label}</b> to fish for them.</li>
           <li>Park speed goes from ${SPEEDS[0].label} to ${SPEEDS[SPEEDS.length - 1].label}. It's fine to just leave the park running.</li>
           <li>Some words, typed while the park is open, do things.</li>

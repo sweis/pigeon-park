@@ -9,24 +9,44 @@ export const LOCI = [
   { id: 'dilute',   alleles: ['full', 'dilute'] },
   { id: 'recred',   alleles: ['no', 'red'] },
   { id: 'grizzle',  alleles: ['grizzle', 'no'] },
-  { id: 'pied',     alleles: ['solid', 'splash', 'saddle', 'capped', 'white'] },
+  { id: 'pied',     alleles: ['solid', 'splash', 'rosewing', 'saddle', 'capped', 'baldhead', 'beard', 'magpie', 'gazzi', 'shield', 'white'] },
+  { id: 'almond',   alleles: ['almond', 'no'] },
+  { id: 'indigo',   alleles: ['indigo', 'no'] },
   { id: 'sheen',    alleles: ['normal', 'bronze', 'opal', 'galaxy'], mutOnly: { galaxy: 1 } },
   { id: 'fantasy',  alleles: ['none', 'gold', 'mint', 'lilac', 'bubblegum', 'void', 'diamond', 'emerald', 'goldore', 'diamondore', 'emeraldore', 'redstoneore', 'ironore', 'lapisore', 'coalore', 'gemore'], mutOnly: { gold: 1, mint: 1, lilac: 1, bubblegum: 1, void: 1, diamond: 1, emerald: 1, goldore: 1, diamondore: 1, emeraldore: 1, redstoneore: 1, ironore: 1, lapisore: 1, coalore: 1, gemore: 1 } },
   { id: 'fpattern', alleles: ['none', 'dots', 'hearts', 'stars'], mutOnly: { dots: 1, hearts: 1, stars: 1 } },
   { id: 'glow',     alleles: ['none', 'glow'], mutOnly: { glow: 1 } },
-  { id: 'crest',    alleles: ['none', 'peak', 'shell', 'rose', 'lace'] },
+  { id: 'crest',    alleles: ['none', 'peak', 'shell', 'rose', 'lace', 'double'] },
   { id: 'muffs',    alleles: ['clean', 'grouse', 'muffed'] },
   { id: 'tail',     alleles: ['normal', 'fantail'] },
   { id: 'mane',     alleles: ['plain', 'hood', 'cascade'] },
   { id: 'crop',     alleles: ['normal', 'globe'] },
   { id: 'frill',    alleles: ['smooth', 'frill'] },
   { id: 'curl',     alleles: ['straight', 'curly'] },
-  { id: 'beak',     alleles: ['medium', 'short'] },
-  { id: 'eye',      alleles: ['orange', 'pearl'] },
+  { id: 'beak',     alleles: ['medium', 'long', 'short', 'stubby'] },
+  { id: 'wattle',   alleles: ['small', 'large'] },
+  { id: 'eye',      alleles: ['orange', 'pearl', 'bull'] },
   { id: 'size',     alleles: ['normal', 'king', 'dinky'] },
-  { id: 'behavior', alleles: ['steady', 'tumbler'] },
-  { id: 'voice',    alleles: ['coo', 'trumpet'] },
+  { id: 'posture',  alleles: ['normal', 'upright'] },
+  { id: 'legs',     alleles: ['normal', 'long'] },
+  { id: 'feather',  alleles: ['normal', 'silky'] },
+  { id: 'behavior', alleles: ['steady', 'tumbler', 'parlor'] },
+  { id: 'voice',    alleles: ['coo', 'trumpet', 'laugher'] },
 ];
+
+// Wild-type expression for every locus (a plain blue-bar feral). Used to fill in genes that an
+// older save doesn't have, and as the base for breed samples and summoned birds.
+export const WILD = {
+  base: 'blue', pattern: 'bar', spread: 'no', dilute: 'full', recred: 'no', grizzle: 'no', pied: 'solid',
+  almond: 'no', indigo: 'no', sheen: 'normal', fantasy: 'none', fpattern: 'none', glow: 'none', crest: 'none',
+  muffs: 'clean', tail: 'normal', mane: 'plain', crop: 'normal', frill: 'smooth', curl: 'straight', beak: 'medium',
+  wattle: 'small', eye: 'orange', size: 'normal', posture: 'normal', legs: 'normal', feather: 'normal',
+  behavior: 'steady', voice: 'coo',
+};
+export function normalizeGenome(g) {
+  for (const l of LOCI) if (!Array.isArray(g[l.id]) || g[l.id].length !== 2 || !g[l.id].every(a => l.alleles.includes(a))) g[l.id] = [WILD[l.id], WILD[l.id]];
+  return g;
+}
 
 const FOUNDER_FREQ = {
   base: { blue: .68, ash: .20, brown: .12 },
@@ -35,23 +55,29 @@ const FOUNDER_FREQ = {
   dilute: { full: .85, dilute: .15 },
   recred: { no: .90, red: .10 },
   grizzle: { no: .93, grizzle: .07 },
-  pied: { solid: .78, splash: .14, saddle: .03, capped: .03, white: .02 },
+  pied: { solid: .74, splash: .12, rosewing: .03, saddle: .025, capped: .025, baldhead: .02, beard: .015, magpie: .01, gazzi: .01, shield: .01, white: .015 },
+  almond: { no: .97, almond: .03 },
+  indigo: { no: .96, indigo: .04 },
   sheen: { normal: .95, bronze: .04, opal: .01 },
   fantasy: { none: 1 },
   fpattern: { none: 1 },
   glow: { none: 1 },
-  crest: { none: .82, peak: .12, shell: .04, rose: .01, lace: .01 },
+  crest: { none: .8, peak: .12, shell: .04, rose: .015, lace: .01, double: .015 },
   muffs: { clean: .82, grouse: .12, muffed: .06 },
   tail: { normal: .90, fantail: .10 },
   mane: { plain: .93, hood: .05, cascade: .02 },
   crop: { normal: .93, globe: .07 },
   frill: { smooth: .90, frill: .10 },
   curl: { straight: .93, curly: .07 },
-  beak: { medium: .88, short: .12 },
-  eye: { orange: .85, pearl: .15 },
+  beak: { medium: .84, long: .05, short: .09, stubby: .02 },
+  wattle: { small: .93, large: .07 },
+  eye: { orange: .82, pearl: .14, bull: .04 },
   size: { normal: .86, king: .07, dinky: .07 },
-  behavior: { steady: .92, tumbler: .08 },
-  voice: { coo: .94, trumpet: .06 },
+  posture: { normal: .93, upright: .07 },
+  legs: { normal: .94, long: .06 },
+  feather: { normal: .95, silky: .05 },
+  behavior: { steady: .9, tumbler: .07, parlor: .03 },
+  voice: { coo: .92, trumpet: .05, laugher: .03 },
 };
 
 // tier: 0 common, 1 uncommon, 2 rare, 3 impossible (fantasy)
@@ -64,6 +90,16 @@ export const ALLELE_META = {
   'grizzle:grizzle': { label: 'Grizzle', tier: 1 },
   'pied:splash': { label: 'Splash', tier: 1 }, 'pied:saddle': { label: 'Saddle', tier: 2 },
   'pied:capped': { label: 'Capped', tier: 2 }, 'pied:white': { label: 'All-white', tier: 2 },
+  'pied:rosewing': { label: 'Rosewing', tier: 1 }, 'pied:baldhead': { label: 'Baldhead', tier: 2 },
+  'pied:beard': { label: 'Bearded', tier: 2 }, 'pied:magpie': { label: 'Magpie-marked', tier: 2 },
+  'pied:gazzi': { label: 'Gazzi-marked', tier: 2 }, 'pied:shield': { label: 'Wing shield', tier: 2 },
+  'almond:almond': { label: 'Almond', tier: 2 }, 'indigo:indigo': { label: 'Indigo', tier: 1 },
+  'crest:double': { label: 'Double crest', tier: 2 },
+  'beak:long': { label: 'Long beak', tier: 1 }, 'beak:stubby': { label: 'Button beak', tier: 2 },
+  'wattle:large': { label: 'Wattled', tier: 2 }, 'eye:bull': { label: 'Bull eyes', tier: 1 },
+  'posture:upright': { label: 'Upright stance', tier: 1 }, 'legs:long': { label: 'Stilt legs', tier: 2 },
+  'feather:silky': { label: 'Silky feathers', tier: 2 }, 'behavior:parlor': { label: 'Parlor roller', tier: 2 },
+  'voice:laugher': { label: 'Laugher voice', tier: 2 },
   'sheen:bronze': { label: 'Bronze sheen', tier: 2 }, 'sheen:opal': { label: 'Opal sheen', tier: 2 },
   'sheen:galaxy': { label: 'Galaxy sheen', tier: 3 },
   'fantasy:gold': { label: 'Solid gold', tier: 3 }, 'fantasy:mint': { label: 'Mint', tier: 3 },
@@ -136,6 +172,7 @@ const COLOR_LABELS = {
   ash: 'Ash-Red', ashS: 'Lavender', ashd: 'Cream', ashSd: 'Pale Lavender',
   brown: 'Brown', brownS: 'Chocolate', brownd: 'Khaki', brownSd: 'Café-au-lait',
   red: 'Red', redd: 'Golden Yellow', white: 'White',
+  almond: 'Almond', indigo: 'Indigo', indigoS: 'Andalusian Slate',
   gold: 'Solid Gold', mint: 'Mint', lilac: 'Lilac', bubblegum: 'Bubblegum', void: 'Void',
   diamond: 'Diamond', emerald: 'Emerald', goldore: 'Gold Ore', diamondore: 'Diamond Ore',
   emeraldore: 'Emerald Ore', redstoneore: 'Redstone Ore', ironore: 'Iron Ore', lapisore: 'Lapis Ore',
@@ -148,12 +185,15 @@ export function derivePheno(e, accessory) {
   if (e.fantasy !== 'none') colorKey = e.fantasy;
   else if (e.pied === 'white') colorKey = 'white';
   else if (e.recred === 'red') colorKey = e.dilute === 'dilute' ? 'redd' : 'red';
+  else if (e.almond === 'almond') colorKey = 'almond';
+  else if (e.indigo === 'indigo' && e.base === 'blue') colorKey = e.spread === 'spread' ? 'indigoS' : 'indigo';
   else colorKey = e.base + (e.spread === 'spread' ? 'S' : '') + (e.dilute === 'dilute' ? 'd' : '');
-  const patternVisible = e.fantasy === 'none' && e.pied !== 'white' && e.recred !== 'red' && e.spread !== 'spread';
+  const patternVisible = e.fantasy === 'none' && e.pied !== 'white' && e.recred !== 'red' && e.spread !== 'spread' && e.almond !== 'almond';
   let label = COLOR_LABELS[colorKey];
   if (patternVisible) label += ' ' + PATTERN_LABELS[e.pattern];
   if (e.grizzle === 'grizzle' && e.pied !== 'white' && e.fantasy === 'none') label = 'Grizzled ' + label;
-  if (e.pied === 'splash') label += ', splashed'; if (e.pied === 'saddle') label += ', saddled'; if (e.pied === 'capped') label += ', capped';
+  const PIED_SUFFIX = { splash: 'splashed', saddle: 'saddled', capped: 'capped', rosewing: 'rosewinged', baldhead: 'baldheaded', beard: 'bearded', magpie: 'magpie-marked', gazzi: 'gazzi-marked', shield: 'wing-shielded' };
+  if (PIED_SUFFIX[e.pied] && e.fantasy === 'none') label += ', ' + PIED_SUFFIX[e.pied];
   const traits = [], keys = [];
   for (const l of LOCI) {
     const m = ALLELE_META[l.id + ':' + e[l.id]];
@@ -220,6 +260,30 @@ export const BREEDS = [
   { id: 'nicobar', name: 'Nicobar Pigeon', real: 1, exotic: 1, req: { mane: 'cascade' }, sample: { spread: 'spread', sheen: 'bronze' }, blurb: 'Wears every necklace it owns. Simultaneously.' },
   { id: 'victoria', name: 'Victoria Crowned Pigeon', real: 1, exotic: 1, req: { crest: 'lace', size: 'king' }, sample: { dilute: 'dilute' }, blurb: 'The largest pigeon on Earth. The doily is load-bearing.' },
   { id: 'bleedingheart', name: 'Luzon Bleeding-heart', real: 1, exotic: 1, req: { fpattern: 'hearts', pied: 'white' }, blurb: 'It is fine. It has always looked like this. It is fine.' },
+  { id: 'magpie', name: 'Magpie', real: 1, req: { pied: 'magpie' }, blurb: 'Dressed for a gala. Attends none of them.' },
+  { id: 'gazzimodena', name: 'Gazzi Modena', real: 1, req: { pied: 'gazzi', size: 'dinky' }, blurb: 'The Modena, but it read a fashion magazine.' },
+  { id: 'danzig', name: 'Danzig Highflyer', real: 1, req: { pied: 'baldhead', beak: 'long' }, blurb: 'White-headed, long-nosed, flies until it forgets why.' },
+  { id: 'bearded', name: 'Bearded Tumbler', real: 1, req: { pied: 'beard', behavior: 'tumbler' }, blurb: 'Grows a beard. Does flips. Has a podcast, probably.' },
+  { id: 'turbit', name: 'Turbit', real: 1, req: { pied: 'shield', crest: 'peak', frill: 'frill' }, blurb: 'Coloured wings, white everything else, a cowlick for flair.' },
+  { id: 'rosewing', name: 'Rosewing Roller', real: 1, req: { pied: 'rosewing', behavior: 'tumbler' }, blurb: 'Roses on the shoulders, chaos in the sky.' },
+  { id: 'almondtumbler', name: 'Almond Tumbler', real: 1, req: { almond: 'almond', beak: 'stubby' }, blurb: 'Flecked like a biscotti. Beak like a button. Beloved of Victorians.' },
+  { id: 'budapest', name: 'Budapest Short-face', real: 1, req: { beak: 'stubby', posture: 'upright' }, blurb: 'Stands to attention. Has almost no face to stand behind.' },
+  { id: 'carrier', name: 'English Carrier', real: 1, req: { wattle: 'large', beak: 'long' }, blurb: 'A beak with a pigeon attached. Wattled for gravitas.' },
+  { id: 'barb', name: 'Barb', real: 1, req: { wattle: 'large', beak: 'short' }, blurb: 'A stubby beak and enormous spectacles. Very studious.' },
+  { id: 'dragoon', name: 'Dragoon', real: 1, req: { wattle: 'large', size: 'king' }, blurb: 'Big, wattled, and technically a cavalry unit.' },
+  { id: 'scandaroon', name: 'Scandaroon', real: 1, req: { beak: 'long', posture: 'upright' }, blurb: 'Nose held high. It has a lot of nose to hold.' },
+  { id: 'maltese', name: 'Maltese', real: 1, req: { legs: 'long', posture: 'upright' }, blurb: 'A pigeon on stilts pretending to be a chicken.' },
+  { id: 'andalusian', name: 'Andalusian', real: 1, req: { colorKey: 'indigoS' }, blurb: 'Slate-blue, dramatic, would like to be painted.' },
+  { id: 'lacefantail', name: 'Lace Fantail', real: 1, req: { tail: 'fantail', feather: 'silky' }, blurb: 'A fantail that went through a tumble dryer. Gloriously.' },
+  { id: 'parlorroller', name: 'Parlor Roller', real: 1, req: { behavior: 'parlor' }, blurb: 'Cannot fly. Rolls across the floor instead. Wins anyway.' },
+  { id: 'lotan', name: 'Indian Lotan', real: 1, req: { behavior: 'parlor', pied: 'white' }, blurb: 'A white ground-roller. Shake it gently and it somersaults.' },
+  { id: 'laugher', name: 'Arabian Laugher', real: 1, req: { voice: 'laugher' }, blurb: 'Laughs at everything. Especially you.' },
+  { id: 'bokhara', name: 'Bokhara Trumpeter', real: 1, req: { voice: 'trumpet', crest: 'double', muffs: 'muffed' }, blurb: 'Two crests, full slippers, one very long drumroll.' },
+  { id: 'capuchine', name: 'Old Dutch Capuchine', real: 1, req: { mane: 'hood', pied: 'baldhead' }, blurb: 'A monastic hood, a white face, strong opinions.' },
+  { id: 'pomeranian', name: 'Pomeranian Pouter', real: 1, req: { crop: 'globe', legs: 'long', muffs: 'muffed' }, blurb: 'Balloon, stilts and slippers. A complete outfit.' },
+  { id: 'norwich', name: 'Norwich Cropper', real: 1, req: { crop: 'globe', posture: 'upright' }, blurb: 'Inflates, stands up straight, awaits applause.' },
+  { id: 'kite', name: 'Kite Tumbler', real: 1, req: { spread: 'spread', sheen: 'bronze', behavior: 'tumbler' }, blurb: 'Black with bronze wings. Falls out of the sky elegantly.' },
+  { id: 'priest', name: 'Saxon Priest', real: 1, req: { pied: 'baldhead', crest: 'double' }, blurb: 'Two crests and a white skullcap. Delivers sermons on seeds.' },
   { id: 'disco', name: 'Disco Pigeon', real: 0, req: { sheen: 'galaxy' }, blurb: 'Contains a small nebula. Do not shake.' },
   { id: 'mintcond', name: 'Mint Condition', real: 0, req: { fantasy: 'mint' }, blurb: 'Never removed from original packaging.' },
   { id: 'nightlight', name: 'Night Light', real: 0, req: { glow: 'glow' }, blurb: 'Afraid of the dark. Solved it personally.' },
@@ -238,7 +302,7 @@ export function matchBreeds(pheno) {
 }
 
 const REQ_HINTS = {
-  colorKey: { blueSd: 'an icy color (blue + spread + dilute, all at once)', blued: 'a silvery color (blue + dilute, no spread)' },
+  colorKey: { blueSd: 'an icy color (blue + spread + dilute, all at once)', blued: 'a silvery color (blue + dilute, no spread)', indigoS: 'a slate color (indigo + spread on a blue bird)' },
   accessory: { crown: 'be born wearing a very specific hat' },
 };
 export function breedHint(b) {
@@ -252,17 +316,14 @@ export function breedHint(b) {
 
 // Build a representative expressed-map for a breed (for silhouettes)
 export function breedSample(b) {
-  const e = {}; for (const l of LOCI) e[l.id] = l.alleles[l.alleles.length === 2 && l.id === 'spread' ? 1 : 0];
-  e.base = 'blue'; e.pattern = 'bar'; e.spread = 'no'; e.dilute = 'full'; e.recred = 'no'; e.grizzle = 'no'; e.pied = 'solid';
-  e.sheen = 'normal'; e.fantasy = 'none'; e.fpattern = 'none'; e.glow = 'none'; e.crest = 'none'; e.muffs = 'clean';
-  e.tail = 'normal'; e.mane = 'plain'; e.crop = 'normal'; e.frill = 'smooth'; e.curl = 'straight'; e.beak = 'medium';
-  e.eye = 'orange'; e.size = 'normal'; e.behavior = 'steady'; e.voice = 'coo';
+  const e = { ...WILD };
   let accessory = null;
   for (const [k, v] of Object.entries(b.req)) {
     const val = Array.isArray(v) ? v[0] : v;
     if (k === 'colorKey') {
       if (val === 'blueSd') { e.base = 'blue'; e.spread = 'spread'; e.dilute = 'dilute'; }
       if (val === 'blued') { e.base = 'blue'; e.spread = 'no'; e.dilute = 'dilute'; }
+      if (val === 'indigoS') { e.base = 'blue'; e.spread = 'spread'; e.indigo = 'indigo'; }
     }
     else if (k === 'accessory') accessory = val;
     else e[k] = val;
@@ -284,6 +345,24 @@ export const PEDIA = {
   'pied:saddle': 'Saddle. White bird, colored wings. Very business casual.',
   'pied:capped': 'Capped. Wears its color like a tiny swim cap.',
   'pied:white': 'All-white. Suspiciously innocent.',
+  'pied:rosewing': 'Rosewing. A little bouquet of white on each shoulder.',
+  'pied:baldhead': 'Baldhead. Not bald. White-headed. Please stop saying bald.',
+  'pied:beard': 'Bearded. A white bib under the beak, like it just ate yogurt.',
+  'pied:magpie': 'Magpie-marked. Tuxedo up top, white underneath. Black tie optional.',
+  'pied:gazzi': 'Gazzi. Coloured head, wings and tail on a white body. Paint-by-numbers.',
+  'pied:shield': 'Wing shield. White bird, coloured wing shields. Heraldically correct.',
+  'almond:almond': 'Almond. Speckled like a biscotti. Changes a little every moult.',
+  'indigo:indigo': 'Indigo. Blue with rusty bars. Looks like it slept in the garden.',
+  'crest:double': 'Double crest. One crest on the head, another on the nose. Maximalist.',
+  'beak:long': 'Long beak. Can reach the crumbs other pigeons only dream of.',
+  'beak:stubby': 'Button beak. So short it is mostly a suggestion.',
+  'wattle:large': 'Wattled. Big warty spectacles and a nose to match. Distinguished.',
+  'eye:bull': 'Bull eyes. Dark, deep, unreadable. Probably thinking about bread.',
+  'posture:upright': 'Upright stance. Stands like it is about to give a toast.',
+  'legs:long': 'Stilt legs. Sees over the other pigeons. Tells them what it sees.',
+  'feather:silky': 'Silky feathers. Soft, fluffy, completely useless for flying. Worth it.',
+  'behavior:parlor': 'Parlor roller. Somersaults along the ground. Nobody asked it to.',
+  'voice:laugher': 'Laugher voice. Coos like a sitcom audience.',
   'sheen:bronze': 'Bronze sheen. Third place, permanently, gloriously.',
   'sheen:opal': 'Opal sheen. Shimmers when it thinks nobody is looking.',
   'sheen:galaxy': 'Galaxy sheen. NASA has been notified. They said "wow".',

@@ -20,6 +20,7 @@ export const BONES = ['root', 'body', 'head', 'wingL', 'wingR', 'legL', 'legR', 
 const BI = Object.fromEntries(BONES.map((b, i) => [b, i]));
 const PARENT = { body: 'root', head: 'body', wingL: 'body', wingR: 'body', legL: 'root', legR: 'root', tail: 'body', eyeL: 'head', eyeR: 'head', spin: 'head' };
 const H = V(.19, .5, 0);                        // head centre
+export const LEG_LIFT = .09;                    // extra leg length for stilt-legged birds
 const EYE = [V(H.x + .046, H.y + .022, -.061), V(H.x + .046, H.y + .022, .061)];
 const PIVOT = {
   root: V(0, 0, 0), body: V(0, .14, 0), head: V(.11, .33, 0),
@@ -66,10 +67,10 @@ function alongY(pos, dir, scl = [1, 1, 1]) {
 
 // ---------- geometry builder ----------
 class Build {
-  constructor(seg) { this.geos = []; this.seg = seg; }
+  constructor(seg) { this.geos = []; this.parts = []; this.seg = seg; this.fluff = 0; this.fluffSeed = 0; }
   // Deformed sphere. `deform(u)` maps a unit-sphere point to local shape space;
   // `paint(u)` returns a THREE.Color from the unit-sphere point.
-  blob(part, { ws = 24, hs = 16, deform, paint, color, matrix }) {
+  blob(part, { ws = 24, hs = 16, deform, paint, color, matrix, fluff = 0 }) {
     ws = Math.max(5, Math.round(ws * this.seg)); hs = Math.max(4, Math.round(hs * this.seg));
     let g = new THREE.SphereGeometry(1, ws, hs);
     g.deleteAttribute('uv'); g.deleteAttribute('normal');
@@ -81,6 +82,7 @@ class Build {
       const c = paint ? paint(u) : color;
       cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b;
       const d = deform(u.clone());
+      if (fluff) d.multiplyScalar(1 + fluff * (vnoise(u.clone().multiplyScalar(7), this.fluffSeed) - .45)); // silky: shaggy surface
       pos.setXYZ(i, d.x, d.y, d.z);
     }
     g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
@@ -108,9 +110,11 @@ class Build {
     for (let i = 0; i < n; i++) { si[i * 4] = BI[part]; sw[i * 4] = 1; }
     g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
     g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
-    this.geos.push(g);
+    this.geos.push(g); this.parts.push(part);
     return g;
   }
+  // Stilt legs: lift everything except the legs, which were built long.
+  lift(dy) { this.geos.forEach((g, i) => { if (this.parts[i] !== 'legL' && this.parts[i] !== 'legR') g.translate(0, dy, 0); }); }
   done() {
     const g = mergeGeometries(this.geos, false);
     g.computeBoundingSphere();
@@ -185,11 +189,15 @@ function buildGeometry(pheno, lod = 0) {
   const GAL = [col('#2e2a5e'), col('#6a3f8f'), col('#35547e')];
   const galAt = (u) => { const t = (u.x + u.y + 2) / 4; return t < .5 ? mix(GAL[0], GAL[1], t * 2) : mix(GAL[1], GAL[2], (t - .5) * 2); };
   const splash = e.pied === 'splash' && noFantasy;
+  const almond = pheno.colorKey === 'almond';
+  const silk = e.feather === 'silky' ? (lod ? .1 : .13) : 0; b.fluffSeed = seed;
+  const bald = e.pied === 'baldhead' && noFantasy, beard = e.pied === 'beard' && noFantasy, magpie = e.pied === 'magpie' && noFantasy;
   const grizzle = e.grizzle === 'grizzle' && e.pied !== 'white' && noFantasy;
   const tint = (c, u, s) => { // shared surface treatments: splash, grizzle, galaxy
     let r = c;
     if (splash && vnoise(u.clone().multiplyScalar(2.3).addScalar(seed * .01), seed) > .6) r = C.white;
     if (grizzle && vnoise(u.clone().multiplyScalar(9), seed + s) > .62) r = mix(r, C.white, .75);
+    if (almond) { const f = vnoise(u.clone().multiplyScalar(11), seed + s); if (f > .66) r = mix(r, C.pat, .8); else if (f < .2) r = mix(r, C.white, .6); }
     if (galaxy) r = mix(r, galAt(u), .85);
     return r;
   };
@@ -202,9 +210,10 @@ function buildGeometry(pheno, lod = 0) {
   };
   const bodyM = trs(V(0, .275, 0), [0, 0, .24]);
   b.blob('body', {
-    ws: 32, hs: 22, deform: bodyDef, matrix: bodyM,
+    ws: 32, hs: 22, deform: bodyDef, matrix: bodyM, fluff: silk,
     paint: (u) => {
       let c = C.body;
+      if (magpie && u.y < -.1) return C.white;
       if (u.y > .35) c = mix(c, C.head, (u.y - .35) * .35);   // darker back
       if (u.y < -.5) c = mix(c, C.white, (-.5 - u.y) * .12);  // pale belly
       return tint(c, u, 1);
@@ -218,9 +227,10 @@ function buildGeometry(pheno, lod = 0) {
   const showSheen = noFantasy && e.pied !== 'white' && e.pied !== 'saddle' && !galaxy && sheen;
   const capHead = e.pied === 'capped' && noFantasy ? col(PALETTES[pheno.colorKey === 'white' ? 'blue' : pheno.colorKey].head) : null;
   b.blob('head', {
-    ws: 18, hs: 14, matrix: trs(V(.135, .385, 0), [0, 0, -.38]),
+    ws: 18, hs: 14, matrix: trs(V(.135, .385, 0), [0, 0, -.38]), fluff: silk * .6,
     deform: (u) => u.set(u.x * .088, u.y * .135, u.z * .082),
     paint: (u) => {
+      if ((bald && u.y > .15) || (beard && u.x > .1 && u.y > -.45)) return C.white;
       let c = capHead ? C.white : C.head;
       if (showSheen && u.y < .5 && u.y > -.85) {
         const t = (u.y + .85) / 1.35, g = mix(col(sheen[0]), col(sheen[1]), t);
@@ -231,21 +241,26 @@ function buildGeometry(pheno, lod = 0) {
   });
   const headDef = (u) => u.set(u.x * .092 * (u.x > 0 ? 1.04 : 1), u.y * .084, u.z * .078);
   const headM = trs(H.clone());
-  b.blob('head', { ws: 22, hs: 16, deform: headDef, matrix: headM, paint: (u) => tint(capHead || C.head, u, 3) });
+  b.blob('head', { ws: 22, hs: 16, deform: headDef, matrix: headM, paint: (u) => (bald || (beard && u.x > .2 && u.y < -.25)) ? C.white : tint(capHead || C.head, u, 3) });
   const headS = shape(headDef, headM);
 
   // beak + cere
-  const bl = e.beak === 'short' ? .048 : .078;
-  b.prim('head', new THREE.ConeGeometry(.019, bl, Math.max(6, Math.round(12 * b.seg))), C.beak,
-    alongY(V(H.x + .085 + bl / 2 - .012, H.y - .012, 0), V(1, -.14, 0)));
-  b.ell('head', [.022, .012, .019], col('#e9e2d4'), trs(V(H.x + .08, H.y + .006, 0), [0, 0, -.25]));
+  const bl = { short: .048, stubby: .03, long: .118 }[e.beak] || .078, br = e.beak === 'long' ? .016 : e.beak === 'stubby' ? .021 : .019;
+  b.prim('head', new THREE.ConeGeometry(br, bl, Math.max(6, Math.round(12 * b.seg))), C.beak,
+    alongY(V(H.x + .085 + bl / 2 - .012, H.y - .012, 0), V(1, e.beak === 'long' ? -.2 : -.14, 0)));
+  if (e.beak === 'stubby') b.ell('head', [.07, .06, .07], C.head, trs(V(H.x + .03, H.y + .03, 0)), 14, 10); // domed short-face forehead
+  const wattled = e.wattle === 'large', wat = col('#e8dfcf');
+  if (wattled) { // big warty cere over the beak base
+    [[.078, .012, 0, .026], [.09, .004, .012, .018], [.09, .004, -.012, .018], [.1, .0, 0, .016]].forEach(([x, y, z, r]) =>
+      b.ell('head', [r * 1.1, r * .8, r], wat, trs(V(H.x + x, H.y + y, z)), 10, 7));
+  } else b.ell('head', [.022, .012, .019], col('#e9e2d4'), trs(V(H.x + .08, H.y + .006, 0), [0, 0, -.25]));
 
   // eyes (eye bones so they can blink / close)
   const ring = mix(C.head, col('#2a2622'), .35);
   EYE.forEach((E, i) => {
     const s = i ? 1 : -1, part = i ? 'eyeR' : 'eyeL';
     const out = V(.35, .05, s).normalize();
-    b.prim(part, new THREE.TorusGeometry(.024, .0055, 6, 18), ring, new THREE.Matrix4().makeBasis(...basisVecs(out)).setPosition(E.clone().addScaledVector(out, -.002)));
+    b.prim(part, new THREE.TorusGeometry(wattled ? .028 : .024, wattled ? .012 : .0055, 6, 18), wattled ? wat : ring, new THREE.Matrix4().makeBasis(...basisVecs(out)).setPosition(E.clone().addScaledVector(out, -.002)));
     b.ell(part, [.021, .021, .011], C.eye, basis(out).setPosition(E));
     b.ell(part, [.0105, .0105, .006], col('#1d1b1a'), basis(out).setPosition(E.clone().addScaledVector(out, .008).add(V(.003, 0, 0))));
     b.ell(part, [.0038, .0038, .002], col('#ffffff'), basis(out).setPosition(E.clone().addScaledVector(out, .013).add(V(.006, .006, 0))), 6, 4);
@@ -260,9 +275,10 @@ function buildGeometry(pheno, lod = 0) {
     const part = s > 0 ? 'wingR' : 'wingL';
     const wm = trs(V(-.055, .315, .122 * s), [.08 * s, -.12 * s, .2]);
     b.blob(part, {
-      ws: 28, hs: 14, deform: wingDef, matrix: wm,
+      ws: 28, hs: 14, deform: wingDef, matrix: wm, fluff: silk,
       paint: (u) => {
         let c = C.wing;
+        if (e.pied === 'shield' && noFantasy && u.x < -.42) return C.white;   // white flights around the coloured shield
         if (u.x < -.42) c = mix(c, C.pat, .42 + (-.42 - u.x) * .5);     // dark flight feathers
         else if (u.y > .55) c = mix(c, C.body, .4);                       // shoulder
         return tint(c, u, 4 + s);
@@ -281,6 +297,9 @@ function buildGeometry(pheno, lod = 0) {
         }
       }
     }
+    if (e.pied === 'rosewing' && noFantasy) {
+      [[.45, .45], [.3, .55], [.52, .2], [.35, .3], [.2, .45], [.42, .6]].forEach(([x, y]) => b.ell(part, [.02, .018, .005], C.white, onSurface(ws, side(x, y), .002, 0, 1), 8, 5));
+    }
     if (e.curl === 'curly') {
       for (let i = 0; i < 9; i++) b.prim(part, new THREE.TorusGeometry(.026, .006, 5, 12, Math.PI * 1.4), mix(C.curl, C.wing, .45),
         onSurface(ws, side(.5 - (i % 5) * .22, i < 5 ? .3 : -.25), .001, -.6 + i * .3, 1).multiply(new THREE.Matrix4().makeScale(1, 1, .35)));
@@ -298,14 +317,14 @@ function buildGeometry(pheno, lod = 0) {
       const len = row ? .15 : .205, dir = V(-.22, Math.cos(a), Math.sin(a)).normalize();
       const c = row ? C.wing : (i % 2 ? C.wing : tailCol);
       b.blob('tail', {
-        ws: 10, hs: 6, matrix: alongY(piv.clone().addScaledVector(dir, len * .9).add(V(row * .012, 0, 0)), dir),
+        ws: 10, hs: 6, matrix: alongY(piv.clone().addScaledVector(dir, len * .9).add(V(row * .012, 0, 0)), dir), fluff: silk * 2.2,
         deform: (u) => u.set(u.x * .05 * (1 - .3 * Math.max(0, -u.y)), u.y * len, u.z * .014),
         paint: (u) => tint(tailBand && u.y > .55 && !row ? mix(c, C.pat, .6) : c, u, 7),
       });
     }
   } else {
     b.blob('tail', {
-      ws: 20, hs: 10, matrix: trs(V(-.32, .228, 0), [0, 0, .2]),
+      ws: 20, hs: 10, matrix: trs(V(-.32, .228, 0), [0, 0, .2]), fluff: silk * 1.4,
       deform: (u) => u.set(u.x * .19, u.y * (.044 - .018 * Math.max(0, -u.x)) + .006 * (1 - u.z * u.z), u.z * (.07 + .06 * Math.max(0, -u.x))),
       paint: (u) => tint(tailBand && u.x < -.5 && u.x > -.8 ? mix(tailCol, C.pat, .75) : tailCol, u, 7),
     });
@@ -314,7 +333,8 @@ function buildGeometry(pheno, lod = 0) {
   // ---- legs & feet ----
   for (const s of [-1, 1]) {
     const part = s > 0 ? 'legR' : 'legL', z = .056 * s;
-    b.prim(part, new THREE.CylinderGeometry(.011, .013, .15, 8), C.leg, trs(V(.02, .09, z)));
+    const legLen = .15 + (e.legs === 'long' ? LEG_LIFT : 0);
+    b.prim(part, new THREE.CylinderGeometry(.011, .013, legLen, 8), C.leg, trs(V(.02, .015 + legLen / 2, z)));
     for (const a of [-.45, 0, .45]) b.prim(part, new THREE.CapsuleGeometry(.0065, .04, 2, 6), C.leg, trs(V(.045 + Math.cos(a) * .012, .01, z + Math.sin(a) * .018), [0, -a, -Math.PI / 2]));
     b.prim(part, new THREE.CapsuleGeometry(.006, .025, 2, 6), C.leg, trs(V(.0, .01, z), [0, 0, Math.PI / 2]));
     if (e.muffs === 'muffed') {
@@ -375,7 +395,7 @@ function buildGeometry(pheno, lod = 0) {
   // ---- crests ----
   if (e.crest === 'peak') {
     b.prim('head', new THREE.ConeGeometry(.024, .085, 8), C.head, alongY(V(H.x - .07, H.y + .06, 0), V(-.75, 1, 0)));
-  } else if (e.crest === 'shell') {
+  } else if (e.crest === 'shell' || e.crest === 'double') {
     const c0 = V(H.x - .03, H.y + .005, 0);
     for (let ring = 0; ring < 2; ring++) for (let i = 0; i < 13; i++) {
       const a = (-120 + i * 20) * Math.PI / 180, dir = V(-.75 - ring * .3, Math.cos(a), Math.sin(a)).normalize();
@@ -399,6 +419,15 @@ function buildGeometry(pheno, lod = 0) {
       const a = (-68 + i * 13.6) * Math.PI / 180, dir = V(-.22, Math.cos(a), Math.sin(a)).normalize();
       b.prim('head', new THREE.CylinderGeometry(.0035, .0045, .14, 5), C.head, alongY(c0.clone().addScaledVector(dir, .07), dir));
       b.ell('head', [.024, .016, .005], col('#f6f3ea'), alongY(c0.clone().addScaledVector(dir, .145), dir, [1, 1, 1]).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)), 10, 6);
+    }
+  }
+
+  if (e.crest === 'double') { // second crest: a rosette on the nose
+    const c0 = V(H.x + .075, H.y + .035, 0);
+    for (let i = 0; i < 10; i++) {
+      const y = 1 - (i + .5) / 10 * 1.6, r = Math.sqrt(Math.max(0, 1 - y * y)), th = i * 2.4;
+      const dir = V(Math.abs(y) * .4 + .4, Math.cos(th) * r * .8 + .4, Math.sin(th) * r).normalize();
+      b.ell('head', [.016, .03, .008], C.wing, alongY(c0.clone().addScaledVector(dir, .02), dir), 8, 6);
     }
   }
 
@@ -446,6 +475,7 @@ function buildGeometry(pheno, lod = 0) {
   // ---- accessories ----
   if (pheno.accessory) accessory(b, pheno.accessory, C);
 
+  if (e.legs === 'long') b.lift(LEG_LIFT);
   return { geometry: b.done(), kind };
 }
 
@@ -554,15 +584,20 @@ export class PigeonRig {
       const bone = new THREE.Bone(); bone.name = name;
       const par = PARENT[name];
       bone.position.copy(PIVOT[name]).sub(par ? PIVOT[par] : V(0, 0, 0));
+      if (par === 'root') bone.position.y += pheno.e.legs === 'long' ? LEG_LIFT : 0;
       bones[name] = bone; list.push(bone);
       if (par) bones[par].add(bone);
     }
     this.rest = Object.fromEntries(BONES.map(n => [n, bones[n].position.clone()]));
+    // upright breeds (croppers, Maltese, Scandaroon) stand tall: tilt the body, keep the head level
+    this.restRot = Object.fromEntries(BONES.map(n => [n, new THREE.Euler()]));
+    if (pheno.e.posture === 'upright') { this.restRot.body.z = .4; this.restRot.head.z = -.32; this.restRot.tail.z = -.22; }
     this.pheno = pheno; this.lod = 0;
     const mesh = new THREE.SkinnedMesh(geometry, materials[kind]);
     mesh.add(bones.root);
     mesh.updateMatrixWorld(true);
     mesh.bind(new THREE.Skeleton(list));
+    for (const n of BONES) bones[n].rotation.copy(this.restRot[n]); // after bind, so the pose is not baked away
     mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
     this.mesh = mesh; this.bones = bones;
     this.group = new THREE.Group(); this.group.add(mesh);

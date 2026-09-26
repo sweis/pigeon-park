@@ -51,7 +51,7 @@ class Game {
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.0;
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.shadowMap.enabled = this.q.shadows;
-    r.shadowMap.type = this.q.mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+    r.shadowMap.type = THREE.PCFShadowMap; // PCFSoft was removed in r18x; PCF + shadow.radius is soft
     r.debug.onShaderError = (gl, prog, vs, fs) => { this.lastShaderError = (gl.getProgramInfoLog(prog) || 'shader error').slice(0, 300); console.error('[shader]', this.lastShaderError); };
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.contextLost = true; this.onContextLost(); });
     canvas.addEventListener('webglcontextrestored', () => location.reload());
@@ -135,8 +135,10 @@ class Game {
   }
   resetAll() {
     try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
-    const keep = { speed: this.sim.speed, mut: this.sim.mut, ph: this.sim.phase() };
+    const keep = { speed: this.sim.speed, mut: this.sim.mut, ph: this.sim.phase() }, nextId = this.sim.ids;
     this.sim.reset(); this.sim.restore(keep);
+    this.sim.ids = nextId; // ids keep counting so no new bird inherits an old bird's 3D view
+    this.cam.follow = null;
     this.sim.initFlock(null);
     this.ui.roostSel = null; this.ui.seen = { pedia: 0, breeds: 0 };
     this.cam.shot('overview', { snap: false });
@@ -328,7 +330,7 @@ function makeDebugApi(g) {
         speed: S.speed, mut: S.mut, cap: S.cap, selId: S.selId, follow: g.cam.follow, cam: g.cam.name,
         pop: S.pigeons.filter(p => !p.flying).length, eggs: S.eggs.length, poops: S.poops.length, court: !!S.court,
         roost: S.roost.map(r => r.name), stats: { ...S.stats },
-        breedsFound: Object.keys(S.breeds), traitsFound: Object.keys(S.discovered).length,
+        breedsFound: Object.keys(S.breeds), breedsTotal: M.BREEDS.length, traitsFound: Object.keys(S.discovered).length, traitsTotal: Object.keys(M.PEDIA).length,
         pigeons: S.pigeons.map(p => ({ id: p.id, name: p.name, x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), dir: +p.dir.toFixed(2), state: p.state, flying: p.flying, held: p.held, gen: p.gen, label: p.pheno.label, breeds: p.breeds.map(b => b.id) })),
         render: {
           frameMsP50: pct(g.frameMs, .5), frameMsP99: pct(g.frameMs, .99), drawCalls: info.render.calls, triangles: info.render.triangles,

@@ -61,13 +61,7 @@ export function genomeHash(genome) {
 
 export function pureGenome(over) {
   const g = {};
-  for (const l of M.LOCI) g[l.id] = [l.alleles[0], l.alleles[0]];
-  Object.assign(g, {
-    fantasy: ['none', 'none'], fpattern: ['none', 'none'], glow: ['none', 'none'], sheen: ['normal', 'normal'],
-    pattern: ['bar', 'bar'], spread: ['no', 'no'], dilute: ['full', 'full'], recred: ['no', 'no'],
-    grizzle: ['no', 'no'], pied: ['solid', 'solid'], muffs: ['clean', 'clean'], mane: ['plain', 'plain'],
-    frill: ['smooth', 'smooth'], curl: ['straight', 'straight'], eye: ['orange', 'orange'],
-  });
+  for (const l of M.LOCI) g[l.id] = [M.WILD[l.id], M.WILD[l.id]];
   for (const [k, v] of Object.entries(over)) g[k] = [v, v];
   return g;
 }
@@ -122,6 +116,7 @@ export class Sim {
 
   // ---------- flock ----------
   spawn({ genome, accessory = null, name, gen = 1, adult = false, x, z, quiet = false, dir }) {
+    M.normalizeGenome(genome); // older saves predate some genes
     const pheno = M.computePheno(genome, accessory);
     if (x === undefined || z === undefined) [x, z] = this.randomSpot(); else [x, z] = this.clampToPark(x, z);
     const p = {
@@ -218,11 +213,11 @@ export class Sim {
         continue;
       }
       if (p.y > 0) p.y = Math.max(0, p.y - dt * 3);
-      if (p.state === 'walk') {
+      if (p.state === 'walk' || p.state === 'roll') {
         const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz);
         const s = p.v * dt;
-        if (d <= s) { p.x = p.tx; p.z = p.tz; if (!p.courting) p.state = 'idle'; }
-        else { p.x += dx / d * s; p.z += dz / d * s; p.dir = Math.atan2(dz, dx); }
+        if (d <= s) { p.x = p.tx; p.z = p.tz; if (!p.courting && p.state === 'walk') p.state = 'idle'; }
+        else { p.x += dx / d * s; p.z += dz / d * s; if (p.state === 'walk') p.dir = Math.atan2(dz, dx); }
         [p.x, p.z] = this.clampToPark(p.x, p.z);
       }
     }
@@ -243,6 +238,11 @@ export class Sim {
         p.stateAt = now;
         if (sleepy && r < .55) { p.state = 'sleep'; p.stateUntil = now + 3 + rand() * 5; p.emote = { kind: 'zzz' }; p.emoteUntil = p.stateUntil; }
         else if (p.pheno.e.behavior === 'tumbler' && r < .08) { p.state = 'tumble'; p.stateUntil = now + .75; }
+        else if (p.pheno.e.behavior === 'parlor' && r < .1) {
+          // parlor roller: somersaults along the ground in the direction it faces
+          p.state = 'roll'; p.stateUntil = now + 1.1;
+          [p.tx, p.tz] = this.clampToPark(p.x + Math.cos(p.dir) * .6, p.z + Math.sin(p.dir) * .6); p.v = .55;
+        }
         else if (r < (sleepy ? .8 : .5)) {
           const [tx, tz] = this.randomSpot();
           this.walkTo(p, tx, tz, 42 * PX * sp);
@@ -441,7 +441,7 @@ export class Sim {
   }
   restore(d) {
     if (!d) return;
-    this.roost = d.roost || []; this.discovered = d.disc || {}; this.breeds = d.breeds || {};
+    this.roost = (d.roost || []).map(r => ({ ...r, genome: M.normalizeGenome(r.genome) })); this.discovered = d.disc || {}; this.breeds = d.breeds || {};
     this.stats = d.stats || this.stats;
     if (d.speed != null) this.speed = d.speed;
     if (d.mut) this.mut = d.mut;

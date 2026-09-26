@@ -24,7 +24,7 @@ export async function boot(browser, base, query = '', { viewport = { width: 1280
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   if (clearStorage) await page.addInitScript(() => { if (!sessionStorage.getItem('pp-cleared')) { localStorage.clear(); sessionStorage.setItem('pp-cleared', '1'); } });
   const t0 = Date.now();
-  await page.goto(base + (query ? '?' + query : ''));
+  await page.goto(base + (query ? '?' + query : ''), { waitUntil: 'commit', timeout: 60000 });
   await page.waitForFunction(() => window.ppReady === true, null, { timeout: 60000 });
   await frames(page, 3);
   return { page, ctx, errors, loadMs: Date.now() - t0 };

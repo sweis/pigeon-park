@@ -24,7 +24,7 @@ class PigeonView {
     this.pid = p.id;
     this.rig = new PigeonRig(p.pheno, mats);
     this.g = this.rig.group;
-    this.b = this.rig.bones; this.rest = this.rig.rest;
+    this.b = this.rig.bones; this.rest = this.rig.rest; this.restRot = this.rig.restRot;
     this.vis = V(p.x, p.y, p.z);
     this.yaw = -p.dir;
     this.walkPh = 0; this.seed = (p.id * 7.31) % 10;
@@ -45,7 +45,7 @@ class PigeonView {
     this.g.rotation.set(0, this.yaw, 0);
     this.g.scale.setScalar(s);
     // reset pose
-    for (const n of ['body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR']) { b[n].position.copy(R[n]); b[n].rotation.set(0, 0, 0); b[n].scale.set(1, 1, 1); }
+    for (const n of ['body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR']) { b[n].position.copy(R[n]); b[n].rotation.copy(this.restRot[n]); b[n].scale.set(1, 1, 1); }
     b.root.rotation.set(0, 0, 0); b.root.position.set(0, 0, 0);
     const headK = age < 9 ? 1.32 : age < 18 ? 1.16 : 1;
     b.head.scale.setScalar(headK);
@@ -71,8 +71,13 @@ class PigeonView {
       b.root.rotation.z = th;
       b.root.position.set(c * Math.sin(th), c - c * Math.cos(th) + Math.sin(k * Math.PI) * .32, 0);
       b.wingL.rotation.x = .6; b.wingR.rotation.x = -.6;
+    } else if (st === 'roll') { // parlor roller: two forward somersaults along the ground
+      const k = Math.min(1, (simT - p.stateAt) / 1.1), th = -k * TAU * 2, c = .24;
+      b.root.rotation.z = th;
+      b.root.position.set(c * Math.sin(th), c - c * Math.cos(th), 0);
+      b.head.rotation.z = -.6; b.legL.rotation.z = b.legR.rotation.z = -.9;
     } else if (st === 'sleep') {
-      b.head.rotation.z = .5; b.head.position.y -= .045; b.head.position.x -= .03;
+      b.head.rotation.z += .5; b.head.position.y -= .045; b.head.position.x -= .03;
       b.body.scale.set(1.04, 1.02 + breathe * .03, 1.06);
       b.body.position.y -= .02;
       b.legL.scale.y = b.legR.scale.y = .8;
@@ -90,7 +95,7 @@ class PigeonView {
     } else if (st === 'peck') {
       const k = ((simT - p.stateAt) * 1.25 + this.seed) % 1;
       const dip = k < .25 ? k / .25 : k < .4 ? 1 : Math.max(0, 1 - (k - .4) / .3);
-      b.head.rotation.z = -dip * 1.05;
+      b.head.rotation.z += -dip * 1.05;
       b.head.position.x += dip * .02;
       b.body.rotation.z = -dip * .12;
       b.tail.rotation.z = dip * .15;

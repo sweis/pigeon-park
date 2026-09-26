@@ -51,12 +51,19 @@ s.roostAdd(first.id); ok(s.roost.length === 1 && !s.byId(first.id), 'roost moves
 s.releaseRoost(0, false); ok(s.roost.length === 0, 'release returns bird');
 s.summonLegends(); ok(!!s.breeds.voidlegend && !!s.breeds.galaxylegend, 'rizz unlocks both legends');
 s.summonOres(); ok(s.pigeons.filter(p => p.pheno.e.fantasy !== 'none' && p.name.startsWith('THE ') && !/VOID/.test(p.name)).length === 11, 'ore spawns 11');
-ok(M.BREEDS.length === 31, 'registry has 31 breeds');
+ok(M.BREEDS.length >= 55, 'registry has ' + M.BREEDS.length + ' breeds');
 // every breed sample actually matches its own breed
 const unmatched = M.BREEDS.filter(b => !M.matchBreeds(M.breedSample(b)).some(x => x.id === b.id)).map(b => b.id);
 ok(unmatched.length === 0, 'every breed sample matches its breed ' + unmatched.join(','));
 s.setTimeOfDay(22); ok(Math.abs(s.hour() - 22) < 1e-6 && s.night === 1, 'setTimeOfDay(22) is night');
 s.setTimeOfDay(16.5); ok(s.night === 0, 'setTimeOfDay(16.5) is day');
 
+// genomes saved before the gene expansion (no almond/indigo/wattle/...) still load as wild-type
+{
+  const old = {}; for (const l of M.LOCI) if (!['almond', 'indigo', 'wattle', 'posture', 'legs', 'feather'].includes(l.id)) old[l.id] = [M.WILD[l.id], M.WILD[l.id]];
+  const r2 = new Sim(); r2.initFlock({ pigeons: [{ n: 'Old Timer', g: old, x: 0, z: 0 }] });
+  const p = r2.pigeons[0];
+  ok(p && p.pheno.e.almond === 'no' && p.pheno.e.wattle === 'small' && p.breeds.length === 0, 'pre-expansion genome loads as wild-type');
+}
 console.log(fails ? `\n${fails} FAILED` : '\nall sim tests passed');
 process.exit(fails ? 1 : 0);

@@ -22,6 +22,9 @@ export const PALETTES = {
   red:     { body: '#ad5338', wing: '#c16a4e', head: '#94432c', pat: '#8f3d28' },
   redd:    { body: '#d8a264', wing: '#e4bc88', head: '#c08d4f', pat: '#b08040' },
   white:   { body: '#f7f4ec', wing: '#fbf9f4', head: '#f2eee4', pat: '#dcd6c8' },
+  almond:  { body: '#d4a063', wing: '#e0b67a', head: '#c48c50', pat: '#4a3020' },
+  indigo:  { body: '#8e93a8', wing: '#b0b2c0', head: '#6c6f86', pat: '#9a4e2c' },
+  indigoS: { body: '#5f6478', wing: '#6d7286', head: '#51556a', pat: '#4a4e60' },
   gold:    { body: '#e5b34d', wing: '#f1d283', head: '#cf9a36', pat: '#b8871f' },
   mint:    { body: '#a9d8b8', wing: '#c9ead4', head: '#8cc4a1', pat: '#609e7c' },
   lilac:   { body: '#c3aade', wing: '#dcccf0', head: '#a98cc9', pat: '#8465a8' },
@@ -33,7 +36,7 @@ export const PALETTES = {
   ironore: STONE, lapisore: STONE, coalore: STONE, gemore: STONE,
 };
 export const W1 = '#f7f4ec', W2 = '#fbf9f4', LEG = '#cf6a5f';
-const DARK_HEADS = { blue: 1, blueS: 1, brown: 1, brownS: 1, void: 1, red: 1 };
+const DARK_HEADS = { blue: 1, blueS: 1, brown: 1, brownS: 1, void: 1, red: 1, indigoS: 1 };
 
 export function palette(pheno) {
   const P = PALETTES[pheno.colorKey] || PALETTES.blue;
@@ -44,9 +47,12 @@ export function palette(pheno) {
     if (e.pied === 'saddle') { body = W1; head = W1; tail = '#efeadd'; }
     else if (e.pied === 'capped') { body = W1; wing = W2; showPat = false; }
     else if (e.pied === 'white') showPat = false;
+    else if (e.pied === 'gazzi') { body = W1; }                                   // coloured head, wings, tail
+    else if (e.pied === 'shield') { body = W1; head = W1; tail = '#efeadd'; }     // coloured wing shields only
+    else if (e.pied === 'magpie') { wing = W2; showPat = false; }                  // white wings + belly
   }
   const beak = DARK_HEADS[pheno.colorKey] ? '#3a3a42' : '#c4b39e';
-  let eye = e.eye === 'pearl' ? '#dfdbe8' : '#e8912d';
+  let eye = e.eye === 'pearl' ? '#dfdbe8' : e.eye === 'bull' ? '#2b2224' : '#e8912d';
   if (e.pied === 'white' && e.fantasy === 'none') eye = '#3a3644';
   if (pheno.colorKey === 'void') eye = '#f0edff';
   return { body, wing, head, tail, pat, showPat, beak, eye, curl: P.pat };

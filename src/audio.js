@@ -26,6 +26,16 @@ export class Audio {
     const ac = this.ac, t = ac.currentTime;
     if (t - this.lastCoo < .08) return; this.lastCoo = t;
     const o = ac.createOscillator(), f = ac.createBiquadFilter(); f.type = 'lowpass';
+    if (voice === 'laugher') { // a rapid descending "hoo-hoo-hoo-hoo"
+      for (let i = 0; i < 5; i++) {
+        const oi = ac.createOscillator(), fi = ac.createBiquadFilter(), t0 = t + i * .085;
+        oi.type = 'sine'; oi.frequency.setValueAtTime(520 - i * 30, t0); oi.frequency.exponentialRampToValueAtTime(380 - i * 25, t0 + .07);
+        fi.type = 'lowpass'; fi.frequency.value = 1000;
+        const g = ac.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(.09 * vol, t0 + .015); g.gain.exponentialRampToValueAtTime(.001, t0 + .08);
+        oi.connect(fi); fi.connect(g); g.connect(this.master); oi.start(t0); oi.stop(t0 + .09);
+      }
+      return;
+    }
     if (voice === 'trumpet') {
       o.type = 'sawtooth'; o.frequency.setValueAtTime(210, t); o.frequency.linearRampToValueAtTime(160, t + .4); f.frequency.value = 620;
       o.connect(f); f.connect(this.env(.5, .07 * vol)); o.start(t); o.stop(t + .5);

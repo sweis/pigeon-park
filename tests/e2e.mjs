@@ -31,13 +31,18 @@ const shots = [];
 {
   const { page } = await boot(br, srv.url, 'nosave&seed=11&hour=16');
   const res = await page.evaluate(() => {
-    const g = window.__game; window.pp.freeze(); g.render(0);
-    const p = g.sim.pigeons[0], s = window.pp.screenOf(p.id), gl = g.renderer.getContext();
-    const read = () => { g.renderer.render(g.scene, g.cam.cam); const px = new Uint8Array(4 * 16 * 16); gl.readPixels(Math.round(s.x) - 8, Math.round(innerHeight - s.y) - 8, 16, 16, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
-    const a = read(); g.flock.root.visible = false; const b = read(); g.flock.root.visible = true;
-    let d = 0; for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]); return d / a.length;
+    const g = window.__game; window.pp.freeze();
+    g.sim.pigeons.forEach((p, i) => window.pp.teleport(p.id, 1 + (i % 4) * 1.1, -1.5 + Math.floor(i / 4) * 1.6)); // open plaza, nothing in front
+    g.render(0); g.render(0);
+    const gl = g.renderer.getContext();
+    const read = (s) => { const px = new Uint8Array(4 * 16 * 16); gl.readPixels(Math.round(s.x) - 8, Math.round(innerHeight - s.y) - 8, 16, 16, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
+    const spots = g.sim.pigeons.map(p => window.pp.screenOf(p.id)).filter(s => s.onScreen);
+    g.renderer.render(g.scene, g.cam.cam); const a = spots.map(read);
+    g.flock.root.visible = false; g.renderer.render(g.scene, g.cam.cam); const b = spots.map(read); g.flock.root.visible = true;
+    return a.map((x, i) => { let d = 0; for (let k = 0; k < x.length; k++) d += Math.abs(x[k] - b[i][k]); return d / x.length; });
   });
-  check(res > 6, `pigeon pixels differ from background (mean diff ${res.toFixed(1)})`);
+  const shown = res.filter(d => d > 6).length;
+  check(res.length >= 5 && shown >= res.length - 1, `pigeons render: ${shown}/${res.length} birds differ from background (${res.map(d => d.toFixed(0)).join(',')})`);
   await page.context().close();
 }
 
@@ -110,7 +115,7 @@ const shots = [];
   const bb = await page.locator('#b-breeds').boundingBox();
   await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2);
   check(await page.locator('.dialog .dlg-title').textContent() === 'Breed Registry', 'Breeds button opens the registry');
-  check(await page.locator('.grid.breeds .entry').count() === 31, 'registry lists 31 breeds');
+  { const nb = (await state(page)).breedsTotal; const cnt = await page.locator('.grid.breeds .entry').count(); check(cnt >= 55 && (nb == null || cnt === nb), `registry lists every breed (${cnt})`); }
   shots.push(await shot(page, 'e2e-registry.png'));
   await page.keyboard.press('Escape');
   check(await page.locator('#dialog').evaluate(e => e.classList.contains('hidden')), 'Escape closes the dialog');
@@ -118,6 +123,23 @@ const shots = [];
   check((await page.locator('.dialog .dlg-title').textContent()) === 'How the park works', '? opens the help sheet');
   shots.push(await shot(page, 'e2e-help.png'));
   await page.keyboard.press('Escape');
+
+  // Start over: gear → tap "Start over" → wait for the panel to re-render → tap again
+  {
+    const gb = await page.locator('#b-settings').boundingBox();
+    await page.mouse.click(gb.x + gb.width / 2, gb.y + gb.height / 2);
+    await page.evaluate(() => window.pp.render());
+    const rb1 = await page.locator('#settings [data-act="reset"]').boundingBox();
+    await page.mouse.click(rb1.x + rb1.width / 2, rb1.y + rb1.height / 2);
+    await page.evaluate(() => { window.pp.resume(); }); await page.waitForTimeout(900); await page.evaluate(() => window.pp.freeze());
+    check((await page.locator('#settings [data-act="reset"]').textContent()).startsWith('Really'), 'first tap arms Start over (survives panel re-render)');
+    const rb2 = await page.locator('#settings [data-act="reset"]').boundingBox();
+    await page.mouse.click(rb2.x + rb2.width / 2, rb2.y + rb2.height / 2);
+    const r = await state(page);
+    check(r.roost.length === 0 && r.stats.births === 0 && r.pop === 7 && r.breedsFound.length === 0, `second tap starts over (pop ${r.pop}, roost ${r.roost.length}, births ${r.stats.births})`);
+    const views = await page.evaluate(() => { const g = window.__game; g.render(0); return [...g.flock.views.keys()].every(id => g.sim.byId(id)) && g.flock.views.size === g.sim.pigeons.length; });
+    check(views, 'fresh flock has its own 3D views');
+  }
 
   // Cheats typed on the real keyboard
   const n0 = (await state(page)).pigeons.length;
