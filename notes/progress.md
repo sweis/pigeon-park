@@ -2,8 +2,10 @@
 
 ## Where things are
 - Branch `port-threejs`. Engine: three.js 0.186 + Vite 8. Everything is code; no binary assets except two fonts.
-- Run: `npm run dev` (http://localhost:5173) or `npm run build` then serve `dist/` with any static server.
+- Run: `npm run dev` (http://localhost:5173) or `npm run build` then serve `docs/` with any static server.
   Serving the repo root directly does NOT work (bare `three` imports need Vite); the loading screen now says so after 5 s.
+- Deploy: GitHub Pages serves pigeonpark.live from `main` → `/docs`. `npm run build` regenerates `docs/`
+  (emptied first; `public/CNAME` + `public/.nojekyll` are copied in). After any source change: build, commit `docs/`, push.
 - Prototype sources extracted to `prototype/src/` for reference (genetics, sprites, component, markup, css).
 
 ## Layout
@@ -26,7 +28,7 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 
 ## Numbers (headless SwiftShader — timings meaningless, counts are real)
 - Full park (47 birds): 119 draw calls; ~380k tris overview (LOD), ~800k close. 24 shader programs, constant from boot across day/night.
-- Build: 728 KB total, JS 184 KB gzip. Load ~5–6 s headless.
+- Build (`docs/`): ~740 KB total, JS ~188 KB gzip. Load ~5–6 s headless.
 - Passive difficulty: 60 unattended sim-minutes find 6–10 of 55 breeds (8 seeds); 33 breeds never appeared.
 
 ## Gotchas learned
