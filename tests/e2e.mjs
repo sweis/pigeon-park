@@ -209,7 +209,7 @@ const shots = [];
 
 // ---------- 6. determinism: same seed + fixed steps → identical state ----------
 {
-  const run = async () => { const { page, ctx } = await boot(br, srv.url, 'nosave&seed=42&hour=9'); const r = await page.evaluate(() => { window.pp.freeze(); window.pp.step(1800); return JSON.stringify(window.pp.getState().pigeons.map(p => [p.id, p.x, p.z, p.state])); }); await ctx.close(); return r; };
+  const run = async () => { const { page, ctx } = await boot(br, srv.url, 'nosave&seed=42&hour=9&simdt=0'); const r = await page.evaluate(() => { window.pp.freeze(); window.pp.step(1800); return JSON.stringify(window.pp.getState().pigeons.map(p => [p.id, p.x, p.z, p.state])); }); await ctx.close(); return r; };
   const a = await run(), b = await run();
   check(a === b, 'seeded 60 s scripted run replays identically');
 }
