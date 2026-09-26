@@ -35,7 +35,7 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 - PCFSoftShadowMap is removed in r18x; use PCFShadowMap.
 
 ## Verified / not verified
-- Verified headless: everything in the test list above. Not verified: real phones/GPUs (no device testing yet), audio by ear, frame times on real hardware.
+- Verified headless: everything in the test list above, incl. click-off closing for settings + all dialogs. Not verified: real phones/GPUs (no device testing yet), audio by ear, frame times on real hardware.
 
 ## Next
 - Test on a real phone; step-down ladder only exercised via `?quality`.

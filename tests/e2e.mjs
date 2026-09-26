@@ -141,6 +141,27 @@ const shots = [];
     check(views, 'fresh flock has its own 3D views');
   }
 
+  // Click-off closes panels: settings popover (press on the park) and each dialog (press outside the card)
+  {
+    const gb = await page.locator('#b-settings').boundingBox();
+    await page.mouse.click(gb.x + gb.width / 2, gb.y + gb.height / 2);
+    check(await page.locator('#settings').isVisible(), 'gear opens settings');
+    const off = await page.evaluate(() => window.pp.screenOfWorld(4.6, 0, 2.8));
+    await page.mouse.click(off.x, off.y);
+    check(!(await page.locator('#settings').isVisible()), 'clicking the park closes settings');
+    for (const btn of ['[data-act="help"]', '#b-breeds', '#b-pedia']) {
+      const b = await page.locator('#hud ' + btn).first().boundingBox();
+      await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+      const dlg = await page.locator('.dialog').boundingBox();
+      await page.mouse.click(Math.max(5, dlg.x - 12), dlg.y + dlg.height / 2);
+      check(await page.locator('#dialog').evaluate(e => e.classList.contains('hidden')), `clicking outside closes ${btn}`);
+    }
+    // the next real click still works (click-off must not swallow it)
+    await page.mouse.click(gb.x + gb.width / 2, gb.y + gb.height / 2);
+    check(await page.locator('#settings').isVisible(), 'next click after a click-off still works');
+    await page.mouse.click(gb.x + gb.width / 2, gb.y + gb.height / 2);
+  }
+
   // Cheats typed on the real keyboard
   const n0 = (await state(page)).pigeons.length;
   await page.keyboard.type('rizz');

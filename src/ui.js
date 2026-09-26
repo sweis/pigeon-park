@@ -47,6 +47,15 @@ export class UI {
     this.build();
     this.root.addEventListener('click', (e) => this.onClick(e));
     this.root.addEventListener('pointerdown', (e) => e.stopPropagation());
+    // Click-off: a press that starts outside an open panel closes it (capture phase, so it also
+    // works when the press lands on the 3D canvas). The panel's own toggle button is left alone.
+    document.addEventListener('pointerdown', (e) => {
+      const t = e.target;
+      this.suppressClick = false; // a new press: only the click ending a click-off press is ignored
+      const set = this.$('settings');
+      if (!set.classList.contains('hidden') && !set.contains(t) && !t.closest('[data-act="settings"]')) set.classList.add('hidden');
+      if (this.dialog && !t.closest('.dialog')) { this.closeDialog(); this.suppressClick = true; }
+    }, true);
   }
 
   build() {
@@ -92,6 +101,7 @@ export class UI {
     setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 4200);
   }
   onClick(e) {
+    if (this.suppressClick) { this.suppressClick = false; return; } // the click finishing a click-off press
     const a = e.target.closest('[data-act]'); if (!a) return;
     const act = a.dataset.act, arg = a.dataset.arg, g = this.g, S = this.sim;
     g.audio.unlock();
