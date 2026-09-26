@@ -1,0 +1,376 @@
+// Pigeon Park — boot, main loop, input, persistence and the debug API (window.pp).
+
+import * as THREE from 'three';
+import * as M from './genetics.js';
+import { setSeed, isSeeded } from './rng.js';
+import { Sim, FIXED_DT, PARK, pureGenome, migrateLegacy } from './sim.js';
+import { World } from './world.js';
+import { FlockView } from './view.js';
+import { makeMaterials, PigeonRig, geometryCacheSize } from './pigeon3d.js';
+import { CameraRig } from './camera.js';
+import { Fx } from './fx.js';
+import { Audio } from './audio.js';
+import { Portraits } from './portraits.js';
+import { UI } from './ui.js';
+import { Diagnostics } from './debug.js';
+
+const BUILD = '0.1.0';
+const SAVE_KEY = 'pigeon-park-3d-v1', LEGACY_KEY = 'pigeon-park-save-v1', GFX_KEY = 'pigeon-park-gfx';
+const params = new URLSearchParams(location.search);
+const flag = (k) => params.has(k) && params.get(k) !== '0';
+
+// ---------- quality tier ----------
+function pickQuality() {
+  const ua = navigator.userAgent;
+  const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && Math.min(innerWidth, innerHeight) < 820);
+  let tier = params.get('quality') || (() => { try { return localStorage.getItem(GFX_KEY); } catch { return null; } })() || (mobile ? 'medium' : 'high');
+  const Q = {
+    high: { tier: 'high', antialias: true, shadows: true, shadowMap: 2048, lampLights: 4, low: false, pr: 2 },
+    medium: { tier: 'medium', antialias: false, shadows: true, shadowMap: 1024, lampLights: 2, low: true, pr: 2 },
+    low: { tier: 'low', antialias: false, shadows: false, shadowMap: 512, lampLights: 0, low: true, pr: 1.5 },
+  };
+  return { ...(Q[tier] || Q.high), mobile };
+}
+
+class Game {
+  constructor() {
+    this.q = pickQuality();
+    this.sim = new Sim();
+    this.frozen = false; this.stepQueue = 0; this.acc = 0; this.time = 0;
+    this.simdt = params.has('simdt') ? +params.get('simdt') : null;
+    this.frameMs = []; this.lastShaderError = null; this.contextLost = false;
+    this.nosave = flag('nosave');
+  }
+
+  async boot() {
+    if (params.has('seed')) setSeed(+params.get('seed'));
+    const canvas = document.getElementById('c');
+    const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: this.q.antialias, powerPreference: 'high-performance' });
+    r.setPixelRatio(Math.min(devicePixelRatio || 1, this.q.pr));
+    r.setSize(innerWidth, innerHeight, false);
+    r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.0;
+    r.outputColorSpace = THREE.SRGBColorSpace;
+    r.shadowMap.enabled = this.q.shadows;
+    r.shadowMap.type = THREE.PCFShadowMap; // PCFSoft was removed in r18x; PCF + shadow.radius is soft
+    r.debug.onShaderError = (gl, prog, vs, fs) => { this.lastShaderError = (gl.getProgramInfoLog(prog) || 'shader error').slice(0, 300); console.error('[shader]', this.lastShaderError); };
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.contextLost = true; this.onContextLost(); });
+    canvas.addEventListener('webglcontextrestored', () => location.reload());
+    const gl = r.getContext(), dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    this.gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+
+    this.scene = new THREE.Scene();
+    this.cam = new CameraRig(innerWidth / innerHeight);
+    this.world = new World(r, this.scene, this.q);
+    this.mats = makeMaterials();
+    this.flock = new FlockView(this.scene, this.mats, this.q);
+    this.fx = new Fx(this.scene);
+    this.audio = new Audio();
+    this.portraits = new Portraits(r, this.q.low);
+
+    this.warmUp();
+    this.load();
+    this.ui = new UI(this);
+    this.ui.seen = { ...this.ui.seen, ...(this.savedUI?.seen || {}) };
+    this.ui.introDone = !!this.savedUI?.introDone;
+    this.audio.muted = !!this.savedUI?.muted;
+    this.ui.renderMute();
+    this.diag = new Diagnostics(this, flag('debug'));
+    this.bindInput();
+    addEventListener('resize', () => this.resize());
+    this.saveTimer = setInterval(() => this.save(), 6000);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.save(); });
+    addEventListener('pagehide', () => this.save());
+    this.last = performance.now();
+    this.render(0);
+    this.programsAfterBoot = r.info.programs.length;
+    document.getElementById('loading').classList.add('done');
+    setTimeout(() => document.getElementById('loading').remove(), 700);
+    requestAnimationFrame((t) => this.frame(t));
+  }
+
+  // Compile every material/effect behind the loading screen so nothing compiles mid-game.
+  warmUp() {
+    const kinds = { clay: {}, metal: { fantasy: 'gold' }, glow: { glow: 'glow' }, voidglow: { glow: 'glow', fantasy: 'void' }, facet: { fantasy: 'coalore' }, gem: { fantasy: 'diamond' } };
+    const rigs = [];
+    Object.values(kinds).forEach((over, i) => {
+      const ph = M.computePheno(pureGenome(over), null);
+      const rig = new PigeonRig(ph, this.mats);
+      rig.group.position.set(i * .8 - 1.6, 0, 2); this.scene.add(rig.group); rigs.push(rig);
+      this.portraits.get(ph);
+    });
+    this.sim.eggs.push({ id: -1, x: 0, z: 2, laidAt: 0, hatchAt: 1, genome: null });
+    this.fx.burst(0, .5, 2, 3);
+    this.flock.update(this.sim, 0, 0);
+    this.sim.pigeons.length = 0;
+    this.flock.halos[0].visible = true;
+    this.world.setHour(22, 1);
+    this.renderer.compile(this.scene, this.cam.cam);
+    this.renderer.render(this.scene, this.cam.cam);
+    rigs.forEach(r => { this.scene.remove(r.group); r.dispose(); });
+    this.sim.eggs.length = 0;
+    this.flock.update(this.sim, 0, 0);
+    this.fx.parts.length = 0; this.fx.update(0);
+  }
+
+  // ---------- persistence ----------
+  load() {
+    let d = null;
+    if (!flag('fresh')) {
+      try {
+        d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+        if (!d) { d = migrateLegacy(JSON.parse(localStorage.getItem(LEGACY_KEY) || 'null')); if (d) this.migrated = true; }
+      } catch (e) { d = null; }
+    }
+    if (d) { this.sim.restore(d); this.savedUI = d.ui; }
+    if (params.has('hour')) this.sim.setTimeOfDay(+params.get('hour'));
+    this.sim.initFlock(d);
+    this.sim.events.length = 0;
+    if (this.migrated) setTimeout(() => this.ui.toast('Your prototype flock has moved into the new park.', 'note'), 600);
+  }
+  save() {
+    if (this.nosave || !this.sim.ready) return; // never write before the flock has loaded
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify(this.sim.serialize({ ui: { seen: this.ui?.seen, introDone: this.ui?.introDone, muted: this.audio?.muted }, build: BUILD })));
+    } catch (e) { /* storage full or blocked — fine */ }
+  }
+  resetAll() {
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+    const keep = { speed: this.sim.speed, mut: this.sim.mut, ph: this.sim.phase() }, nextId = this.sim.ids;
+    this.sim.reset(); this.sim.restore(keep);
+    this.sim.ids = nextId; // ids keep counting so no new bird inherits an old bird's 3D view
+    this.cam.follow = null;
+    this.sim.initFlock(null);
+    this.ui.roostSel = null; this.ui.seen = { pedia: 0, breeds: 0 };
+    this.cam.shot('overview', { snap: false });
+    this.ui.toast('A fresh delegation of civic pigeons arrives.', 'note');
+    this.save();
+  }
+
+  // ---------- selection / camera ----------
+  select(id, keepRoost) {
+    this.sim.selId = id;
+    if (!keepRoost) this.ui.roostSel = null;
+    if (id == null && this.cam.follow != null) this.cam.shot('overview', { snap: false });
+    this.ui.refreshT = 0;
+  }
+  toggleFollow(id) {
+    if (this.cam.follow === id) this.cam.shot('overview', { snap: false });
+    else { this.select(id); this.cam.shot('follow', { id, snap: false }); }
+    this.ui.refreshT = 0;
+  }
+
+  // ---------- input ----------
+  bindInput() {
+    const c = this.renderer.domElement;
+    const pointers = new Map();
+    let drag = null, cand = null, orbit = null, pinch = null, lastTap = { t: 0, id: null };
+    const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const toRay = (x, y) => { ndc.set(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1); ray.setFromCamera(ndc, this.cam.cam); return ray.ray; };
+    const ground = (x, y) => { const p = new THREE.Vector3(); return toRay(x, y).intersectPlane(plane, p) ? p : null; };
+    this.pickAt = (x, y) => this.flock.pick(toRay(x, y), this.sim);
+
+    c.addEventListener('pointerdown', (e) => {
+      this.audio.unlock();
+      c.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) { // pinch
+        cand = null; orbit = null;
+        const [a, b] = [...pointers.values()];
+        pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+        return;
+      }
+      const id = this.pickAt(e.clientX, e.clientY);
+      if (id != null) {
+        const now = performance.now();
+        if (lastTap.id === id && now - lastTap.t < 350) this.toggleFollow(id);
+        lastTap = { t: now, id };
+        cand = { id, x: e.clientX, y: e.clientY };
+        this.select(id);
+        const p = this.sim.byId(id); if (p) this.audio.play('coo', { voice: p.pheno.e.voice, vol: .8 });
+      } else {
+        orbit = { x: e.clientX, y: e.clientY, moved: 0, btn: e.button };
+      }
+    });
+    c.addEventListener('pointermove', (e) => {
+      const pp = pointers.get(e.pointerId); if (!pp) return;
+      const dx = e.clientX - pp.x, dy = e.clientY - pp.y;
+      pp.x = e.clientX; pp.y = e.clientY;
+      if (pinch && pointers.size === 2) {
+        const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+        this.cam.zoom(pinch.d / Math.max(20, d)); pinch.d = d;
+        return;
+      }
+      if (cand && !drag && Math.hypot(e.clientX - cand.x, e.clientY - cand.y) > 8) {
+        const p = this.sim.grab(cand.id); if (p) drag = { id: cand.id, pheno: p.pheno };
+        if (this.cam.follow === cand.id) this.cam.follow = null;
+      }
+      if (drag) {
+        const g = ground(e.clientX, e.clientY);
+        if (g) this.sim.carry(drag.id, Math.max(-PARK.w / 2, Math.min(PARK.w / 2, g.x)), Math.max(-PARK.d / 2, Math.min(PARK.d / 2, g.z)));
+        const rr = this.ui.roostRect(), over = e.clientX >= rr.left && e.clientX <= rr.right && e.clientY >= rr.top - 10 && e.clientY <= rr.bottom + 10;
+        this.ui.setOverRoost(over);
+        this.ui.ghost(over ? drag.pheno : null, e.clientX, e.clientY);
+      } else if (orbit) {
+        orbit.moved += Math.abs(dx) + Math.abs(dy);
+        if (orbit.btn === 2 || e.shiftKey) {
+          const s = this.cam.cur.dist * .0012, az = this.cam.cur.az;
+          this.cam.pan((-dx * Math.cos(az) - dy * Math.sin(az)) * s, (dx * Math.sin(az) - dy * Math.cos(az)) * s);
+        } else this.cam.orbit(dx, dy);
+      }
+    });
+    const up = (e) => {
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinch = null;
+      if (drag) {
+        const S = this.sim;
+        if (this.ui.overRoost) { if (S.roostAdd(drag.id)) { this.ui.roostSel = S.roost.length - 1; this.select(null, true); } else { const p = S.byId(drag.id); if (p) S.drop(drag.id, p.x, p.z); } }
+        else { const p = S.byId(drag.id); if (p) S.drop(drag.id, p.x, p.z); }
+        this.ui.setOverRoost(false); this.ui.ghost(null);
+        drag = null;
+      } else if (orbit && orbit.moved < 6 && e.type === 'pointerup') {
+        this.select(null); this.ui.roostSel = null;
+      }
+      cand = null; orbit = null;
+    };
+    c.addEventListener('pointerup', up);
+    c.addEventListener('pointercancel', up);
+    c.addEventListener('contextmenu', (e) => e.preventDefault());
+    c.addEventListener('wheel', (e) => { e.preventDefault(); this.cam.zoom(Math.exp(e.deltaY * .0012)); }, { passive: false });
+
+    let cheat = '';
+    addEventListener('keydown', (e) => {
+      if (!e.key || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
+      if (e.key === 'Escape') { if (this.ui.dialog) this.ui.closeDialog(); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
+      if (e.key === '?') { this.ui.dialog === 'help' ? this.ui.closeDialog() : this.ui.openDialog('help'); return; }
+      if (e.key.length !== 1) return;
+      cheat = (cheat + e.key.toLowerCase()).slice(-8);
+      if (cheat.endsWith('rizz')) { cheat = ''; this.sim.summonLegends(); }
+      else if (cheat.endsWith('ore')) { cheat = ''; this.sim.summonOres(); }
+      else if (e.key.toLowerCase() === 'f' && this.sim.selId != null) this.toggleFollow(this.sim.selId);
+    });
+  }
+
+  resize() {
+    this.renderer.setSize(innerWidth, innerHeight, false);
+    this.cam.fit(innerWidth / innerHeight);
+  }
+
+  onContextLost() {
+    try { const t = ['high', 'medium', 'low'], i = t.indexOf(this.q.tier); localStorage.setItem(GFX_KEY, t[Math.min(2, i + 1)]); } catch (e) {}
+    const el = document.createElement('div'); el.className = 'ctxlost';
+    el.innerHTML = '<div class="card"><b>Graphics reset</b><p>Your device’s GPU took a nap. Tap to reload at a lighter quality.</p></div>';
+    el.onclick = () => location.reload();
+    document.body.appendChild(el);
+  }
+
+  // ---------- loop ----------
+  frame(now) {
+    requestAnimationFrame((t) => this.frame(t));
+    if (this.contextLost) return;
+    let dt = Math.min(.25, Math.max(0, (now - this.last) / 1000));
+    this.frameMs.push(now - this.last); if (this.frameMs.length > 240) this.frameMs.shift();
+    this.last = now;
+    if (this.simdt != null) dt = this.simdt;
+    this.render(dt);
+  }
+  render(dt) {
+    const S = this.sim;
+    if (!this.frozen) {
+      this.acc += dt; let n = 0;
+      while (this.acc >= FIXED_DT && n < 8) { S.step(); this.acc -= FIXED_DT; n++; }
+      if (n >= 8) this.acc = 0; // cap catch-up after a stall
+    } else {
+      while (this.stepQueue > 0) { S.step(); this.stepQueue--; }
+      dt = 0;
+    }
+    this.time += dt;
+    this.drainEvents();
+    this.world.setHour(S.hour(), S.night);
+    this.world.update(dt);
+    this.flock.update(S, dt, this.time, this.cam.cam.position);
+    this.fx.update(dt);
+    let fp = null;
+    if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.cam.shot('overview', { snap: false }); }
+    this.cam.update(dt || 1 / 60, fp);
+    this.renderer.render(this.scene, this.cam.cam);
+    this.ui?.frame(dt, this.cam.cam);
+    this.diag?.frame();
+  }
+  drainEvents() {
+    const S = this.sim;
+    for (const e of S.events) {
+      if (e.type === 'toast') this.ui?.toast(e.msg, e.kind);
+      else if (e.type === 'sound') this.audio.play(e.name, e);
+      else if (e.type === 'sparkle') this.fx.burst(e.x, .45, e.z, e.tier);
+      else if (e.type === 'hatch') this.fx.ring(e.x, e.z, '#e8b64c');
+      else if (e.type === 'roosted') { this.fx.burst(e.x, .4, e.z, 1); this.ui?.renderRoost(); }
+      else if (e.type === 'deselect') this.ui && (this.ui.refreshT = 0);
+    }
+    S.events.length = 0;
+  }
+}
+
+const game = new Game();
+window.__game = game;
+game.boot().then(() => { window.pp = makeDebugApi(game); window.ppReady = true; }).catch((e) => {
+  console.error(e);
+  document.getElementById('loading').innerHTML = '<div class="card"><b>The pigeons could not commute.</b><p>' + String(e.message || e) + '</p></div>';
+});
+
+// ---------- debug API ----------
+function makeDebugApi(g) {
+  const S = g.sim;
+  const pct = (a, p) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(2); };
+  const api = {
+    build: BUILD,
+    getState() {
+      const info = g.renderer.info;
+      return {
+        t: +S.t.toFixed(3), wall: +S.wall.toFixed(3), hour: +S.hour().toFixed(2), night: S.night, frozen: g.frozen, seeded: isSeeded(),
+        speed: S.speed, mut: S.mut, cap: S.cap, selId: S.selId, follow: g.cam.follow, cam: g.cam.name,
+        pop: S.pigeons.filter(p => !p.flying).length, eggs: S.eggs.length, poops: S.poops.length, court: !!S.court,
+        roost: S.roost.map(r => r.name), stats: { ...S.stats },
+        breedsFound: Object.keys(S.breeds), breedsTotal: M.BREEDS.length, traitsFound: Object.keys(S.discovered).length, traitsTotal: Object.keys(M.PEDIA).length,
+        pigeons: S.pigeons.map(p => ({ id: p.id, name: p.name, x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), dir: +p.dir.toFixed(2), state: p.state, flying: p.flying, held: p.held, gen: p.gen, label: p.pheno.label, breeds: p.breeds.map(b => b.id) })),
+        render: {
+          frameMsP50: pct(g.frameMs, .5), frameMsP99: pct(g.frameMs, .99), drawCalls: info.render.calls, triangles: info.render.triangles,
+          programs: info.programs.length, programsAfterBoot: g.programsAfterBoot, geometries: info.memory.geometries, textures: info.memory.textures,
+          pigeonGeoCache: geometryCacheSize(), gpu: g.gpu, quality: g.q.tier, pixelRatio: g.renderer.getPixelRatio(),
+          contextLost: g.contextLost, lastShaderError: g.lastShaderError,
+        },
+      };
+    },
+    freeze() { g.frozen = true; }, resume() { g.frozen = false; g.last = performance.now(); },
+    step(n = 1) { g.stepQueue += n; if (!g.frozen) g.frozen = true; g.render(0); },
+    setTimeOfDay(h) { S.setTimeOfDay(h); g.render(0); },
+    setSeed(n) { setSeed(n); },
+    setSpeed(v) { S.speed = v; },
+    // kind: 'founder' | 'legends' | 'ores' | breed id | genome overrides object
+    spawn(kind = 'founder', at) {
+      const pos = at || {};
+      if (kind === 'legends') return S.summonLegends();
+      if (kind === 'ores') return S.summonOres();
+      const b = M.BREEDS.find(x => x.id === kind);
+      let genome;
+      if (b) { const sm = M.breedSample(b); genome = {}; for (const l of M.LOCI) genome[l.id] = [sm.e[l.id], sm.e[l.id]]; return S.spawn({ genome, accessory: sm.accessory, name: b.name, adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id; }
+      genome = typeof kind === 'object' ? pureGenome(kind) : M.founderGenome();
+      return S.spawn({ genome, accessory: pos.accessory || null, name: M.randomName(), adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id;
+    },
+    clearAll() { S.pigeons.length = 0; S.eggs.length = 0; S.poops.length = 0; S.court = null; S.selId = null; S.events.length = 0; g.fx.parts.length = 0; g.fx.rings.forEach(r => { r.userData.t = 1; }); g.render(0); },
+    teleport(id, x, z) { const p = S.byId(id); if (p) { [p.x, p.z] = S.clampToPark(x, z); p.tx = p.x; p.tz = p.z; p.state = 'idle'; } g.render(0); },
+    select(id) { g.select(id); g.render(0); },
+    cam(name, opts) { g.cam.shot(name, opts); g.render(0); return g.cam.name; },
+    screenOf(id) { // screen position of a bird's body centre, for real-input tests
+      const v = g.flock.view(id), p = S.byId(id); if (!v || !p) return null;
+      const s = v.size(p, S.t), w = new THREE.Vector3(v.vis.x + .03 * s, v.vis.y + .3 * s, v.vis.z).project(g.cam.cam);
+      return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight, onScreen: Math.abs(w.x) < 1 && Math.abs(w.y) < 1 && w.z < 1 };
+    },
+    screenOfWorld(x, y, z) { const w = new THREE.Vector3(x, y, z).project(g.cam.cam); return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight }; },
+    pickAt(x, y) { return g.pickAt(x, y); },
+    win() { for (const b of M.BREEDS) S.breeds[b.id] ||= { by: 'debug', at: Date.now() }; for (const k of Object.keys(M.PEDIA)) S.discovered[k] = 1; },
+    lose() { api.clearAll(); S.roost.length = 0; },
+    render() { g.render(0); },
+    hideHud(v = true) { document.getElementById('hud').style.display = v ? 'none' : ''; },
+  };
+  return api;
+}
