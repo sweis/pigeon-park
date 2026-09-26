@@ -9,7 +9,21 @@ export const FIXED_DT = 1 / 30;          // physics step, sim seconds
 export const THINK_DT = 0.45;            // decision tick, same cadence as the prototype
 export const DAY_LEN = 170;              // seconds per full day/night cycle (wall clock)
 export const PARK = { w: 10.4, d: 6.6 };   // walkable rectangle, metres, centred on origin
-export const FOUNTAIN = { x: -1.7, z: -0.8, r: 1.3 };
+export const FOUNTAIN = { x: -1.7, z: -0.8, r: 1.3, lip: 1.42 }; // r: basin wall (visual), lip: outer rim radius
+// A bird's footprint for collisions: a segment from tail tip to beak tip, plus half its body width (size 1).
+const BODY = { back: .5, front: .31, half: .15 };
+export function bodyScale(p) { return (p.pheno.e.size === 'king' ? 1.42 : p.pheno.e.size === 'dinky' ? .68 : 1) * (p.jit || 1); }
+// Distance from the fountain centre to the nearest point of the bird's body segment, minus what it needs.
+// >= 0 means the bird is clear of the rim.
+export function fountainClearance(p) {
+  const k = bodyScale(p), cx = Math.cos(p.dir), cz = Math.sin(p.dir);
+  const ax = p.x - cx * BODY.back * k, az = p.z - cz * BODY.back * k;
+  const bx = p.x + cx * BODY.front * k, bz = p.z + cz * BODY.front * k;
+  const ex = bx - ax, ez = bz - az;
+  const t = Math.max(0, Math.min(1, ((FOUNTAIN.x - ax) * ex + (FOUNTAIN.z - az) * ez) / (ex * ex + ez * ez)));
+  const qx = ax + ex * t, qz = az + ez * t, d = Math.hypot(qx - FOUNTAIN.x, qz - FOUNTAIN.z);
+  return { gap: d - (FOUNTAIN.lip + BODY.half * k), qx, qz, d };
+}
 export const ROOST_SIZE = 8;
 export const ADULT_AGE = 13;
 const PX = 0.0066;                       // prototype pixel → metre (92 px pigeon ≈ 0.6 m)
@@ -101,14 +115,25 @@ export class Sim {
   byId(id) { return this.pigeons.find(p => p.id === id); }
 
   // ---------- geometry ----------
+  // Keep a point (a walk target, spawn or drop spot) in the park and a comfortable step off the fountain.
   clampToPark(x, z) {
     x = clamp(x, -PARK.w / 2, PARK.w / 2); z = clamp(z, -PARK.d / 2, PARK.d / 2);
-    const dx = x - FOUNTAIN.x, dz = z - FOUNTAIN.z, d = Math.hypot(dx, dz);
-    if (d < FOUNTAIN.r) {
-      const k = FOUNTAIN.r / (d || 1);
+    const R = FOUNTAIN.lip + .3, dx = x - FOUNTAIN.x, dz = z - FOUNTAIN.z, d = Math.hypot(dx, dz);
+    if (d < R) {
+      const k = R / (d || 1);
       x = FOUNTAIN.x + (d ? dx : 1) * k; z = FOUNTAIN.z + dz * k;
     }
     return [x, z];
+  }
+  // Push a bird's whole body (tail to beak, at its size and heading) clear of the fountain rim.
+  keepOut(p) {
+    const c = fountainClearance(p);
+    if (c.gap >= 0) return false;
+    let nx = c.qx - FOUNTAIN.x, nz = c.qz - FOUNTAIN.z, n = c.d;
+    if (n < 1e-6) { nx = p.x - FOUNTAIN.x; nz = p.z - FOUNTAIN.z; n = Math.hypot(nx, nz) || 1; }
+    p.x += nx / n * -c.gap; p.z += nz / n * -c.gap;
+    p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2);
+    return true;
   }
   randomSpot() {
     return this.clampToPark((rand() - .5) * PARK.w, (rand() - .5) * PARK.d);
@@ -129,6 +154,7 @@ export class Sim {
       emote: null, emoteUntil: 0, courting: false, flying: false, flyAt: 0, held: false,
       breeds: M.matchBreeds(pheno),
     };
+    this.keepOut(p);
     this.pigeons.push(p);
     this.stats.maxGen = Math.max(this.stats.maxGen, p.gen);
     if (!quiet) this.notice(p);
@@ -199,7 +225,10 @@ export class Sim {
     this.t += dt;
     this.move(dt);
     this.thinkAcc += dt;
-    while (this.thinkAcc >= THINK_DT) { this.thinkAcc -= THINK_DT; this.think(); }
+    while (this.thinkAcc >= THINK_DT) {
+      this.thinkAcc -= THINK_DT; this.think();
+      for (const p of this.pigeons) if (!p.flying && !p.held) this.keepOut(p); // think() may have turned birds
+    }
   }
 
   move(dt) {
@@ -214,12 +243,18 @@ export class Sim {
       }
       if (p.y > 0) p.y = Math.max(0, p.y - dt * 3);
       if (p.state === 'walk' || p.state === 'roll') {
+        const x0 = p.x, z0 = p.z;
         const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz);
         const s = p.v * dt;
         if (d <= s) { p.x = p.tx; p.z = p.tz; if (!p.courting && p.state === 'walk') p.state = 'idle'; }
         else { p.x += dx / d * s; p.z += dz / d * s; if (p.state === 'walk') p.dir = Math.atan2(dz, dx); }
-        [p.x, p.z] = this.clampToPark(p.x, p.z);
-      }
+        p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2);
+        // sliding around the rim: face the way we actually moved, not into the stone
+        if (this.keepOut(p) && p.state === 'walk') {
+          const mx = p.x - x0, mz = p.z - z0;
+          if (Math.hypot(mx, mz) > s * .3) { p.dir = Math.atan2(mz, mx); this.keepOut(p); }
+        }
+      } else this.keepOut(p); // turning in place (courting, pecking) can swing a tail or beak into the rim
     }
   }
 
@@ -426,7 +461,7 @@ export class Sim {
   drop(id, x, z) {
     const p = this.byId(id); if (!p) return;
     p.held = false;
-    [p.x, p.z] = this.clampToPark(x, z); p.tx = p.x; p.tz = p.z;
+    [p.x, p.z] = this.clampToPark(x, z); this.keepOut(p); p.tx = p.x; p.tz = p.z;
     p.y = .55; p.state = 'idle'; p.stateUntil = this.t + .7;
   }
 

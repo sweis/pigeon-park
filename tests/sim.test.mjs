@@ -1,23 +1,24 @@
 // Headless sim assertions — no browser. Run: node tests/sim.test.mjs
-import { Sim, PARK, FOUNTAIN, FIXED_DT } from '../src/sim.js';
+import { Sim, PARK, FOUNTAIN, FIXED_DT, fountainClearance } from '../src/sim.js';
 import { setSeed } from '../src/rng.js';
 import * as M from '../src/genetics.js';
 
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 
+let worst = 0;
 function run(seed, seconds) {
   setSeed(seed);
   const s = new Sim(); s.initFlock(null);
   const steps = Math.round(seconds / FIXED_DT);
-  let maxPop = 0, badPos = 0, nan = 0;
+  let maxPop = 0, badPos = 0, nan = 0; worst = 0;
   for (let i = 0; i < steps; i++) {
     s.step();
     for (const p of s.pigeons) {
       if (!Number.isFinite(p.x + p.z + p.y + p.dir)) nan++;
       if (!p.flying && !p.held) {
         if (Math.abs(p.x) > PARK.w / 2 + 1e-6 || Math.abs(p.z) > PARK.d / 2 + 1e-6) badPos++;
-        if (Math.hypot(p.x - FOUNTAIN.x, p.z - FOUNTAIN.z) < FOUNTAIN.r - 1e-3) badPos++;
+        if (fountainClearance(p).gap < -1e-6) { badPos++; worst = Math.min(worst, fountainClearance(p).gap); }
       }
     }
     maxPop = Math.max(maxPop, s.pigeons.length);
@@ -27,7 +28,7 @@ function run(seed, seconds) {
 
 const a = run(42, 600), b = run(42, 600);
 ok(a.nan === 0, `no NaN positions (${a.nan})`);
-ok(a.badPos === 0, `birds stay in park & out of fountain (${a.badPos} violations)`);
+ok(a.badPos === 0, `no bird body (tail→beak, any size) ever overlaps the fountain rim (${a.badPos} violations, worst ${worst.toFixed(3)} m)`);
 ok(a.s.stats.births > 10, `10 min sim hatches chicks (births=${a.s.stats.births})`);
 ok(a.maxPop <= a.s.cap + 1, `population respects cap (max ${a.maxPop}/${a.s.cap})`);
 ok(a.s.stats.maxGen >= 3, `generations advance (gen ${a.s.stats.maxGen})`);
