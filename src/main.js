@@ -13,6 +13,7 @@ import { Audio } from './audio.js';
 import { Portraits } from './portraits.js';
 import { UI } from './ui.js';
 import { Diagnostics } from './debug.js';
+import { startHappening, HAPPENINGS } from './happenings.js';
 
 const BUILD = '0.1.0';
 const SAVE_KEY = 'pigeon-park-3d-v1', LEGACY_KEY = 'pigeon-park-save-v1', GFX_KEY = 'pigeon-park-gfx';
@@ -36,7 +37,7 @@ class Game {
   constructor() {
     this.q = pickQuality();
     this.sim = new Sim();
-    this.frozen = false; this.stepQueue = 0; this.acc = 0; this.time = 0;
+    this.frozen = false; this.paused = false; this.stepQueue = 0; this.acc = 0; this.time = 0;
     this.simdt = params.has('simdt') ? +params.get('simdt') : null;
     this.frameMs = []; this.lastShaderError = null; this.contextLost = false;
     this.nosave = flag('nosave');
@@ -98,7 +99,8 @@ class Game {
       rig.group.position.set(i * .8 - 1.6, 0, 2); this.scene.add(rig.group); rigs.push(rig);
       this.portraits.get(ph);
     });
-    this.sim.eggs.push({ id: -1, x: 0, z: 2, laidAt: 0, hatchAt: 1, genome: null });
+    this.sim.eggs.push({ id: -1, x: 0, z: 2, laidAt: 0, hatchAt: 1, genome: null }, { id: -2, x: .5, z: 2, laidAt: 0, hatchAt: 1, genome: null, golden: true });
+    this.sim.bread = { x: 0, z: 2.5, hp: .5, a: 0 }; // bread happening props
     this.fx.burst(0, .5, 2, 3);
     this.flock.update(this.sim, 0, 0);
     this.sim.pigeons.length = 0;
@@ -107,7 +109,7 @@ class Game {
     this.renderer.compile(this.scene, this.cam.cam);
     this.renderer.render(this.scene, this.cam.cam);
     rigs.forEach(r => { this.scene.remove(r.group); r.dispose(); });
-    this.sim.eggs.length = 0;
+    this.sim.eggs.length = 0; this.sim.bread = null;
     this.flock.update(this.sim, 0, 0);
     this.fx.parts.length = 0; this.fx.update(0);
   }
@@ -241,6 +243,7 @@ class Game {
     addEventListener('keydown', (e) => {
       if (!e.key || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
       if (e.key === 'Escape') { if (this.ui.dialog) this.ui.closeDialog(); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
+      if ((e.key === 'p' || e.key === ' ') && !e.repeat) { if (e.key === ' ') e.preventDefault(); this.togglePause(); if (e.key === 'p') cheat = ''; return; }
       if (e.key === '?') { this.ui.dialog === 'help' ? this.ui.closeDialog() : this.ui.openDialog('help'); return; }
       if (e.key.length !== 1) return;
       cheat = (cheat + e.key.toLowerCase()).slice(-8);
@@ -248,6 +251,11 @@ class Game {
       else if (cheat.endsWith('ore')) { cheat = ''; this.sim.summonOres(); }
       else if (e.key.toLowerCase() === 'f' && this.sim.selId != null) this.toggleFollow(this.sim.selId);
     });
+  }
+
+  togglePause(v = !this.paused) {
+    this.paused = v; this.last = performance.now(); this.acc = 0;
+    this.ui?.renderPause();
   }
 
   resize() {
@@ -271,11 +279,13 @@ class Game {
     this.frameMs.push(now - this.last); if (this.frameMs.length > 240) this.frameMs.shift();
     this.last = now;
     if (this.simdt != null) dt = this.simdt;
+    this.camDt = Math.min(.1, (performance.now() - (this.camLast || now)) / 1000) || 1 / 60; this.camLast = performance.now();
     this.render(dt);
   }
   render(dt) {
     const S = this.sim;
-    if (!this.frozen) {
+    if (this.paused && !this.frozen) dt = 0; // paused: the world holds still, the camera still moves
+    if (!this.frozen && !this.paused) {
       this.acc += dt; let n = 0;
       while (this.acc >= FIXED_DT && n < 8) { S.step(); this.acc -= FIXED_DT; n++; }
       if (n >= 8) this.acc = 0; // cap catch-up after a stall
@@ -291,7 +301,7 @@ class Game {
     this.fx.update(dt);
     let fp = null;
     if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.cam.shot('overview', { snap: false }); }
-    this.cam.update(dt || 1 / 60, fp);
+    this.cam.update(this.camDt || 1 / 60, fp);
     this.renderer.render(this.scene, this.cam.cam);
     this.ui?.frame(dt, this.cam.cam);
     this.diag?.frame();
@@ -327,7 +337,7 @@ function makeDebugApi(g) {
       const info = g.renderer.info;
       return {
         t: +S.t.toFixed(3), wall: +S.wall.toFixed(3), hour: +S.hour().toFixed(2), night: S.night, frozen: g.frozen, seeded: isSeeded(),
-        speed: S.speed, mut: S.mut, cap: S.cap, selId: S.selId, follow: g.cam.follow, cam: g.cam.name,
+        speed: S.speed, mut: S.mut, whimsy: S.whimsy, paused: g.paused, happening: S.happening?.kind || null, bread: S.bread ? +S.bread.hp.toFixed(2) : null, cap: S.cap, selId: S.selId, follow: g.cam.follow, cam: g.cam.name,
         pop: S.pigeons.filter(p => !p.flying).length, eggs: S.eggs.length, poops: S.poops.length, court: !!S.court,
         roost: S.roost.map(r => r.name), stats: { ...S.stats },
         breedsFound: Object.keys(S.breeds), breedsTotal: M.BREEDS.length, traitsFound: Object.keys(S.discovered).length, traitsTotal: Object.keys(M.PEDIA).length,
@@ -345,6 +355,9 @@ function makeDebugApi(g) {
     setTimeOfDay(h) { S.setTimeOfDay(h); g.render(0); },
     setSeed(n) { setSeed(n); },
     setSpeed(v) { S.speed = v; },
+    happen(kind) { const ok = startHappening(S, kind); g.render(0); return ok; },
+    happenings: () => Object.keys(HAPPENINGS),
+    pause(v = true) { g.togglePause(v); return g.paused; },
     // kind: 'founder' | 'legends' | 'ores' | breed id | genome overrides object
     spawn(kind = 'founder', at) {
       const pos = at || {};

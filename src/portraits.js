@@ -29,7 +29,7 @@ export class Portraits {
     if (url) return url;
     const rig = new PigeonRig(pheno, this.mats);
     if (sleep) { rig.bones.eyeL.scale.y = rig.bones.eyeR.scale.y = .12; }
-    const tall = pheno.e.crest === 'lace' || pheno.e.mane === 'hood' || pheno.e.tail === 'fantail' || pheno.accessory === 'tophat';
+    const tall = pheno.e.neck === 'noodle' || pheno.e.crest === 'horn' || pheno.accessory === 'chefhat' || pheno.accessory === 'partyhat' || pheno.e.crest === 'lace' || pheno.e.mane === 'hood' || pheno.e.tail === 'fantail' || pheno.accessory === 'tophat';
     rig.group.rotation.y = -.55;
     this.scene.add(rig.group);
     const cy = tall ? .34 : .3, d = tall ? 1.72 : 1.5;

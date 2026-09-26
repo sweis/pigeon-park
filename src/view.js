@@ -30,6 +30,7 @@ class PigeonView {
     this.walkPh = 0; this.seed = (p.id * 7.31) % 10;
     this.blinkAt = 1 + Math.random() * 3; this.blinkT = 0;
     this.glow = p.pheno.e.glow === 'glow';
+    this.googly = p.pheno.e.eye === 'googly';
     this.baseSize = sizeOf(p.pheno, p.jit);
   }
   size(p, simT) { return this.baseSize * chickScale(simT - p.born); }
@@ -50,7 +51,7 @@ class PigeonView {
     const headK = age < 9 ? 1.32 : age < 18 ? 1.16 : 1;
     b.head.scale.setScalar(headK);
 
-    const st = p.state, moving = st === 'walk' && Math.hypot(p.tx - p.x, p.tz - p.z) > .005;
+    const st = p.state, moving = (st === 'walk' || st === 'moonwalk') && Math.hypot(p.tx - p.x, p.tz - p.z) > .005;
     const breathe = Math.sin(t * 2.3 + this.seed) * .5 + .5;
     let eyesOpen = 1;
     if (p.flying) {
@@ -76,14 +77,32 @@ class PigeonView {
       b.root.rotation.z = th;
       b.root.position.set(c * Math.sin(th), c - c * Math.cos(th), 0);
       b.head.rotation.z = -.6; b.legL.rotation.z = b.legR.rotation.z = -.9;
+    } else if (st === 'blown') { // gust: wings out, leaning, feet scrabbling
+      const f = Math.sin(t * 18 + this.seed);
+      b.wingL.rotation.x = .9 + f * .5; b.wingR.rotation.x = -(.9 + f * .5);
+      b.root.rotation.x = Math.sin(t * 5 + this.seed) * .25; b.body.rotation.z = .2;
+      b.legL.rotation.z = Math.sin(t * 20) * .7; b.legR.rotation.z = -Math.sin(t * 20) * .7;
+      b.root.position.y = .04 + Math.abs(Math.sin(t * 9)) * .05;
+    } else if (st === 'statue') { // very still, chin up, chest out
+      b.head.rotation.z += .18; b.body.scale.set(1.02, 1.04, 1.04); b.tail.rotation.z = -.1;
+      eyesOpen = 2; // no blinking on duty
+    } else if (st === 'dance') {
+      const k = t * 7.5 + this.seed;
+      b.root.position.y = Math.abs(Math.sin(k)) * .06;
+      b.root.rotation.y = Math.sin(k * .5) * .7;
+      b.head.rotation.z = Math.sin(k) * .35; b.head.position.x += Math.sin(k * 2) * .015;
+      b.wingL.rotation.x = .25 + Math.max(0, Math.sin(k)) * .6; b.wingR.rotation.x = -(.25 + Math.max(0, Math.sin(k + 1)) * .6);
+      b.tail.rotation.z = Math.sin(k * 2) * .2;
+    } else if (st === 'look') { // stare into the middle distance, then the sky
+      b.head.rotation.z += .3; b.head.rotation.y = Math.sin(t * .3 + this.seed) * .15;
     } else if (st === 'sleep') {
       b.head.rotation.z += .5; b.head.position.y -= .045; b.head.position.x -= .03;
       b.body.scale.set(1.04, 1.02 + breathe * .03, 1.06);
       b.body.position.y -= .02;
       b.legL.scale.y = b.legR.scale.y = .8;
       eyesOpen = 0;
-    } else if (moving || st === 'walk') {
-      if (moving) this.walkPh += dt * (p.v / .5) * 13;
+    } else if (moving || st === 'walk' || st === 'moonwalk') {
+      if (moving) this.walkPh += dt * (p.v / .5) * 13 * (st === 'moonwalk' ? -1 : 1); // moonwalk: the legs run backwards
       const ph = this.walkPh, sw = Math.sin(ph);
       b.legL.rotation.z = sw * .6; b.legR.rotation.z = -sw * .6;
       b.body.position.y += Math.abs(Math.cos(ph)) * .012;
@@ -112,12 +131,18 @@ class PigeonView {
       b.head.rotation.z = Math.sin(t * .9 + this.seed) * .06;
     }
     // blinks
-    if (eyesOpen) {
+    if (eyesOpen === 1) {
       this.blinkAt -= dt;
       if (this.blinkAt < 0) { this.blinkT = .13; this.blinkAt = 2 + Math.random() * 4; }
       if (this.blinkT > 0) { this.blinkT -= dt; eyesOpen = 0; }
     }
     b.eyeL.scale.y = b.eyeR.scale.y = eyesOpen ? 1 : .12;
+    if (this.googly) { // loose pupils wobble with every step and thought
+      const w = moving ? 3.2 : 1;
+      b.eyeL.rotation.x = Math.sin(t * 9.3 + this.seed) * .5 * w; b.eyeL.rotation.y = Math.cos(t * 7.1) * .3 * w;
+      b.eyeR.rotation.x = Math.sin(t * 8.1 + 2) * .5 * w; b.eyeR.rotation.y = Math.cos(t * 6.7 + this.seed) * .3 * w;
+      b.eyeL.scale.y = b.eyeR.scale.y = 1; // googly eyes never blink. they cannot.
+    }
     b.spin.rotation.y += dt * 18;
     return s;
   }
@@ -148,6 +173,17 @@ export class FlockView {
     this.nestGeo = nest; this.nestMat = new THREE.MeshStandardMaterial({ color: '#b08d5a', roughness: 1 });
     this.eggPool = [];
     this.eggViews = new Map();
+    // the baguette (bread happening) + crumbs
+    const loaf = new THREE.CapsuleGeometry(.075, .5, 6, 14).rotateZ(Math.PI / 2);
+    this.bread = new THREE.Group();
+    this.breadLoaf = new THREE.Mesh(loaf, new THREE.MeshStandardMaterial({ color: '#d9a15a', roughness: .8 }));
+    this.breadLoaf.position.y = .07; this.breadLoaf.castShadow = true;
+    const scoreMat = new THREE.MeshStandardMaterial({ color: '#f1d6a2', roughness: .9 });
+    for (let i = 0; i < 4; i++) { const sc = new THREE.Mesh(new THREE.BoxGeometry(.03, .02, .1), scoreMat); sc.position.set(-.2 + i * .13, .07, 0); sc.rotation.y = .6; this.breadLoaf.add(sc); sc.position.y = .065; }
+    this.bread.add(this.breadLoaf); this.bread.visible = false; scene.add(this.bread);
+    this.crumbs = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.018, 0), scoreMat, 24);
+    this.crumbs.frustumCulled = false; this.crumbs.count = 0; scene.add(this.crumbs);
+    this.goldMat = new THREE.MeshStandardMaterial({ color: '#e8b64c', roughness: .22, metalness: .9, emissive: new THREE.Color('#5a3a00'), emissiveIntensity: .4 });
     // poop
     this.poop = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 5).scale(.05, .012, .04), new THREE.MeshStandardMaterial({ color: '#f1ece0', roughness: .7 }), 16);
     this.poop.frustumCulled = false; this.poop.receiveShadow = true;
@@ -200,12 +236,28 @@ export class FlockView {
         ev.visible = true; this.eggViews.set(eg.id, ev);
       }
       ev.position.set(eg.x, 0, eg.z);
+      ev.children[1].material = eg.golden ? this.goldMat : this.eggMat;
       const k = Math.max(0, (sim.t - eg.laidAt) / (eg.hatchAt - eg.laidAt));
       const wob = Math.sin(t * (6 + k * 16)) * (.08 + k * .3);
       ev.children[1].rotation.set(wob * .6, 0, wob);
       ev.scale.setScalar(Math.min(1, (sim.t - eg.laidAt) * 4 + .2));
     }
     for (const [id, ev] of this.eggViews) if (!eseen.has(id)) { ev.visible = false; this.eggPool.push(ev); this.eggViews.delete(id); }
+
+    // bread
+    const B = sim.bread;
+    this.bread.visible = !!B;
+    if (B) {
+      this.bread.position.set(B.x, 0, B.z); this.bread.rotation.y = B.a;
+      const k = Math.max(.15, B.hp); this.breadLoaf.scale.set(k, 1, 1);
+      let ci = 0;
+      for (let i = 0; i < 24 * (1 - B.hp) + 4; i++) {
+        const a = i * 2.39 + B.a, r = .15 + (i * .137 % .5);
+        m.compose(V(B.x + Math.cos(a) * r, .01, B.z + Math.sin(a) * r * .7), q.setFromAxisAngle(V(0, 1, 0), i), V(1, .6, 1));
+        this.crumbs.setMatrixAt(ci++, m); if (ci >= 24) break;
+      }
+      this.crumbs.count = ci; this.crumbs.instanceMatrix.needsUpdate = true;
+    } else this.crumbs.count = 0;
 
     // poop
     let pi = 0;

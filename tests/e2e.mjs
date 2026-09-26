@@ -84,6 +84,17 @@ const shots = [];
   check(s.roost.length === 1 && !s.pigeons.find(b => b.id === dragId), `drop on roost keeps the bird (roost ${s.roost.length})`);
   await page.evaluate(() => window.pp.render()); await frames(page, 2);
   check(await page.locator('#roost .perch img').count() === 1, 'roost perch shows a portrait');
+  // Clone is always the leftmost action, for park birds and roost birds alike
+  {
+    const perch = await page.locator('#roost .perch img').first().boundingBox();
+    await page.mouse.click(perch.x + perch.width / 2, perch.y + perch.height / 2);
+    await page.evaluate(() => window.pp.render());
+    const roostFirst = await page.locator('#inspector .actions .btn').first().getAttribute('data-act');
+    const pid = (await state(page)).pigeons.find(b => !b.flying).id;
+    await page.evaluate((id) => { window.pp.select(id); window.pp.render(); }, pid);
+    const fieldFirst = await page.locator('#inspector .actions .btn').first().getAttribute('data-act');
+    check(roostFirst === 'clone-out' && fieldFirst === 'clone', `Clone is the first action in both panels (roost: ${roostFirst}, park: ${fieldFirst})`);
+  }
 
   // Drag a bird across the plaza (not onto roost) → it lands where dropped
   const other = s.pigeons.find(b => !b.flying).id;

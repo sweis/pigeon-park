@@ -2,6 +2,7 @@
 import { Sim, PARK, FOUNTAIN, FIXED_DT, fountainClearance } from '../src/sim.js';
 import { setSeed } from '../src/rng.js';
 import * as M from '../src/genetics.js';
+import { HAPPENINGS, startHappening } from '../src/happenings.js';
 
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
@@ -65,6 +66,24 @@ s.setTimeOfDay(16.5); ok(s.night === 0, 'setTimeOfDay(16.5) is day');
   const r2 = new Sim(); r2.initFlock({ pigeons: [{ n: 'Old Timer', g: old, x: 0, z: 0 }] });
   const p = r2.pigeons[0];
   ok(p && p.pheno.e.almond === 'no' && p.pheno.e.wattle === 'small' && p.breeds.length === 0, 'pre-expansion genome loads as wild-type');
+}
+// every happening starts, runs to completion without errors, and hands its birds back
+for (const kind of Object.keys(HAPPENINGS)) {
+  setSeed(3); const h = new Sim(); h.initFlock(null);
+  for (let i = 0; i < 12; i++) h.spawn({ genome: M.founderGenome(), name: 'x', adult: true });
+  if (kind === 'moonwalk') h.setTimeOfDay(23);
+  h.nextHappeningAt = Infinity;
+  let err = null, started = false;
+  try { started = startHappening(h, kind); for (let i = 0; i < 70 / FIXED_DT && h.happening; i++) h.step(); } catch (e) { err = e; }
+  const stuck = h.pigeons.filter(p => p.busy).length;
+  ok(!err && started && !h.happening && stuck === 0, `happening "${kind}" runs and ends cleanly${err ? ' — ' + err.message : ''}${stuck ? ` (${stuck} birds still busy)` : ''}`);
+  if (kind === 'goldenegg') ok(h.pigeons.some(p => M.LOCI.some(l => l.mutOnly && l.mutOnly[p.pheno.e[l.id]])), 'golden egg hatches a bird showing a mutation-only trait');
+  if (kind === 'visitor') ok(!h.pigeons.some(p => p.visitor && !p.flying), 'visitor leaves when its time is up');
+}
+{ // happenings fire on their own at "some", never at "off"
+  const run = (w) => { setSeed(9); const h = new Sim(); h.initFlock(null); h.whimsy = w; if (w === 'off') h.nextHappeningAt = Infinity; let n = 0; const orig = h.emit.bind(h); h.emit = (e) => { if (e.type === 'happening') n++; orig(e); }; for (let i = 0; i < 600 / FIXED_DT; i++) h.step(); return n; };
+  const some = run('some'), off = run('off');
+  ok(some >= 3 && off === 0, `happenings happen on their own (10 min: ${some} at "some", ${off} at "off")`);
 }
 console.log(fails ? `\n${fails} FAILED` : '\nall sim tests passed');
 process.exit(fails ? 1 : 0);

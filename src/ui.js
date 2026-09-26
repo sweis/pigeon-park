@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import * as M from './genetics.js';
 import { SPEEDS, MUTATIONS, ROOST_SIZE, phaseToHour } from './sim.js';
+import { HAPPENINGS, WHIMSY, gapFor } from './happenings.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const svg = (d, w = 16) => `<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
@@ -18,6 +19,8 @@ const I = {
   gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
   help: svg('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
   x: svg('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>', 15),
+  pause: svg('<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'),
+  play: svg('<polygon points="6 4 20 12 6 20 6 4"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', 14),
 };
 
@@ -32,6 +35,7 @@ export const CONTROLS = [
   ['Drag the park', 'Orbit the camera'],
   ['Scroll / pinch', 'Zoom in and out'],
   ['Double-click a pigeon · F', 'Follow it around with the camera'],
+  ['P · Space', 'Pause / resume the park'],
   ['Esc', 'Close a panel, stop following, deselect'],
   ['?', 'This help sheet'],
 ];
@@ -70,11 +74,13 @@ export class UI {
         <span class="pill panel clock" id="clock" title="time of day"></span>
         <button class="btn panel" data-act="pedia" id="b-pedia" aria-label="Pigeonpedia">${I.book}<span class="lbl">Pigeonpedia</span><i class="dot"></i></button>
         <button class="btn panel" data-act="breeds" id="b-breeds" aria-label="Breed Registry">${I.award}<span class="lbl">Breeds</span> <span class="count" id="breedcount"></span><i class="dot"></i></button>
+        <button class="btn icon panel" data-act="pause" id="b-pause" aria-label="Pause" title="Pause (P / Space)"></button>
         <button class="btn icon panel" data-act="mute" id="b-mute" aria-label="Sound"></button>
         <button class="btn icon panel" data-act="settings" id="b-settings" aria-label="Settings">${I.gear}</button>
         <button class="btn icon panel" data-act="help" aria-label="Help">${I.help}</button>
       </header>
       <div id="bubbles"></div>
+      <button id="paused" class="pill panel hidden" data-act="pause">${I.play}<span>Paused — tap to resume</span></button>
       <aside id="inspector" class="card panel hidden"></aside>
       <div id="settings" class="card panel pop hidden"></div>
       <div id="intro" class="card panel hidden">
@@ -89,7 +95,7 @@ export class UI {
       <img id="ghost" class="dragghost hidden" alt="">
     `;
     this.$ = (id) => document.getElementById(id);
-    this.renderRoost(); this.renderMute();
+    this.renderRoost(); this.renderMute(); this.renderPause();
   }
 
   // ---------- events from game ----------
@@ -111,6 +117,8 @@ export class UI {
       case 'breeds': this.openDialog('breeds'); break;
       case 'help': this.openDialog('help'); break;
       case 'backdrop': case 'close': this.closeDialog(); break;
+      case 'pause': g.togglePause(); break;
+      case 'whimsy': S.whimsy = arg; S.nextHappeningAt = S.t + gapFor(S); this.renderSettings(); g.save(); break;
       case 'mute': g.audio.muted = !g.audio.muted; this.renderMute(); g.save(); break;
       case 'settings': this.$('settings').classList.toggle('hidden'); this.renderSettings(); break;
       case 'speed': S.speed = +arg; this.renderSettings(); g.save(); break;
@@ -135,6 +143,12 @@ export class UI {
     this.refreshT = 0;
   }
 
+  renderPause() {
+    const p = this.g.paused;
+    this.$('b-pause').innerHTML = p ? I.play : I.pause;
+    this.$('b-pause').classList.toggle('on', p);
+    this.$('paused').classList.toggle('hidden', !p);
+  }
   renderMute() { this.$('b-mute').innerHTML = this.g.audio.muted ? I.mute : I.sound; }
 
   // ---------- roost ----------
@@ -178,8 +192,8 @@ export class UI {
       const i = this.roostSel, r = S.roost[i], ph = M.computePheno(r.genome, r.accessory);
       d = { img: P.get(ph), kicker: 'Roost resident', name: r.name, meta: 'Generation ' + r.gen + ' · kept bird', color: ph.label,
         breeds: M.matchBreeds(ph), traits: ph.traits, carries: M.carriersOf(r.genome),
-        actions: `<button class="btn primary" data-act="release" data-arg="${i}">Release to park</button>
-                  <button class="btn" data-act="clone-out" data-arg="${i}">Clone into park</button>
+        actions: `<button class="btn primary" data-act="clone-out" data-arg="${i}">${I.clone} Clone into park</button>
+                  <button class="btn" data-act="release" data-arg="${i}">Release to park</button>
                   <button class="btn ghost" data-act="let-go" data-arg="${i}">Let go</button>` };
     }
     if (!d) { el.classList.add('hidden'); this._insKey = null; return; }
@@ -208,6 +222,7 @@ export class UI {
     el.innerHTML = `
       <div class="row"><div class="label">Park speed</div>${seg(SPEEDS, o => Math.abs(S.speed - o.v) < .05, 'speed')}</div>
       <div class="row"><div class="label">Mutations</div>${seg(MUTATIONS, o => S.mut === o.id, 'mut')}</div>
+      <div class="row"><div class="label">Weirdness</div>${seg(WHIMSY, o => S.whimsy === o.id, 'whimsy')}</div>
       <div class="stats">
         <div><b>${alive}</b><span>residents</span></div><div><b>${S.stats.births}</b><span>hatched</span></div>
         <div><b>${S.stats.flown}</b><span>departed</span></div><div><b>gen ${S.stats.maxGen}</b><span>deepest line</span></div>
@@ -241,11 +256,11 @@ export class UI {
   }
   // Trait groups a breed needs that the player hasn't observed yet (each group: any one allele counts).
   missingTraits(b) {
-    const S = this.sim, COLOR_NEEDS = { blueSd: ['spread:spread', 'dilute:dilute'], blued: ['dilute:dilute'], indigoS: ['indigo:indigo', 'spread:spread'] };
+    const S = this.sim;
     const groups = [];
     for (const [k, v] of Object.entries(b.req)) {
       if (k === 'accessory') continue;
-      if (k === 'colorKey') { for (const t of COLOR_NEEDS[v] || []) groups.push([t]); continue; }
+      if (k === 'colorKey') { for (const t of M.colorTraits(Array.isArray(v) ? v[0] : v)) groups.push([t]); continue; }
       const keys = (Array.isArray(v) ? v : [v]).map(x => k + ':' + x).filter(key => M.ALLELE_META[key]);
       if (keys.length) groups.push(keys);
     }
@@ -275,6 +290,8 @@ export class UI {
           Every chick gets one copy of each of ${M.LOCI.length} genes from each parent. Recessive traits only show with two copies, so they can hide for generations.</p>
           <p>Goal: discover all <b>${M.BREEDS.length} breeds</b> in the Breed Registry and fill all <b>${Object.keys(M.PEDIA).length} field notes</b> in the Pigeonpedia.</p></section>
         <section><h4>Controls</h4><table>${CONTROLS.map(([k, v]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(v)}</td></tr>`).join('')}</table></section>
+        <section><h4>Weird things happen</h4><ul>${Object.values(HAPPENINGS).map(h => `<li><b>${esc(h.label)}.</b> ${esc(h.blurb)}</li>`).join('')}</ul>
+          <p>Turn them up or down with <b>Weirdness</b> in settings.</p></section>
         <section><h4>Tips</h4><ul>
           <li><b>Clone</b> birds that carry what you want (check “Hidden in the DNA”) to flood the gene pool.</li>
           <li><b>Dismiss</b> birds that dilute it. The park holds ${S.cap}; when it fills up, birds fly off on their own.</li>

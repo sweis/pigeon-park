@@ -10,7 +10,8 @@
 
 ## Layout
 - `src/sim.js` — flock simulation (pure, no DOM). Fixed step 1/30 s, 0.45 s "think" tick ported from the prototype, seeded RNG (`src/rng.js`). Emits events (toast/sound/sparkle/hatch…).
-- `src/genetics.js` — prototype genetics, extended: 29 loci, 55 breeds, 70 field notes. `WILD` + `normalizeGenome` keep old saves loading.
+- `src/genetics.js` — prototype genetics, extended: 30 loci, 73 breeds (incl. whimsical cryptids: horn, duck bill, googly eyes, noodle neck, chonk, rainbow/toast/zebra/sunset), 79 field notes, big saying pools (THOUGHTS, REPLIES, NIGHT/HELD/BABY/COURT lines). `WILD` + `normalizeGenome` keep old saves loading.
+- `src/happenings.js` — 10 random park events (bread, visitor, golden egg, conga, gust, statue, parliament, crisis, dance, moonwalk). Seeded; cadence set by the Weirdness setting (Off/Some/Lots).
 - `src/pigeon3d.js` — procedural pigeon: one SkinnedMesh per bird (11 bones), geometry cached per phenotype + LOD (far = ~¼ tris).
 - `src/world.js` — plaza, fountain, props (merged static mesh), instanced paving/grass/flowers, sky, keyed day/night.
 - `src/view.js` — animation (walk head-bob, peck, sleep, tumble, parlor roll, fly, held, court, blinks), eggs, poop, contact shadows, selection ring.
@@ -18,12 +19,13 @@
 - `src/main.js` — boot, warm-up, input, save/load (key `pigeon-park-3d-v1`, imports prototype `pigeon-park-save-v1`), `window.pp` debug API.
 
 ## Debug hooks (`window.pp`, always on; `?debug` shows overlay)
-getState, freeze/step(n)/resume, setTimeOfDay(h), setSeed, setSpeed, spawn(kind|breedId|genomeOverrides, {x,z,dir,accessory}), clearAll, teleport(id,x,z), select, cam(name) — overview/hud-check/fountain/dovecote/hero-close/follow, screenOf(id), screenOfWorld, pickAt, win/lose, hideHud.
+getState, freeze/step(n)/resume, pause(v), happen(kind), happenings(), setTimeOfDay(h), setSeed, setSpeed, spawn(kind|breedId|genomeOverrides, {x,z,dir,accessory}), clearAll, teleport(id,x,z), select, cam(name) — overview/hud-check/fountain/dovecote/hero-close/follow, screenOf(id), screenOfWorld, pickAt, win/lose, hideHud.
 URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low`, `debug`.
 
 ## Tests
 - `node tests/sim.test.mjs` — headless sim: determinism, bounds, births, save round-trip, actions, cheats, every breed sample matches, old genomes load.
 - `node tests/e2e.mjs [--dist]` — Playwright, real mouse/touch/keyboard: cold boot 10 s, program count constant, birds render (pixel diff), select/clone/drag-to-roost/drag-drop/orbit/zoom, dialogs, Start over (two-tap), cheats, save→reload, legacy save import, seeded replay, 7-hour stills sweep, phone.
+- `node tests/happenings.mjs` (every happening in-game + pause button), `node tests/fountain.mjs` (rim crowding)
 - `node tests/lifecycle.mjs` (court→egg→hatch captures), `tests/lineup.mjs` (every breed + accessories), `tests/census.mjs` (full park budget), `tests/look.mjs` (quick look-dev).
 
 ## Numbers (headless SwiftShader — timings meaningless, counts are real)

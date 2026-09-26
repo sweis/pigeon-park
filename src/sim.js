@@ -4,6 +4,7 @@
 
 import * as M from './genetics.js';
 import { rand } from './rng.js';
+import { tickHappenings } from './happenings.js';
 
 export const FIXED_DT = 1 / 30;          // physics step, sim seconds
 export const THINK_DT = 0.45;            // decision tick, same cadence as the prototype
@@ -12,7 +13,7 @@ export const PARK = { w: 10.4, d: 6.6 };   // walkable rectangle, metres, centre
 export const FOUNTAIN = { x: -1.7, z: -0.8, r: 1.3, lip: 1.42 }; // r: basin wall (visual), lip: outer rim radius
 // A bird's footprint for collisions: a segment from tail tip to beak tip, plus half its body width (size 1).
 const BODY = { back: .5, front: .31, half: .15 };
-export function bodyScale(p) { return (p.pheno.e.size === 'king' ? 1.42 : p.pheno.e.size === 'dinky' ? .68 : 1) * (p.jit || 1); }
+export function bodyScale(p) { return ({ king: 1.42, dinky: .68, chonk: 1.25 }[p.pheno.e.size] || 1) * (p.jit || 1); }
 // Distance from the fountain centre to the nearest point of the bird's body segment, minus what it needs.
 // >= 0 means the bird is clear of the rim.
 export function fountainClearance(p) {
@@ -98,6 +99,8 @@ export class Sim {
     this.speed = 1; this.mut = 'normal'; this.poopEnabled = true;
     this.events = [];
     this.ready = false;      // autosave gate: never save before the flock has loaded
+    this.happening = null; this.nextHappeningAt = 55; this.whimsy = 'some'; this.bread = null;
+    this.replies = [];       // queued "reply" bubbles: { id, at, text }
     this.night = nightOf(this.phase());
   }
 
@@ -242,12 +245,12 @@ export class Sim {
         continue;
       }
       if (p.y > 0) p.y = Math.max(0, p.y - dt * 3);
-      if (p.state === 'walk' || p.state === 'roll') {
+      if (p.state === 'walk' || p.state === 'roll' || p.state === 'blown' || p.state === 'moonwalk') {
         const x0 = p.x, z0 = p.z;
         const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz);
         const s = p.v * dt;
-        if (d <= s) { p.x = p.tx; p.z = p.tz; if (!p.courting && p.state === 'walk') p.state = 'idle'; }
-        else { p.x += dx / d * s; p.z += dz / d * s; if (p.state === 'walk') p.dir = Math.atan2(dz, dx); }
+        if (d <= s) { p.x = p.tx; p.z = p.tz; if (!p.courting && (p.state === 'walk' || p.state === 'moonwalk')) p.state = 'idle'; }
+        else { p.x += dx / d * s; p.z += dz / d * s; if (p.state === 'walk') p.dir = Math.atan2(dz, dx); else if (p.state === 'moonwalk') p.dir = Math.atan2(dz, dx) + Math.PI; }
         p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2);
         // sliding around the rim: face the way we actually moved, not into the stone
         if (this.keepOut(p) && p.state === 'walk') {
@@ -264,10 +267,14 @@ export class Sim {
     // remove flown
     this.pigeons = this.pigeons.filter(p => !(p.flying && now - p.flyAt > 1.5));
     const pop = this.pigeons.length;
+    tickHappenings(this);
+    // replies: a neighbour answers a thought a moment later
+    this.replies = this.replies.filter(r => { if (now < r.at) return true; const q = this.byId(r.id); if (q && !q.flying && !q.emote) { q.emote = { kind: 'say', text: r.text }; q.emoteUntil = now + 2.2; } return false; });
     for (const p of this.pigeons) {
       if (p.flying || p.held) continue;
       if (p.emote && now > p.emoteUntil) p.emote = null;
-      if (p.courting) continue;
+      if (p.visitor && now > p.visitor.leaveAt && !p.busy) { this.fly(p, false); continue; }
+      if (p.courting || p.busy) continue;
       if (now >= p.stateUntil) {
         const sleepy = this.night > .6, r = rand();
         p.stateAt = now;
@@ -286,13 +293,18 @@ export class Sim {
         else { p.state = 'idle'; p.stateUntil = now + .9 + rand() * 2.2; }
       }
       if (!p.emote && p.state !== 'sleep' && rand() < .004) {
-        p.emote = { kind: 'say', text: pick(M.THOUGHTS) }; p.emoteUntil = now + 2.6;
+        p.emote = { kind: 'say', text: this.night > .5 && rand() < .4 ? pick(M.NIGHT_THOUGHTS) : pick(M.THOUGHTS) }; p.emoteUntil = now + 2.6;
+        if (rand() < .3) { // someone nearby has opinions
+          let best = null, bd = 1.6;
+          for (const q of this.pigeons) { if (q === p || q.flying || q.held) continue; const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < bd) { bd = d; best = q; } }
+          if (best) this.replies.push({ id: best.id, at: now + .9 + rand() * .6, text: pick(M.REPLIES) });
+        }
       }
       if (rand() < .012) this.sound('coo', { voice: p.pheno.e.voice, vol: .5, id: p.id });
     }
     // courtship
     if (!this.court && pop >= 2 && pop < cap && rand() < (0.10 * (1 - pop / cap) + 0.02) * sp) {
-      const adults = this.pigeons.filter(p => this.adult(p) && !p.flying && !p.held && p.state !== 'sleep');
+      const adults = this.pigeons.filter(p => this.adult(p) && !p.flying && !p.held && !p.busy && !p.visitor && p.state !== 'sleep');
       if (adults.length >= 2) {
         const a = adults[Math.floor(rand() * adults.length)];
         let b = null, bd = 1e9;
@@ -303,6 +315,7 @@ export class Sim {
           this.court = { a: a.id, b: b.id, mx, mz, until: now + 12, eggAt: 0 };
           a.courting = b.courting = true;
           this.walkTo(a, mx - .24, mz, 56 * PX * sp);
+          if (rand() < .45) { a.emote = { kind: 'say', text: pick(M.COURT_LINES) }; a.emoteUntil = now + 2.4; }
           this.walkTo(b, mx + .24, mz, 56 * PX * sp);
         }
       }
@@ -336,6 +349,8 @@ export class Sim {
         this.eggs = this.eggs.filter(x => x !== eg);
         const acc = M.rollAccessory(0.02);
         const baby = this.spawn({ genome: eg.genome, accessory: acc, name: M.randomName(), gen: eg.gen, x: eg.x, z: eg.z, dir: Math.PI / 2 });
+        if (rand() < .6) { baby.emote = { kind: 'say', text: pick(M.BABY_LINES) }; baby.emoteUntil = now + 2.6; }
+        if (eg.golden) { this.sparkle(eg.x, eg.z, 3); this.toast('The golden egg hatched… something: ' + baby.pheno.label + (baby.breeds.length ? ' (' + baby.breeds.map(b => b.name).join(', ') + ')' : '') + '.', 'breed'); }
         this.stats.births++;
         this.sound('pop');
         this.emit({ type: 'hatch', x: eg.x, z: eg.z, pid: baby.id });
@@ -348,7 +363,7 @@ export class Sim {
     // fly-offs: gentle pressure as the park fills, forced when over capacity
     const n = this.pigeons.length, over = n > cap;
     if (n > 4 && (over ? rand() < .5 : rand() < 0.10 * Math.pow(n / cap, 3) * sp)) {
-      const cands = this.pigeons.filter(p => !p.flying && !p.held && !p.courting && p.id !== this.selId && this.adult(p));
+      const cands = this.pigeons.filter(p => !p.flying && !p.held && !p.courting && !p.busy && !p.visitor && p.id !== this.selId && this.adult(p));
       if (cands.length) this.fly(cands[Math.floor(rand() * cands.length)], rand() < .5);
     }
     // poop (cosmetic)
@@ -449,7 +464,8 @@ export class Sim {
   // ---------- drag (player carries a bird) ----------
   grab(id) {
     const p = this.byId(id); if (!p || p.flying) return null;
-    p.held = true; p.courting = false; p.state = 'held';
+    p.held = true; p.courting = false; p.state = 'held'; p.busy = null;
+    p.emote = { kind: 'say', text: pick(M.HELD_LINES) }; p.emoteUntil = this.t + 2.4;
     if (this.court && (this.court.a === id || this.court.b === id)) {
       const o = this.byId(this.court.a === id ? this.court.b : this.court.a);
       if (o) { o.courting = false; o.stateUntil = this.t; }
@@ -469,9 +485,9 @@ export class Sim {
   serialize(extra) {
     return {
       v: 1,
-      pigeons: this.pigeons.filter(p => !p.flying).map(p => ({ n: p.name, g: p.genome, a: p.accessory, ge: p.gen, x: +p.x.toFixed(3), z: +p.z.toFixed(3), d: +p.dir.toFixed(3) })),
+      pigeons: this.pigeons.filter(p => !p.flying && !p.visitor).map(p => ({ n: p.name, g: p.genome, a: p.accessory, ge: p.gen, x: +p.x.toFixed(3), z: +p.z.toFixed(3), d: +p.dir.toFixed(3) })),
       roost: this.roost, disc: this.discovered, breeds: this.breeds, stats: this.stats,
-      speed: this.speed, mut: this.mut, ph: this.phase(), ...extra,
+      speed: this.speed, mut: this.mut, whimsy: this.whimsy, ph: this.phase(), ...extra,
     };
   }
   restore(d) {
@@ -480,6 +496,7 @@ export class Sim {
     this.stats = d.stats || this.stats;
     if (d.speed != null) this.speed = d.speed;
     if (d.mut) this.mut = d.mut;
+    if (d.whimsy) this.whimsy = d.whimsy;
     if (d.ph != null) { this.phase0 = d.ph - this.wall / DAY_LEN; this.night = nightOf(this.phase()); }
   }
 }
