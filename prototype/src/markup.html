@@ -1,0 +1,290 @@
+</style>
+<style>
+html, body { height: 100%; }
+body { margin: 0; overflow: hidden; background: #f5ead8; }
+a { color: #c67139; } a:hover { color: #8c491a; }
+@keyframes pp-bob { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-4px) rotate(2deg); } }
+@keyframes pp-breathe { 0%,100% { transform: scale(1,1); } 50% { transform: scale(1.03,0.97); } }
+@keyframes pp-peck { 0%,100% { transform: rotate(0deg); } 30% { transform: rotate(13deg) translateY(3px); } 60% { transform: rotate(3deg); } }
+@keyframes pp-peckL { 0%,100% { transform: rotate(0deg); } 30% { transform: rotate(-13deg) translateY(3px); } 60% { transform: rotate(-3deg); } }
+@keyframes pp-fly { 0% { transform: translate(0,0) rotate(0deg); opacity: 1; } 100% { transform: translate(50px,-480px) rotate(-10deg); opacity: 0; } }
+@keyframes pp-tumble { to { transform: rotate(360deg); } }
+@keyframes pp-wobble { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+@keyframes pp-pop { 0% { transform: scale(.2); } 70% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@keyframes pp-spin { to { transform: rotate(360deg); } }
+@keyframes pp-rise { from { opacity: 0; margin-top: 6px; } to { opacity: 1; margin-top: 0; } }
+@keyframes pp-toast { from { transform: translateY(14px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes pp-ring { from { transform: scale(.2); opacity: .9; } to { transform: scale(1.8); opacity: 0; } }
+@keyframes pp-spark0 { to { transform: translate(36px,0) scale(.1); opacity: 0; } }
+@keyframes pp-spark1 { to { transform: translate(26px,-26px) scale(.1); opacity: 0; } }
+@keyframes pp-spark2 { to { transform: translate(0,-38px) scale(.1); opacity: 0; } }
+@keyframes pp-spark3 { to { transform: translate(-26px,-26px) scale(.1); opacity: 0; } }
+@keyframes pp-spark4 { to { transform: translate(-36px,0) scale(.1); opacity: 0; } }
+@keyframes pp-spark5 { to { transform: translate(-26px,26px) scale(.1); opacity: 0; } }
+@keyframes pp-spark6 { to { transform: translate(0,34px) scale(.1); opacity: 0; } }
+@keyframes pp-spark7 { to { transform: translate(26px,26px) scale(.1); opacity: 0; } }
+</style>
+</helmet>
+<div style="height:100vh; display:flex; flex-direction:column; background:var(--color-bg); color:var(--color-text); font-family:var(--font-body)">
+  <div style="display:flex; align-items:center; gap:12px; padding:10px 16px 8px; flex-wrap:wrap">
+    <div>
+      <div style="font-family:var(--font-heading); font-size:25px; line-height:1.05">Pigeon Park</div>
+      <div style="font-size:11px; opacity:.55">a gentle genetics catastrophe</div>
+    </div>
+    <span class="tag tag-neutral" style="margin-top:2px">{{popLabel}}</span>
+    <span style="flex:1"></span>
+    <span style="opacity:.55; display:flex; align-items:center" title="time of day">
+      <sc-if value="{{isNight}}" hint-placeholder-val="{{false}}">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+      </sc-if>
+      <sc-if value="{{isDay}}" hint-placeholder-val="{{true}}">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.9 4.9 1.4 1.4"></path><path d="m17.7 17.7 1.4 1.4"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.3 17.7-1.4 1.4"></path><path d="m19.1 4.9-1.4 1.4"></path></svg>
+      </sc-if>
+    </span>
+    <button class="btn btn-secondary" sc-camel-on-click="{{openPedia}}" style="position:relative">
+      <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+      Pigeonpedia
+      <sc-if value="{{pediaNew}}" hint-placeholder-val="{{false}}"><span style="position:absolute; top:2px; right:6px; width:8px; height:8px; border-radius:50%; background:var(--color-accent)"></span></sc-if>
+    </button>
+    <button class="btn btn-secondary" sc-camel-on-click="{{openBreeds}}" style="position:relative">
+      <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"></circle><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"></path></svg>
+      Breeds <span style="opacity:.6; font-size:12px">{{breedCount}}</span>
+      <sc-if value="{{breedsNew}}" hint-placeholder-val="{{false}}"><span style="position:absolute; top:2px; right:6px; width:8px; height:8px; border-radius:50%; background:var(--color-accent)"></span></sc-if>
+    </button>
+    <button class="btn btn-icon btn-secondary" sc-camel-on-click="{{toggleMute}}" title="sound">
+      <sc-if value="{{soundOn}}" hint-placeholder-val="{{true}}">
+        <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+      </sc-if>
+      <sc-if value="{{soundOff}}" hint-placeholder-val="{{false}}">
+        <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"></path><line x1="22" y1="9" x2="16" y2="15"></line><line x1="16" y1="9" x2="22" y2="15"></line></svg>
+      </sc-if>
+    </button>
+  </div>
+  <div style="flex:1 1 0; display:flex; gap:12px; padding:0 14px 14px; min-height:0; flex-wrap:{{lay.wrap}}; overflow-y:{{lay.mainOv}}; align-items:stretch">
+    <div style="flex:{{lay.colFlex}}; min-width:300px; display:flex; flex-direction:column; gap:10px; min-height:0">
+      <div ref="{{fieldRef}}" sc-camel-on-pointer-down="{{fieldDown}}" style="position:relative; flex:1 1 auto; min-height:{{lay.fieldMinH}}; border-radius:calc(var(--radius-lg)*1.15); overflow:hidden; background:linear-gradient(180deg, var(--color-accent-2-200), var(--color-accent-2-300)); box-shadow:var(--shadow-md)">
+        <div style="position:absolute; left:-36px; top:-30px; width:170px; height:100px; background:var(--color-accent-2-400); border-radius:50%; opacity:.45"></div>
+        <div style="position:absolute; right:-44px; top:-36px; width:200px; height:110px; background:var(--color-accent-2-400); border-radius:50%; opacity:.35"></div>
+        <div style="position:absolute; right:8%; bottom:-40px; width:230px; height:120px; background:var(--color-accent-2-100); border-radius:50%; opacity:.5"></div>
+        <div style="position:absolute; left:10%; bottom:16%; width:92px; height:92px; border-radius:50%; background:var(--color-neutral-200); box-shadow:var(--shadow-sm); display:grid; place-items:center; opacity:.85">
+          <div style="width:60px; height:60px; border-radius:50%; background:var(--color-neutral-100)"></div>
+        </div>
+        <div style="position:absolute; left:58%; bottom:10%; width:5px; height:5px; border-radius:50%; background:var(--color-neutral-100); box-shadow:14px 6px 0 var(--color-neutral-100), -10px 10px 0 var(--color-neutral-200), 6px 16px 0 var(--color-neutral-100), 24px 14px 0 var(--color-neutral-200)"></div>
+        <sc-for list="{{poops}}" as="pp" hint-placeholder-count="0">
+          <div style="position:absolute; left:{{pp.left}}px; top:{{pp.top}}px; width:9px; height:6px; background:#f1ece0; border:1px solid #d8cfba; border-radius:50% 60% 55% 45%; opacity:{{pp.op}}; z-index:1"></div>
+        </sc-for>
+        <sc-for list="{{eggs}}" as="eg" hint-placeholder-count="0">
+          <div style="position:absolute; left:{{eg.left}}px; top:{{eg.top}}px; z-index:{{eg.z}}">
+            <div style="width:16px; height:11px; border-radius:50%; background:rgba(46,43,37,.10); margin:14px 0 -12px 1px"></div>
+            <div style="width:18px; height:23px; border-radius:50%; background:#fbf6e8; border:1.5px solid #e0d0a9; animation:pp-wobble .9s ease-in-out infinite; box-shadow:var(--shadow-sm)"></div>
+          </div>
+        </sc-for>
+        <sc-for list="{{pigeons}}" as="p" hint-placeholder-count="0">
+          <div style="position:absolute; left:{{p.left}}px; top:{{p.top}}px; width:{{p.w}}px; height:{{p.w}}px; z-index:{{p.z}}; transition:left {{p.tdur}}s linear, top {{p.tdur}}s linear; opacity:{{p.op}}; touch-action:none; user-select:none; -webkit-user-select:none">
+            <sc-if value="{{p.sel}}" hint-placeholder-val="{{false}}">
+              <div style="position:absolute; left:8%; top:12%; width:84%; height:84%; border:2px dashed var(--color-accent); border-radius:50%; animation:pp-spin 10s linear infinite; pointer-events:none"></div>
+            </sc-if>
+            <div sc-camel-on-pointer-down="{{p.down}}" style="width:100%; height:100%; animation:{{p.anim}}; cursor:pointer">
+              <img src="{{p.uri}}" draggable="false" style="width:100%; display:block; transform:scaleX({{p.flip}}); filter:{{p.filter}}; pointer-events:none">
+            </div>
+            <sc-if value="{{p.hasEmote}}" hint-placeholder-val="{{false}}">
+              <div style="position:absolute; left:50%; top:-14px; transform:translateX(-50%); background:{{p.emoteBg}}; color:{{p.emoteFg}}; font-size:12px; font-weight:700; padding:3px 9px; border-radius:999px; box-shadow:var(--shadow-sm); white-space:nowrap; animation:pp-rise .25s ease-out; pointer-events:none; z-index:300">{{p.emoteText}}</div>
+            </sc-if>
+            <sc-if value="{{p.sel}}" hint-placeholder-val="{{false}}">
+              <div style="position:absolute; left:50%; bottom:-16px; transform:translateX(-50%); background:var(--color-surface); font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; box-shadow:var(--shadow-sm); white-space:nowrap; pointer-events:none; z-index:300">{{p.name}}</div>
+            </sc-if>
+          </div>
+        </sc-for>
+        <sc-for list="{{sparks}}" as="s" hint-placeholder-count="0">
+          <div style="position:absolute; left:{{s.left}}px; top:{{s.top}}px; width:{{s.size}}px; height:{{s.size}}px; border-radius:50%; background:{{s.color}}; animation:{{s.anim}}; animation-delay:{{s.delay}}s; animation-fill-mode:both; z-index:400; pointer-events:none"></div>
+        </sc-for>
+        <sc-for list="{{rings}}" as="r" hint-placeholder-count="0">
+          <div style="position:absolute; left:{{r.left}}px; top:{{r.top}}px; width:54px; height:54px; margin:-27px 0 0 -27px; border:2.5px solid {{r.color}}; border-radius:50%; animation:pp-ring .9s ease-out both; z-index:399; pointer-events:none"></div>
+        </sc-for>
+        <div style="position:absolute; inset:0; background:linear-gradient(180deg,#2b2a3e,#454060); opacity:{{nightOv}}; transition:opacity 1.6s; pointer-events:none; z-index:500"></div>
+        <div style="position:absolute; inset:0; opacity:{{starOv}}; transition:opacity 1.6s; pointer-events:none; z-index:501; background-image:radial-gradient(circle, rgba(255,248,220,.9) 1px, transparent 1.7px), radial-gradient(circle, rgba(255,248,220,.45) 1px, transparent 1.5px); background-size:130px 96px, 74px 62px; background-position:14px 8px, 42px 34px"></div>
+        <sc-if value="{{loading}}" hint-placeholder-val="{{true}}">
+          <div style="position:absolute; inset:0; display:grid; place-items:center; z-index:600">
+            <div style="font-family:var(--font-heading); font-size:18px; opacity:.6">the pigeons are commuting…</div>
+          </div>
+        </sc-if>
+      </div>
+      <div ref="{{roostRef}}" style="display:flex; align-items:center; gap:9px; background:{{roostBg}}; border-radius:999px; padding:8px 16px; box-shadow:var(--shadow-sm); transition:background .2s; flex-wrap:wrap">
+        <div style="font-family:var(--font-heading); font-size:15px; margin-right:2px">The&nbsp;Roost</div>
+        <sc-for list="{{roost}}" as="r" hint-placeholder-count="8">
+          <div sc-camel-on-click="{{r.click}}" title="{{r.name}}" style="width:46px; height:46px; border-radius:50%; background:{{r.bg}}; border:{{r.bd}}; box-shadow:{{r.ring}}; overflow:hidden; cursor:{{r.cur}}; flex:none; display:grid; place-items:center">
+            <sc-if value="{{r.filled}}" hint-placeholder-val="{{false}}">
+              <img src="{{r.uri}}" draggable="false" style="width:40px; height:40px; display:block">
+            </sc-if>
+          </div>
+        </sc-for>
+        <div style="font-size:11px; opacity:.55; flex:1; min-width:150px; line-height:1.35">Drag a favorite here to keep it forever. Or at least until you change your mind.</div>
+      </div>
+    </div>
+    <div style="flex:{{lay.insFlex}}; min-width:290px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow-y:auto">
+      <sc-if value="{{hasSel}}" hint-placeholder-val="{{false}}">
+        <div class="card elev-sm" style="gap:10px; flex:none">
+          <div style="display:flex; gap:14px; align-items:center">
+            <div style="width:110px; height:110px; flex:none; border-radius:50%; background:var(--color-accent-2-100); display:grid; place-items:center">
+              <img src="{{sel.uri}}" draggable="false" style="width:94px; display:block">
+            </div>
+            <div style="min-width:0">
+              <div class="card-kicker">{{sel.kicker}}</div>
+              <h3 style="margin:0; font-size:21px; line-height:1.15">{{sel.name}}</h3>
+              <div style="font-size:12px; opacity:.6; margin-top:2px">{{sel.meta}}</div>
+            </div>
+          </div>
+          <div style="font-size:13.5px; font-weight:700">{{sel.color}}</div>
+          <sc-if value="{{sel.hasBreeds}}" hint-placeholder-val="{{false}}">
+            <div style="display:flex; gap:6px; flex-wrap:wrap">
+              <sc-for list="{{sel.breeds}}" as="b" hint-placeholder-count="1">
+                <span class="tag tag-accent" style="font-weight:700">★ {{b.name}}</span>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{sel.hasChips}}" hint-placeholder-val="{{false}}">
+            <div style="display:flex; gap:6px; flex-wrap:wrap">
+              <sc-for list="{{sel.chips}}" as="c" hint-placeholder-count="2">
+                <span class="tag" style="background:{{c.bg}}; color:{{c.fg}}">{{c.label}}</span>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{sel.hasCarries}}" hint-placeholder-val="{{false}}">
+            <div>
+              <div style="font-size:10.5px; text-transform:uppercase; letter-spacing:.09em; opacity:.5; margin-bottom:5px">Hidden in the DNA</div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap">
+                <sc-for list="{{sel.carries}}" as="c" hint-placeholder-count="2">
+                  <span class="tag" style="background:transparent; border:1.5px dashed var(--color-neutral-400); color:var(--color-neutral-700)">½ {{c.label}}</span>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{sel.isField}}" hint-placeholder-val="{{false}}">
+            <div style="display:flex; gap:8px; flex-wrap:wrap">
+              <button class="btn btn-primary" sc-camel-on-click="{{sel.actClone}}">
+                <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Clone
+              </button>
+              <button class="btn btn-secondary" sc-camel-on-click="{{sel.actRoost}}">
+                <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+                Roost
+              </button>
+              <button class="btn btn-ghost" sc-camel-on-click="{{sel.actDismiss}}">Dismiss politely</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{sel.isRoost}}" hint-placeholder-val="{{false}}">
+            <div style="display:flex; gap:8px; flex-wrap:wrap">
+              <button class="btn btn-primary" sc-camel-on-click="{{sel.actRelease}}">Release to park</button>
+              <button class="btn btn-secondary" sc-camel-on-click="{{sel.actCloneOut}}">Clone into park</button>
+              <button class="btn btn-ghost" sc-camel-on-click="{{sel.actRemove}}">Let go</button>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+      <sc-if value="{{noSel}}" hint-placeholder-val="{{true}}">
+        <div class="card" style="flex:none; align-items:flex-start">
+          <img src="{{emptyUri}}" draggable="false" style="width:86px; opacity:.85; align-self:center">
+          <div class="card-title">Tap a pigeon. Any pigeon.</div>
+          <p class="card-body" style="margin:0">They wander, they flirt, they multiply. Every egg reshuffles real pigeon DNA — dominant and recessive — so the rare stuff hides for generations.</p>
+          <p class="card-body" style="margin:0"><strong>Clone</strong> a bird to flood the gene pool with its DNA. <strong>Dismiss</strong> the ones holding the flock back. <strong>Drag</strong> anyone onto the Roost to keep them.</p>
+          <button class="btn btn-ghost" sc-camel-on-click="{{resetAll}}" style="font-size:12px">Start over with fresh ferals</button>
+        </div>
+      </sc-if>
+      <div class="card" style="flex:none; gap:10px">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:.08em; opacity:.55; min-width:74px">Park speed</div>
+          <div class="seg" style="flex:1; display:flex; min-width:0; overflow:hidden">
+            <sc-for list="{{speedOpts}}" as="o" hint-placeholder-count="3">
+              <button sc-camel-on-click="{{o.click}}" style="flex:1; border:none; cursor:pointer; font-family:var(--font-body); font-weight:700; font-size:11.5px; padding:6px 4px; min-width:0; white-space:nowrap; border-radius:999px; background:{{o.bg}}; color:{{o.fg}}; transition:background .15s">{{o.label}}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:.08em; opacity:.55; min-width:74px">Mutations</div>
+          <div class="seg" style="flex:1; display:flex; min-width:0; overflow:hidden">
+            <sc-for list="{{mutOpts}}" as="o" hint-placeholder-count="3">
+              <button sc-camel-on-click="{{o.click}}" style="flex:1; border:none; cursor:pointer; font-family:var(--font-body); font-weight:700; font-size:11.5px; padding:6px 4px; min-width:0; white-space:nowrap; border-radius:999px; background:{{o.bg}}; color:{{o.fg}}; transition:background .15s">{{o.label}}</button>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="flex:none; flex-direction:row; gap:6px; justify-content:space-between; flex-wrap:wrap">
+        <sc-for list="{{stats}}" as="st" hint-placeholder-count="4">
+          <div style="min-width:56px">
+            <div style="font-family:var(--font-heading); font-size:19px">{{st.v}}</div>
+            <div style="font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; opacity:.5">{{st.l}}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  <sc-if value="{{showPedia}}" hint-placeholder-val="{{false}}">
+    <div class="dialog-backdrop" sc-camel-on-click="{{closeDialog}}" style="position:fixed; z-index:1000">
+      <div class="dialog elev-lg" sc-camel-on-click="{{stopProp}}" style="width:min(800px,94vw); max-height:84vh">
+        <div style="display:flex; align-items:center; gap:10px">
+          <div class="dialog-title">The Pigeonpedia</div>
+          <span class="tag tag-accent-2">{{pediaCount}} observed</span>
+          <span style="flex:1"></span>
+          <button class="btn btn-icon btn-secondary" sc-camel-on-click="{{closeDialog}}">
+            <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+        <div style="overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill,minmax(215px,1fr)); gap:9px; padding-right:4px">
+          <sc-for list="{{pedia}}" as="pe" hint-placeholder-count="6">
+            <div style="background:var(--color-bg); border-radius:var(--radius-md); padding:10px 12px; opacity:{{pe.op}}">
+              <div style="display:flex; gap:6px; align-items:center; justify-content:space-between">
+                <span style="font-weight:700; font-size:13.5px">{{pe.title}}</span>
+                <span class="tag" style="background:{{pe.bg}}; color:{{pe.fg}}; font-size:9.5px; flex:none">{{pe.tier}}</span>
+              </div>
+              <div style="font-size:12px; opacity:.75; margin-top:3px; line-height:1.4">{{pe.note}}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size:11.5px; opacity:.5">Field notes are written the first time a trait hatches in your park.</div>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{showBreeds}}" hint-placeholder-val="{{false}}">
+    <div class="dialog-backdrop" sc-camel-on-click="{{closeDialog}}" style="position:fixed; z-index:1000">
+      <div class="dialog elev-lg" sc-camel-on-click="{{stopProp}}" style="width:min(860px,94vw); max-height:84vh">
+        <div style="display:flex; align-items:center; gap:10px">
+          <div class="dialog-title">Breed Registry</div>
+          <span class="tag tag-accent">{{breedCount}} discovered</span>
+          <span style="flex:1"></span>
+          <button class="btn btn-icon btn-secondary" sc-camel-on-click="{{closeDialog}}">
+            <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+        <div style="overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr)); gap:9px; padding-right:4px">
+          <sc-for list="{{breeds}}" as="br" hint-placeholder-count="6">
+            <div style="background:var(--color-bg); border-radius:var(--radius-md); padding:12px; display:flex; flex-direction:column; gap:6px; align-items:center; text-align:center">
+              <img src="{{br.img}}" draggable="false" style="width:74px; filter:{{br.filter}}">
+              <div style="font-weight:700; font-size:13.5px; line-height:1.2">{{br.title}}</div>
+              <span class="tag" style="background:{{br.tagBg}}; color:{{br.tagFg}}; font-size:9.5px">{{br.tag}}</span>
+              <div style="font-size:11.5px; opacity:.72; line-height:1.4">{{br.sub}}</div>
+              <sc-if value="{{br.hasBy}}" hint-placeholder-val="{{false}}">
+                <div style="font-size:10.5px; opacity:.5">first bred by {{br.by}}</div>
+              </sc-if>
+              <sc-if value="{{br.canClone}}" hint-placeholder-val="{{false}}">
+                <button class="btn btn-secondary" sc-camel-on-click="{{br.clone}}" style="font-size:12px; padding:5px 14px">
+                  <svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  Clone into park
+                </button>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size:11.5px; opacity:.5">Match a real fancy-pigeon breed to register it. The cryptids are your problem.</div>
+      </div>
+    </div>
+  </sc-if>
+  <div style="position:fixed; left:50%; bottom:16px; transform:translateX(-50%); display:flex; flex-direction:column; gap:8px; z-index:1200; pointer-events:none; align-items:center">
+    <sc-for list="{{toasts}}" as="t" hint-placeholder-count="0">
+      <div style="background:{{t.bg}}; color:{{t.fg}}; padding:9px 18px; border-radius:999px; box-shadow:var(--shadow-lg); font-size:13.5px; font-weight:600; animation:pp-toast .25s ease-out; max-width:88vw">{{t.msg}}</div>
+    </sc-for>
+  </div>
+  <sc-if value="{{hasDrag}}" hint-placeholder-val="{{false}}">
+    <img src="{{drag.uri}}" draggable="false" style="position:fixed; left:{{drag.x}}px; top:{{drag.y}}px; width:{{drag.w}}px; transform:translate(-50%,-72%) rotate(-6deg) scaleX({{drag.flip}}); z-index:1300; pointer-events:none; opacity:.92; filter:drop-shadow(0 10px 14px rgba(46,43,37,.3))">
+  </sc-if>
+</div>
+</x-dc>

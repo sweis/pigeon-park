@@ -1,0 +1,461 @@
+// Pigeon Park — flock simulation. Pure logic, no DOM, no three.js.
+// Ported from the prototype's 450 ms tick; runs on a fixed timestep in sim-seconds so
+// scripted runs (seeded RNG + fixed dt) replay identically.
+
+import * as M from './genetics.js';
+import { rand } from './rng.js';
+
+export const FIXED_DT = 1 / 30;          // physics step, sim seconds
+export const THINK_DT = 0.45;            // decision tick, same cadence as the prototype
+export const DAY_LEN = 170;              // seconds per full day/night cycle (wall clock)
+export const PARK = { w: 10.4, d: 6.6 };   // walkable rectangle, metres, centred on origin
+export const FOUNTAIN = { x: -1.7, z: -0.8, r: 1.3 };
+export const ROOST_SIZE = 8;
+export const ADULT_AGE = 13;
+const PX = 0.0066;                       // prototype pixel → metre (92 px pigeon ≈ 0.6 m)
+const SP = 1.4;                          // prototype's internal pace factor
+
+export const SPEEDS = [
+  { id: 'stroll', label: 'Stroll', v: 0.5 },
+  { id: 'normal', label: 'Normal', v: 1 },
+  { id: 'bustling', label: 'Bustling', v: 1.7 },
+  { id: 'frantic', label: 'Frantic', v: 2.5 },
+];
+export const MUTATIONS = [
+  { id: 'calm', label: 'Calm', v: 0.5 },
+  { id: 'normal', label: 'Normal', v: 1 },
+  { id: 'chaos', label: 'Chaos', v: 3 },
+];
+
+const pick = (arr) => arr[Math.floor(rand() * arr.length)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// Night amount 0..1 from day phase (same curve as the prototype).
+export function nightOf(ph) {
+  return ph < .55 ? 0 : ph < .62 ? (ph - .55) / .07 : ph < .88 ? 1 : ph < .95 ? 1 - (ph - .88) / .07 : 0;
+}
+// Day phase <-> clock hour. Day 07:00–18:00, dusk to 20:00, night to 05:00, dawn to 07:00.
+const PH_KEYS = [[0, 7], [.55, 18], [.62, 20], [.88, 29], [1, 31]];
+export function phaseToHour(ph) {
+  ph = ((ph % 1) + 1) % 1;
+  for (let i = 1; i < PH_KEYS.length; i++) {
+    const [p0, h0] = PH_KEYS[i - 1], [p1, h1] = PH_KEYS[i];
+    if (ph <= p1) return (h0 + (h1 - h0) * (ph - p0) / (p1 - p0)) % 24;
+  }
+  return 7;
+}
+export function hourToPhase(h) {
+  h = ((h % 24) + 24) % 24; if (h < 7) h += 24;
+  for (let i = 1; i < PH_KEYS.length; i++) {
+    const [p0, h0] = PH_KEYS[i - 1], [p1, h1] = PH_KEYS[i];
+    if (h <= h1) return p0 + (p1 - p0) * (h - h0) / (h1 - h0);
+  }
+  return 0;
+}
+
+export function genomeHash(genome) {
+  let jh = 0; const js = JSON.stringify(genome);
+  for (let i = 0; i < js.length; i++) jh = (jh * 31 + js.charCodeAt(i)) | 0;
+  return jh >>> 0;
+}
+
+export function pureGenome(over) {
+  const g = {};
+  for (const l of M.LOCI) g[l.id] = [l.alleles[0], l.alleles[0]];
+  Object.assign(g, {
+    fantasy: ['none', 'none'], fpattern: ['none', 'none'], glow: ['none', 'none'], sheen: ['normal', 'normal'],
+    pattern: ['bar', 'bar'], spread: ['no', 'no'], dilute: ['full', 'full'], recred: ['no', 'no'],
+    grizzle: ['no', 'no'], pied: ['solid', 'solid'], muffs: ['clean', 'clean'], mane: ['plain', 'plain'],
+    frill: ['smooth', 'smooth'], curl: ['straight', 'straight'], eye: ['orange', 'orange'],
+  });
+  for (const [k, v] of Object.entries(over)) g[k] = [v, v];
+  return g;
+}
+
+export class Sim {
+  constructor() { this.reset(); }
+
+  reset() {
+    this.t = 0;              // scaled sim time (seconds) — ages, timers
+    this.wall = 0;           // unscaled sim time — drives the day cycle
+    this.phase0 = 0.16;      // day phase at wall=0
+    this.thinkAcc = 0;
+    this.ids = 1;
+    this.pigeons = []; this.eggs = []; this.poops = [];
+    this.roost = []; this.discovered = {}; this.breeds = {};
+    this.stats = { births: 0, flown: 0, maxGen: 1 };
+    this.court = null;
+    this.selId = null;
+    this.cap = 45;
+    this.speed = 1; this.mut = 'normal'; this.poopEnabled = true;
+    this.events = [];
+    this.ready = false;      // autosave gate: never save before the flock has loaded
+    this.night = nightOf(this.phase());
+  }
+
+  // ---------- clocks ----------
+  phase() { return (((this.phase0 + this.wall / DAY_LEN) % 1) + 1) % 1; }
+  hour() { return phaseToHour(this.phase()); }
+  setTimeOfDay(h) { this.phase0 = hourToPhase(h) - this.wall / DAY_LEN; this.night = nightOf(this.phase()); }
+  mutF() { return (MUTATIONS.find(m => m.id === this.mut) || MUTATIONS[1]).v; }
+  age(p) { return this.t - p.born; }
+  adult(p) { return this.age(p) > ADULT_AGE; }
+  emit(e) { this.events.push(e); if (this.events.length > 200) this.events.shift(); }
+  toast(msg, kind = 'plain') { this.emit({ type: 'toast', msg, kind }); }
+  sound(name, extra) { this.emit({ type: 'sound', name, ...extra }); }
+  sparkle(x, z, tier) { this.emit({ type: 'sparkle', x, z, tier }); }
+  byId(id) { return this.pigeons.find(p => p.id === id); }
+
+  // ---------- geometry ----------
+  clampToPark(x, z) {
+    x = clamp(x, -PARK.w / 2, PARK.w / 2); z = clamp(z, -PARK.d / 2, PARK.d / 2);
+    const dx = x - FOUNTAIN.x, dz = z - FOUNTAIN.z, d = Math.hypot(dx, dz);
+    if (d < FOUNTAIN.r) {
+      const k = FOUNTAIN.r / (d || 1);
+      x = FOUNTAIN.x + (d ? dx : 1) * k; z = FOUNTAIN.z + dz * k;
+    }
+    return [x, z];
+  }
+  randomSpot() {
+    return this.clampToPark((rand() - .5) * PARK.w, (rand() - .5) * PARK.d);
+  }
+
+  // ---------- flock ----------
+  spawn({ genome, accessory = null, name, gen = 1, adult = false, x, z, quiet = false, dir }) {
+    const pheno = M.computePheno(genome, accessory);
+    if (x === undefined || z === undefined) [x, z] = this.randomSpot(); else [x, z] = this.clampToPark(x, z);
+    const p = {
+      id: this.ids++, name, genome, accessory, pheno, gen,
+      jit: .93 + (genomeHash(genome) % 1000) / 1000 * .16,
+      born: adult ? this.t - 60 : this.t,
+      x, z, y: 0, tx: x, tz: z, v: 0,
+      dir: dir !== undefined ? dir : (rand() < .5 ? 0 : Math.PI),
+      state: 'idle', stateUntil: this.t + .4 + rand() * 1.5, stateAt: this.t,
+      emote: null, emoteUntil: 0, courting: false, flying: false, flyAt: 0, held: false,
+      breeds: M.matchBreeds(pheno),
+    };
+    this.pigeons.push(p);
+    this.stats.maxGen = Math.max(this.stats.maxGen, p.gen);
+    if (!quiet) this.notice(p);
+    return p;
+  }
+
+  notice(p) {
+    for (const t of p.pheno.traits) {
+      if (M.PEDIA[t.key] && !this.discovered[t.key]) {
+        this.discovered[t.key] = 1;
+        this.toast('Field note unlocked: ' + t.label, 'note');
+      }
+    }
+    for (const b of p.breeds) {
+      if (!this.breeds[b.id]) {
+        this.breeds[b.id] = { by: p.name, at: Date.now() };
+        this.toast('BREED DISCOVERED — ' + b.name + '!', 'breed');
+        this.sound('chime');
+        this.sparkle(p.x, p.z, 3);
+        this.emit({ type: 'breed', id: b.id, pid: p.id });
+      }
+    }
+  }
+
+  initFlock(saved) {
+    this.ready = true;
+    if (saved && saved.pigeons && saved.pigeons.length) {
+      saved.pigeons.slice(0, this.cap).forEach(sp => {
+        const q = this.spawn({ genome: sp.g, accessory: sp.a, name: sp.n, gen: sp.ge || 1, adult: true, quiet: true, x: sp.x, z: sp.z });
+        if (sp.d != null) q.dir = sp.d;
+      });
+      return;
+    }
+    for (let i = 0; i < 7; i++) {
+      const g = M.founderGenome();
+      if (i === 1) g.crest = ['none', 'shell'];
+      if (i === 2) g.tail = ['normal', 'fantail'];
+      if (i === 3) g.dilute = ['full', 'dilute'];
+      if (i === 4) g.pied = ['splash', 'splash'];
+      if (i === 5) g.muffs = ['clean', 'muffed'];
+      this.spawn({ genome: g, name: M.randomName(), gen: 1, adult: true, quiet: true });
+    }
+  }
+
+  walkTo(p, tx, tz, speed) {
+    [tx, tz] = this.clampToPark(tx, tz);
+    p.tx = tx; p.tz = tz; p.v = speed;
+    const d = Math.hypot(tx - p.x, tz - p.z);
+    p.state = 'walk'; p.stateAt = this.t;
+    p.stateUntil = this.t + Math.max(.4, d / speed);
+    if (d > .01) p.dir = Math.atan2(tz - p.z, tx - p.x);
+  }
+
+  fly(p, withToast) {
+    p.flying = true; p.flyAt = this.t; p.state = 'fly'; p.emote = null; p.courting = false; p.held = false;
+    p.fdx = rand() < .5 ? -1 : 1;
+    this.stats.flown++;
+    this.sound('whoosh');
+    if (withToast) this.toast(pick(M.COPY.flyoff).replace('{n}', p.name));
+    if (this.selId === p.id) { this.selId = null; this.emit({ type: 'deselect' }); }
+  }
+
+  // ---------- stepping ----------
+  // Advance by one fixed step (FIXED_DT wall seconds, scaled by park speed for gameplay).
+  step() {
+    const dt = FIXED_DT * this.speed;
+    this.wall += FIXED_DT;
+    this.t += dt;
+    this.move(dt);
+    this.thinkAcc += dt;
+    while (this.thinkAcc >= THINK_DT) { this.thinkAcc -= THINK_DT; this.think(); }
+  }
+
+  move(dt) {
+    for (const p of this.pigeons) {
+      if (p.held) continue;
+      if (p.flying) {
+        const k = (this.t - p.flyAt);
+        p.y = 0.2 + k * k * 2.2 + k * 1.2;
+        p.x += p.fdx * dt * 1.6; p.z -= dt * 1.1;
+        p.dir = p.fdx > 0 ? -0.35 : Math.PI + 0.35;
+        continue;
+      }
+      if (p.y > 0) p.y = Math.max(0, p.y - dt * 3);
+      if (p.state === 'walk') {
+        const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz);
+        const s = p.v * dt;
+        if (d <= s) { p.x = p.tx; p.z = p.tz; if (!p.courting) p.state = 'idle'; }
+        else { p.x += dx / d * s; p.z += dz / d * s; p.dir = Math.atan2(dz, dx); }
+        [p.x, p.z] = this.clampToPark(p.x, p.z);
+      }
+    }
+  }
+
+  think() {
+    const now = this.t, sp = SP, cap = this.cap;
+    this.night = nightOf(this.phase());
+    // remove flown
+    this.pigeons = this.pigeons.filter(p => !(p.flying && now - p.flyAt > 1.5));
+    const pop = this.pigeons.length;
+    for (const p of this.pigeons) {
+      if (p.flying || p.held) continue;
+      if (p.emote && now > p.emoteUntil) p.emote = null;
+      if (p.courting) continue;
+      if (now >= p.stateUntil) {
+        const sleepy = this.night > .6, r = rand();
+        p.stateAt = now;
+        if (sleepy && r < .55) { p.state = 'sleep'; p.stateUntil = now + 3 + rand() * 5; p.emote = { kind: 'zzz' }; p.emoteUntil = p.stateUntil; }
+        else if (p.pheno.e.behavior === 'tumbler' && r < .08) { p.state = 'tumble'; p.stateUntil = now + .75; }
+        else if (r < (sleepy ? .8 : .5)) {
+          const [tx, tz] = this.randomSpot();
+          this.walkTo(p, tx, tz, 42 * PX * sp);
+        }
+        else if (r < .8) { p.state = 'peck'; p.stateUntil = now + 1.2 + rand() * 1.8; }
+        else { p.state = 'idle'; p.stateUntil = now + .9 + rand() * 2.2; }
+      }
+      if (!p.emote && p.state !== 'sleep' && rand() < .004) {
+        p.emote = { kind: 'say', text: pick(M.THOUGHTS) }; p.emoteUntil = now + 2.6;
+      }
+      if (rand() < .012) this.sound('coo', { voice: p.pheno.e.voice, vol: .5, id: p.id });
+    }
+    // courtship
+    if (!this.court && pop >= 2 && pop < cap && rand() < (0.10 * (1 - pop / cap) + 0.02) * sp) {
+      const adults = this.pigeons.filter(p => this.adult(p) && !p.flying && !p.held && p.state !== 'sleep');
+      if (adults.length >= 2) {
+        const a = adults[Math.floor(rand() * adults.length)];
+        let b = null, bd = 1e9;
+        for (const q of adults) { if (q === a) continue; const d = Math.hypot(q.x - a.x, q.z - a.z); if (d < bd) { bd = d; b = q; } }
+        if (b) {
+          let [mx, mz] = this.clampToPark((a.x + b.x) / 2, (a.z + b.z) / 2);
+          mx = clamp(mx, -PARK.w / 2 + .3, PARK.w / 2 - .3);
+          this.court = { a: a.id, b: b.id, mx, mz, until: now + 12, eggAt: 0 };
+          a.courting = b.courting = true;
+          this.walkTo(a, mx - .24, mz, 56 * PX * sp);
+          this.walkTo(b, mx + .24, mz, 56 * PX * sp);
+        }
+      }
+    }
+    if (this.court) {
+      const C = this.court, a = this.byId(C.a), b = this.byId(C.b);
+      if (!a || !b || a.flying || b.flying || a.held || b.held || now > C.until) {
+        if (a) { a.courting = false; a.stateUntil = now; } if (b) { b.courting = false; b.stateUntil = now; }
+        this.court = null;
+      } else {
+        const close = Math.hypot(a.x - (C.mx - .24), a.z - C.mz) < .2 && Math.hypot(b.x - (C.mx + .24), b.z - C.mz) < .2;
+        if (close) { a.dir = 0; b.dir = Math.PI; a.state = b.state = 'court'; }
+        if (close && !C.eggAt) {
+          C.eggAt = now + 1.6;
+          a.emote = { kind: 'heart' }; a.emoteUntil = now + 1.6;
+          b.emote = { kind: 'heart' }; b.emoteUntil = now + 1.6;
+          this.sound('coo', { voice: a.pheno.e.voice, vol: .8, id: a.id });
+        }
+        if (C.eggAt && now >= C.eggAt) {
+          const off = M.offspring(a.genome, b.genome, this.mutF());
+          this.eggs.push({ id: this.ids++, x: C.mx, z: C.mz + .12, genome: off.genome, gen: Math.max(a.gen, b.gen) + 1, laidAt: now, hatchAt: now + 6 + rand() * 3.5, parents: [a.id, b.id] });
+          this.sound('pop');
+          a.courting = b.courting = false; a.stateUntil = b.stateUntil = now; a.state = b.state = 'idle';
+          this.court = null;
+        }
+      }
+    }
+    // eggs
+    for (const eg of [...this.eggs]) {
+      if (now >= eg.hatchAt) {
+        this.eggs = this.eggs.filter(x => x !== eg);
+        const acc = M.rollAccessory(0.02);
+        const baby = this.spawn({ genome: eg.genome, accessory: acc, name: M.randomName(), gen: eg.gen, x: eg.x, z: eg.z, dir: Math.PI / 2 });
+        this.stats.births++;
+        this.sound('pop');
+        this.emit({ type: 'hatch', x: eg.x, z: eg.z, pid: baby.id });
+        const tier = baby.pheno.sparkTier;
+        if (tier >= 1) this.sparkle(eg.x, eg.z, tier);
+        if (tier >= 2) this.toast('A remarkable hatch: ' + baby.pheno.label + '.', 'note');
+        else if (rand() < .13) this.toast(pick(M.COPY.birth));
+      }
+    }
+    // fly-offs: gentle pressure as the park fills, forced when over capacity
+    const n = this.pigeons.length, over = n > cap;
+    if (n > 4 && (over ? rand() < .5 : rand() < 0.10 * Math.pow(n / cap, 3) * sp)) {
+      const cands = this.pigeons.filter(p => !p.flying && !p.held && !p.courting && p.id !== this.selId && this.adult(p));
+      if (cands.length) this.fly(cands[Math.floor(rand() * cands.length)], rand() < .5);
+    }
+    // poop (cosmetic)
+    if (this.poopEnabled && rand() < .05 && this.pigeons.length) {
+      const p = this.pigeons[Math.floor(rand() * this.pigeons.length)];
+      if (!p.flying && !p.held) {
+        this.poops.push({ id: this.ids++, x: p.x - Math.cos(p.dir) * .22, z: p.z - Math.sin(p.dir) * .22, at: now, r: rand() });
+        if (this.poops.length > 14) this.poops.shift();
+      }
+    }
+    this.poops = this.poops.filter(pp => now - pp.at < 30);
+  }
+
+  // ---------- player actions ----------
+  full() { if (this.pigeons.filter(p => !p.flying).length >= this.cap) { this.toast(pick(M.COPY.full)); return true; } return false; }
+
+  clonePigeon(id) {
+    const p = this.byId(id); if (!p || p.flying || this.full()) return null;
+    let nm = 'Also ' + p.name; if (nm.length > 30) nm = M.randomName();
+    const q = this.spawn({ genome: structuredClone(p.genome), accessory: p.accessory, name: nm, gen: p.gen, adult: true, x: p.x + .45, z: p.z + .15, dir: p.dir });
+    this.stats.births++;
+    this.sparkle(q.x, q.z, 1);
+    this.sound('pop');
+    this.toast(pick(M.COPY.clone).replace('{n}', p.name));
+    return q;
+  }
+  dismissPigeon(id) {
+    const p = this.byId(id); if (!p || p.flying) return;
+    this.fly(p, false);
+    this.toast(pick(M.COPY.dismiss).replace('{n}', p.name));
+  }
+  roostAdd(id) {
+    const p = this.byId(id); if (!p || p.flying) return false;
+    if (this.roost.length >= ROOST_SIZE) { this.toast(pick(M.COPY.roostFull)); return false; }
+    this.roost.push({ name: p.name, genome: p.genome, accessory: p.accessory, gen: p.gen });
+    this.pigeons = this.pigeons.filter(x => x.id !== id);
+    if (this.court && (this.court.a === id || this.court.b === id)) this.court = null;
+    if (this.selId === id) this.selId = null;
+    this.emit({ type: 'roosted', x: p.x, z: p.z });
+    this.toast(pick(M.COPY.roosted).replace('{n}', p.name), 'note');
+    this.sound('coo', { voice: p.pheno.e.voice, vol: .7 });
+    return true;
+  }
+  releaseRoost(i, keep) {
+    const r = this.roost[i]; if (!r || this.full()) return null;
+    const p = this.spawn({ genome: structuredClone(r.genome), accessory: r.accessory, name: keep ? 'Also ' + r.name : r.name, gen: r.gen, adult: true });
+    if (keep) this.stats.births++;
+    this.sparkle(p.x, p.z, 1);
+    this.sound('pop');
+    if (!keep) this.roost.splice(i, 1);
+    return p;
+  }
+  removeRoost(i) {
+    const r = this.roost[i]; if (!r) return;
+    this.roost.splice(i, 1);
+    this.toast(r.name + ' retired from public life.');
+  }
+  cloneBreed(id) {
+    const b = M.BREEDS.find(x => x.id === id);
+    if (!b || !this.breeds[id] || this.full()) return null;
+    const sample = M.breedSample(b);
+    const genome = {};
+    for (const l of M.LOCI) genome[l.id] = [sample.e[l.id], sample.e[l.id]];
+    const p = this.spawn({ genome, accessory: sample.accessory, name: M.randomName(), gen: this.stats.maxGen, adult: true });
+    this.stats.births++;
+    this.sparkle(p.x, p.z, 2);
+    this.sound('pop');
+    this.toast('One ' + b.name + ', made to order.', 'note');
+    return p;
+  }
+  summonLegends() {
+    const legends = [
+      { name: 'THE VOID PIGEON', g: pureGenome({ fantasy: 'void', glow: 'glow', eye: 'pearl' }) },
+      { name: 'THE GALAXY PIGEON', g: pureGenome({ sheen: 'galaxy', fpattern: 'stars', tail: 'fantail' }) },
+    ];
+    for (const L of legends) {
+      const p = this.spawn({ genome: L.g, name: L.name, gen: this.stats.maxGen, adult: true, x: (rand() - .5) * 2, z: 1 + rand() });
+      this.sparkle(p.x, p.z, 3);
+    }
+    this.sound('chime');
+    this.toast('W rizz. The legends have descended.', 'breed');
+  }
+  summonOres() {
+    const ores = [
+      ['THE DIAMOND PIGEON', 'diamond'], ['THE EMERALD PIGEON', 'emerald'], ['THE GOLD PIGEON', 'gold'],
+      ['THE GOLD ORE PIGEON', 'goldore'], ['THE DIAMOND ORE PIGEON', 'diamondore'], ['THE EMERALD ORE PIGEON', 'emeraldore'],
+      ['THE REDSTONE ORE PIGEON', 'redstoneore'], ['THE IRON ORE PIGEON', 'ironore'], ['THE LAPIS ORE PIGEON', 'lapisore'],
+      ['THE MIXED GEMSTONE PIGEON', 'gemore'], ['THE COAL ORE PIGEON', 'coalore'],
+    ];
+    for (const [name, f] of ores) {
+      const p = this.spawn({ genome: pureGenome({ fantasy: f }), name, gen: this.stats.maxGen, adult: true, x: (rand() - .5) * PARK.w * .7, z: (rand() - .5) * PARK.d * .5 });
+      this.sparkle(p.x, p.z, 3);
+    }
+    this.sound('chime');
+    this.toast('The mineshaft opens. Eleven ore pigeons surface.', 'breed');
+  }
+
+  // ---------- drag (player carries a bird) ----------
+  grab(id) {
+    const p = this.byId(id); if (!p || p.flying) return null;
+    p.held = true; p.courting = false; p.state = 'held';
+    if (this.court && (this.court.a === id || this.court.b === id)) {
+      const o = this.byId(this.court.a === id ? this.court.b : this.court.a);
+      if (o) { o.courting = false; o.stateUntil = this.t; }
+      this.court = null;
+    }
+    return p;
+  }
+  carry(id, x, z) { const p = this.byId(id); if (p && p.held) { p.x = x; p.z = z; p.y = .55; } }
+  drop(id, x, z) {
+    const p = this.byId(id); if (!p) return;
+    p.held = false;
+    [p.x, p.z] = this.clampToPark(x, z); p.tx = p.x; p.tz = p.z;
+    p.y = .55; p.state = 'idle'; p.stateUntil = this.t + .7;
+  }
+
+  // ---------- persistence ----------
+  serialize(extra) {
+    return {
+      v: 1,
+      pigeons: this.pigeons.filter(p => !p.flying).map(p => ({ n: p.name, g: p.genome, a: p.accessory, ge: p.gen, x: +p.x.toFixed(3), z: +p.z.toFixed(3), d: +p.dir.toFixed(3) })),
+      roost: this.roost, disc: this.discovered, breeds: this.breeds, stats: this.stats,
+      speed: this.speed, mut: this.mut, ph: this.phase(), ...extra,
+    };
+  }
+  restore(d) {
+    if (!d) return;
+    this.roost = d.roost || []; this.discovered = d.disc || {}; this.breeds = d.breeds || {};
+    this.stats = d.stats || this.stats;
+    if (d.speed != null) this.speed = d.speed;
+    if (d.mut) this.mut = d.mut;
+    if (d.ph != null) { this.phase0 = d.ph - this.wall / DAY_LEN; this.night = nightOf(this.phase()); }
+  }
+}
+
+// Map a prototype (v1, pixel-space) save into world coordinates.
+export function migrateLegacy(d) {
+  if (!d || !d.pigeons) return null;
+  const fw = 800, fh = 440;
+  return {
+    ...d,
+    speed: typeof d.speed === 'number' ? d.speed : 1,
+    pigeons: d.pigeons.map(p => ({ n: p.n, g: p.g, a: p.a, ge: p.ge, x: ((p.x ?? fw / 2) / fw - .5) * PARK.w, z: ((p.y ?? fh / 2) / fh - .5) * PARK.d, d: p.f === -1 ? Math.PI : 0 })),
+  };
+}
