@@ -19,12 +19,15 @@ export class CameraRig {
   // distance that fits the plaza (plus a margin) in view for the current aspect
   fitDist(aspect) {
     const vf = THREE.MathUtils.degToRad(this.cam.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * aspect);
-    const w = PARK.w + .9, d = PARK.d + 1.2;
-    return Math.max((w / 2) / Math.tan(hf / 2), (d * .62) / Math.tan(vf / 2)) + 1.5;
+    // portrait screens look down the plaza's long axis (see overviewAz), so swap the extents
+    const port = aspect < .8, w = (port ? PARK.d : PARK.w) + .9, d = (port ? PARK.w : PARK.d) + 1.2;
+    return Math.max((w / 2) / Math.tan(hf / 2), (d * (port ? .5 : .62)) / Math.tan(vf / 2)) + 1.5;
   }
   fit(aspect) {
     this.cam.aspect = aspect; this.cam.updateProjectionMatrix();
     this.home = this.fitDist(aspect);
+    this.overviewAz = aspect < .8 ? Math.PI / 2 : 0;
+    if (this.name === 'overview') this.want.az = this.overviewAz;
     this.maxDist = this.home * 1.35;
     if (this.name === 'overview') this.want.dist = this.home;
   }
@@ -32,7 +35,7 @@ export class CameraRig {
   shot(name, opts = {}) {
     this.name = name; this.follow = null;
     const W = this.want;
-    if (name === 'overview' || name === 'hud-check') Object.assign(W, { az: 0, pol: .98, dist: this.home, target: new THREE.Vector3(0, 0, .1) });
+    if (name === 'overview' || name === 'hud-check') Object.assign(W, { az: this.overviewAz, pol: .98, dist: this.home, target: new THREE.Vector3(0, 0, .1) });
     else if (name === 'fountain') Object.assign(W, { az: .35, pol: 1.05, dist: 7.5, target: new THREE.Vector3(FOUNTAIN.x, .6, FOUNTAIN.z) });
     else if (name === 'dovecote') Object.assign(W, { az: -.55, pol: 1.15, dist: 6, target: new THREE.Vector3(PARK.w / 2 + 1.9, 1.8, -PARK.d / 2 - 1.5) });
     else if (name === 'hero-close') Object.assign(W, { az: opts.az ?? .5, pol: 1.3, dist: opts.dist ?? 2.1, target: new THREE.Vector3(opts.x ?? 0, opts.y ?? .28, opts.z ?? 0) });
@@ -40,7 +43,7 @@ export class CameraRig {
     if (opts.snap !== false) this.snap();
   }
   orbit(dx, dy) {
-    this.want.az = THREE.MathUtils.clamp(this.want.az - dx * .005, -1.25, 1.25);
+    this.want.az = THREE.MathUtils.clamp(this.want.az - dx * .005, this.overviewAz - 1.25, this.overviewAz + 1.25);
     this.want.pol = THREE.MathUtils.clamp(this.want.pol - dy * .004, .45, 1.38);
     this.name = 'custom';
   }

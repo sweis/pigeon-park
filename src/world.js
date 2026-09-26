@@ -71,16 +71,16 @@ function lumpy(radius, detail, amp, seed) {
 // ---------- time-of-day keyframes ----------
 // hour, sun elevation°, sun colour, sun intensity, hemi sky, hemi ground, hemi intensity, sky top, horizon, env
 const KEYS = [
-  [0, 38, '#9fb0e0', .45, '#3a4670', '#1c1c24', .5, '#131a33', '#323a61', .1],
-  [4.8, 30, '#9fb0e0', .4, '#3a4670', '#1c1c24', .5, '#1a2140', '#3e4470', .1],
+  [0, 40, '#8ea8ee', .8, '#27345f', '#0f1118', .45, '#0d1330', '#27305a', .06],
+  [4.8, 32, '#8ea8ee', .75, '#2a3764', '#10121a', .45, '#141b3a', '#323a66', .06],
   [5.8, 3, '#ffb08a', .9, '#8f94b8', '#5a4c44', .7, '#6878aa', '#f2b597', .25],
   [7.5, 16, '#ffdcb2', 2.4, '#b4c8e4', '#7b6a55', .9, '#7fa9d6', '#efdcc4', .45],
-  [11, 42, '#fff1dc', 3.0, '#c4d8ee', '#86745c', 1.0, '#6fa3d8', '#dfe6df', .55],
-  [15, 36, '#ffe6c2', 3.1, '#c0d2e6', '#8a7458', .95, '#76a4d4', '#ecdfc6', .5],
+  [11, 42, '#fff1dc', 2.55, '#c4d8ee', '#86745c', .82, '#6fa3d8', '#dfe6df', .42],
+  [15, 36, '#ffe6c2', 2.8, '#c0d2e6', '#8a7458', .88, '#76a4d4', '#ecdfc6', .45],
   [17, 16, '#ffcf96', 2.9, '#b8bfd6', '#8a6a4c', .85, '#7c98c6', '#f4cf9e', .45],
   [18.4, 3, '#ff9564', 1.4, '#8e8cb0', '#5e4a3c', .7, '#5d6a9c', '#f1a07a', .3],
-  [19.6, 30, '#9fb0e0', .35, '#4a5078', '#24222a', .55, '#28305a', '#565a86', .15],
-  [24, 38, '#9fb0e0', .45, '#3a4670', '#1c1c24', .5, '#131a33', '#323a61', .1],
+  [19.6, 32, '#8ea8ee', .6, '#34406e', '#15151c', .5, '#1d2550', '#454c80', .1],
+  [24, 40, '#8ea8ee', .8, '#27345f', '#0f1118', .45, '#0d1330', '#27305a', .06],
 ];
 function sampleKeys(h) {
   h = ((h % 24) + 24) % 24;
@@ -127,7 +127,7 @@ export class World {
     this.lampLights = [];
     this.lampSpots = [V(-PARK.w / 2 - .9, 0, PARK.d / 2 + .9), V(PARK.w / 2 + .9, 0, PARK.d / 2 + .9), V(-PARK.w / 2 - .9, 0, -PARK.d / 2 - .9), V(PARK.w / 2 + .9, 0, -PARK.d / 2 - .9)];
     for (let i = 0; i < this.q.lampLights; i++) {
-      const L = new THREE.PointLight('#ffc27a', 0, 9, 1.6);
+      const L = new THREE.PointLight('#ffc27a', 0, 6.5, 2);
       L.position.copy(this.lampSpots[i]).setY(2.35);
       s.add(L); this.lampLights.push(L);
     }
@@ -201,12 +201,12 @@ export class World {
     const mat = new THREE.MeshStandardMaterial({ roughness: .9 });
     const inst = new THREE.InstancedMesh(geo, mat, spots.length);
     const m = new THREE.Matrix4(), c = new THREE.Color();
-    const tones = ['#ddd3c1', '#d3c7b1', '#e5dccb', '#cabda6', '#d9ccb4'].map(col);
+    const tones = ['#cfc3ad', '#c5b79f', '#d6ccb9', '#bcae96', '#cbbda4'].map(col);
     spots.forEach(([x, z, k], i) => {
       m.compose(V(x, -.03 + k * .006, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, (k - .5) * .06, 0)), V(1, 1, 1));
       inst.setMatrixAt(i, m);
       const n = vnoise2(x * .35, z * .35, 5);
-      c.copy(tones[Math.floor(k * tones.length)]).lerp(col('#c2b59c'), n * .45);
+      c.copy(tones[Math.floor(k * tones.length)]).lerp(col('#b3a58b'), n * .45);
       inst.setColorAt(i, c);
     });
     inst.receiveShadow = true; inst.castShadow = false;
@@ -388,7 +388,7 @@ export class World {
     this.starMat.opacity = night * .9;
     const lamp = THREE.MathUtils.clamp(night * 1.2, 0, 1);
     this.globeMat.emissiveIntensity = .15 + lamp * 2.2;
-    for (const L of this.lampLights) L.intensity = lamp * 6;
+    for (const L of this.lampLights) L.intensity = lamp * 5;
     this.winMat.opacity = lamp * .9;
   }
 

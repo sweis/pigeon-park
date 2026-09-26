@@ -158,7 +158,7 @@ export class FlockView {
 
   view(id) { return this.views.get(id); }
 
-  update(sim, dt, t) {
+  update(sim, dt, t, camPos) {
     const seen = new Set(), m = new THREE.Matrix4(), q = new THREE.Quaternion();
     let si = 0, hi = 0;
     for (const p of sim.pigeons) {
@@ -166,6 +166,7 @@ export class FlockView {
       let v = this.views.get(p.id);
       if (!v) { v = new PigeonView(p, this.mats); this.views.set(p.id, v); this.root.add(v.g); }
       const s = v.update(p, sim.t, dt, t);
+      if (camPos) v.rig.setLod(camPos.distanceTo(v.vis) > 7.5 * Math.max(1, s) ? 1 : 0);
       // contact shadow shrinks + fades with height
       const h = v.vis.y, ss = s * .62 * Math.max(.3, 1 - h * .5);
       m.compose(V(v.vis.x + .02 * s, .004, v.vis.z), q, V(ss * 1.2, 1, ss));

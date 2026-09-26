@@ -13,5 +13,9 @@
   <div id="hud"></div>
   <div id="loading"><div class="load-card"><div class="title">Pigeon Park</div><div class="sub">the pigeons are commuting…</div></div></div>
   <script type="module" src="/src/main.js"></script>
+  <script>
+    // If the unbuilt source is opened from a plain static server, bare imports can't resolve: say so.
+    setTimeout(function () { if (!window.__game) { var s = document.querySelector('#loading .sub'); if (s) s.innerHTML = 'Still commuting? This is the unbuilt source. Run <code>npm run dev</code>, or <code>npm run build</code> and serve <code>dist/</code>.'; } }, 5000);
+  </script>
 </body>
 </html>

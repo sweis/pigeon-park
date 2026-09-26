@@ -162,19 +162,20 @@ export function sizeOf(pheno, jit = 1) {
 }
 
 const geoCache = new Map();
-export function pigeonGeometry(pheno) {
-  const key = phenoKey(pheno);
+// lod 0 = full detail, 1 = far (overview distance): ~1/4 the triangles, same silhouette/colours.
+export function pigeonGeometry(pheno, lod = 0) {
+  const key = phenoKey(pheno) + '|' + lod;
   let g = geoCache.get(key);
-  if (!g) { g = buildGeometry(pheno); geoCache.set(key, g); }
+  if (!g) { g = buildGeometry(pheno, lod); geoCache.set(key, g); }
   return g;
 }
 export function geometryCacheSize() { return geoCache.size; }
 
-function buildGeometry(pheno) {
+function buildGeometry(pheno, lod = 0) {
   const e = pheno.e, P = palette(pheno), key = phenoKey(pheno), seed = strHash(key);
   const kind = materialKind(pheno);
   const facet = kind === 'facet' || kind === 'gem';
-  const b = new Build(facet ? .42 : 1);
+  const b = new Build((facet ? .42 : 1) * (lod ? .5 : 1));
   const C = {
     body: col(P.body), wing: col(P.wing), head: col(P.head), tail: col(P.tail), pat: col(P.pat),
     beak: col(P.beak), eye: col(P.eye), curl: col(P.curl), white: col(W1), leg: col(LEG),
@@ -557,6 +558,7 @@ export class PigeonRig {
       if (par) bones[par].add(bone);
     }
     this.rest = Object.fromEntries(BONES.map(n => [n, bones[n].position.clone()]));
+    this.pheno = pheno; this.lod = 0;
     const mesh = new THREE.SkinnedMesh(geometry, materials[kind]);
     mesh.add(bones.root);
     mesh.updateMatrixWorld(true);
@@ -565,5 +567,6 @@ export class PigeonRig {
     this.mesh = mesh; this.bones = bones;
     this.group = new THREE.Group(); this.group.add(mesh);
   }
+  setLod(lod) { if (lod !== this.lod) { this.lod = lod; this.mesh.geometry = pigeonGeometry(this.pheno, lod).geometry; } }
   dispose() { this.mesh.skeleton.dispose(); /* geometry is cached/shared */ }
 }

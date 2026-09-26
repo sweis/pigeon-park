@@ -285,7 +285,7 @@ class Game {
     this.drainEvents();
     this.world.setHour(S.hour(), S.night);
     this.world.update(dt);
-    this.flock.update(S, dt, this.time);
+    this.flock.update(S, dt, this.time, this.cam.cam.position);
     this.fx.update(dt);
     let fp = null;
     if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.cam.shot('overview', { snap: false }); }
