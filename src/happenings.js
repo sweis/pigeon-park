@@ -376,6 +376,7 @@ export function startHappening(S, kind) {
   S.nextHappeningAt = S.t + gapFor(S);
   if (!data) return false;
   S.happening = { kind, at: S.t, ...data };
+  S.stats.happenings = (S.stats.happenings || 0) + 1;
   S.emit({ type: 'happening', kind });
   return true;
 }

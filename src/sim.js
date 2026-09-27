@@ -5,6 +5,7 @@
 import * as M from './genetics.js';
 import { rand } from './rng.js';
 import { tickHappenings } from './happenings.js';
+import { checkAchievements } from './achievements.js';
 
 export const FIXED_DT = 1 / 30;          // physics step, sim seconds
 export const THINK_DT = 0.45;            // decision tick, same cadence as the prototype
@@ -92,7 +93,8 @@ export class Sim {
     this.ids = 1;
     this.pigeons = []; this.eggs = []; this.poops = [];
     this.roost = []; this.discovered = {}; this.breeds = {};
-    this.stats = { births: 0, flown: 0, maxGen: 1 };
+    this.stats = { births: 0, flown: 0, maxGen: 1, happenings: 0 };
+    this.achievements = {};  // id → { at }
     this.court = null;
     this.selId = null;
     this.cap = 45;
@@ -377,6 +379,7 @@ export class Sim {
       }
     }
     this.poops = this.poops.filter(pp => now - pp.at < 30);
+    checkAchievements(this);
   }
 
   // Swap a bird's accessory (UFO gift): new phenotype, maybe new breeds; the view rebuilds on p.rev.
@@ -495,14 +498,15 @@ export class Sim {
     return {
       v: 1,
       pigeons: this.pigeons.filter(p => !p.flying && !p.visitor).map(p => ({ n: p.name, g: p.genome, a: p.accessory, ge: p.gen, x: +p.x.toFixed(3), z: +p.z.toFixed(3), d: +p.dir.toFixed(3) })),
-      roost: this.roost, disc: this.discovered, breeds: this.breeds, stats: this.stats,
+      roost: this.roost, disc: this.discovered, breeds: this.breeds, stats: this.stats, ach: this.achievements,
       speed: this.speed, mut: this.mut, whimsy: this.whimsy, ph: this.phase(), ...extra,
     };
   }
   restore(d) {
     if (!d) return;
     this.roost = (d.roost || []).map(r => ({ ...r, genome: M.normalizeGenome(r.genome) })); this.discovered = d.disc || {}; this.breeds = d.breeds || {};
-    this.stats = d.stats || this.stats;
+    this.stats = { ...this.stats, ...(d.stats || {}) };
+    this.achievements = d.ach || {};
     if (d.speed != null) this.speed = d.speed;
     if (d.mut) this.mut = d.mut;
     if (d.whimsy) this.whimsy = d.whimsy;

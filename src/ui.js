@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import * as M from './genetics.js';
 import { SPEEDS, MUTATIONS, ROOST_SIZE, phaseToHour } from './sim.js';
 import { HAPPENINGS, WHIMSY, gapFor } from './happenings.js';
+import { ACHIEVEMENTS } from './achievements.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const svg = (d, w = 16) => `<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
@@ -283,6 +284,24 @@ export class UI {
     el.innerHTML = `<div class="dialog card" role="dialog">${this['dlg_' + kind]()}</div>`;
     this.g.setPaused?.(false);
   }
+  openAchievement(id) {
+    const A = ACHIEVEMENTS.find(a => a.id === id), S = this.sim; if (!A) return;
+    this.dialog = 'achievement';
+    const el = this.$('dialog'); el.classList.remove('hidden');
+    const img = this.g.monumentPicture(id), got = S.achievements[id], n = Object.keys(S.achievements).length;
+    const list = ACHIEVEMENTS.map(a => {
+      const [have, need] = a.progress(S), done = !!S.achievements[a.id];
+      return `<div class="ach ${done ? 'done' : ''} ${a.id === id ? 'this' : ''}"><div class="ach-top"><b>${done ? esc(a.name) : '???'}</b><span>${done ? '🏆' : `${have} / ${need}`}</span></div>
+        <div class="note">${esc(a.how)}</div>${done ? '' : `<div class="bar"><i style="width:${Math.round(have / need * 100)}%"></i></div>`}</div>`;
+    }).join('');
+    el.innerHTML = `<div class="dialog card ach-dlg" role="dialog">${this.dlgHead(esc(A.name), `<span class="chip chip-breed">🏆 ${n} / ${ACHIEVEMENTS.length}</span>`)}
+      <div class="ach-body">
+        <div class="ach-hero">${img ? `<img src="${img}" alt="">` : ''}
+          <p class="ach-blurb">${esc(A.blurb)}</p>
+          <div class="foot">${esc(A.how)}${got ? ` · Earned ${new Date(got.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}</div></div>
+        <div class="ach-list">${list}</div>
+      </div></div>`;
+  }
   async openPhoto(target) {
     this.dialog = 'photo';
     const el = this.$('dialog'); el.classList.remove('hidden');
@@ -364,9 +383,11 @@ export class UI {
           <li>Park speed goes from ${SPEEDS[0].label} to ${SPEEDS[SPEEDS.length - 1].label}. It's fine to just leave the park running.</li>
           <li>Tap <b>Photo</b> on any bird for a high-res picture card you can download or share.</li>
           <li>Music and sound effects have separate buttons in the top bar and volume sliders in settings.</li>
+          <li>Milestones build <b>monuments</b> on the lawn around the plaza. Tap one to see what it's for and how close you are to the rest.</li>
           <li>Some words, typed while the park is open (or entered under <b>Secret code</b> in settings), do things.</li>
         </ul></section>
-      </div>`;
+      </div>
+      <div class="foot version">Pigeon Park v${esc(this.g.version.version)} · build ${esc(this.g.version.hash)}${this.g.version.date ? ' · ' + esc(this.g.version.date) : ''}</div>`;
   }
 
   // ---------- per frame ----------

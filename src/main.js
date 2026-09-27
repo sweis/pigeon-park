@@ -14,8 +14,10 @@ import { Portraits } from './portraits.js';
 import { UI } from './ui.js';
 import { Diagnostics } from './debug.js';
 import { startHappening, HAPPENINGS } from './happenings.js';
+import { Monuments } from './monuments.js';
+import { ACHIEVEMENTS, checkAchievements } from './achievements.js';
 
-const BUILD = '0.1.0';
+const BUILD = typeof __BUILD__ !== 'undefined' ? __BUILD__ : { version: 'dev', hash: 'local', date: '' };
 const SAVE_KEY = 'pigeon-park-3d-v1', LEGACY_KEY = 'pigeon-park-save-v1', GFX_KEY = 'pigeon-park-gfx';
 const params = new URLSearchParams(location.search);
 const flag = (k) => params.has(k) && params.get(k) !== '0';
@@ -36,6 +38,7 @@ function pickQuality() {
 class Game {
   constructor() {
     this.q = pickQuality();
+    this.version = BUILD;
     this.sim = new Sim();
     this.frozen = false; this.paused = false; this.stepQueue = 0; this.acc = 0; this.time = 0;
     this.simdt = params.has('simdt') ? +params.get('simdt') : null;
@@ -65,6 +68,7 @@ class Game {
     this.mats = makeMaterials();
     this.flock = new FlockView(this.scene, this.mats, this.q);
     this.fx = new Fx(this.scene);
+    this.monuments = new Monuments(this.scene, this.world.propMat);
     this.audio = new Audio();
     this.portraits = new Portraits(r, this.q.low);
 
@@ -77,6 +81,9 @@ class Game {
     this.audio.sfxOn = su.sfxOn ?? !su.muted; this.audio.musicOn = su.musicOn ?? true;
     if (su.sfxVol != null) this.audio.sfxVol = su.sfxVol; if (su.musicVol != null) this.audio.musicVol = su.musicVol;
     this.ui.renderSound();
+    this.monuments.sync(this.sim.achievements, false);
+    checkAchievements(this.sim, true); // catch an older save up on anything it has already earned
+    this.monuments.sync(this.sim.achievements, false);
     this.diag = new Diagnostics(this, flag('debug'));
     this.bindInput();
     addEventListener('resize', () => this.resize());
@@ -145,6 +152,7 @@ class Game {
     this.sim.ids = nextId; // ids keep counting so no new bird inherits an old bird's 3D view
     this.cam.follow = null;
     this.sim.initFlock(null);
+    this.monuments.clear();
     this.ui.roostSel = null; this.ui.seen = { pedia: 0, breeds: 0 };
     this.cam.shot('overview', { snap: false });
     this.ui.toast('A fresh delegation of civic pigeons arrives.', 'note');
@@ -199,6 +207,8 @@ class Game {
         return;
       }
       const id = this.pickAt(e.clientX, e.clientY, e.pointerType === 'touch');
+      const mon = id == null ? this.monuments.pick(toRay(e.clientX, e.clientY)) : null;
+      if (mon) { this.ui.openAchievement(mon); return; }
       if (id != null) {
         const now = performance.now();
         if (lastTap.id === id && now - lastTap.t < 350) this.toggleFollow(id);
@@ -337,6 +347,7 @@ class Game {
     this.world.update(dt);
     this.flock.update(S, dt, this.time, this.cam.cam.position);
     this.fx.update(dt);
+    this.monuments.update();
     let fp = null;
     if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.cam.shot('overview', { snap: false }); }
     this.cam.update(this.camDt || 1 / 60, fp);
@@ -360,15 +371,7 @@ class Game {
       const s = v.size(p, S.t), c = new THREE.Vector3(v.vis.x + Math.cos(p.dir) * .04 * s, v.vis.y + .3 * s, v.vis.z + Math.sin(p.dir) * .04 * s);
       const cam = new THREE.PerspectiveCamera(30, 1, .05, 400), a = p.dir + .8, d = 1.15 * s + .45;
       cam.position.set(c.x + Math.cos(a) * d, c.y + .12 * s + .12, c.z + Math.sin(a) * d); cam.lookAt(c);
-      const r = this.renderer, pr = r.getPixelRatio(), selVis = this.flock.sel.visible;
-      this.flock.sel.visible = false;
-      for (const fv of this.flock.views.values()) fv.rig.setLod(0); // full detail for the photo (restored next frame)
-      r.setPixelRatio(1); r.setSize(W, W, false);
-      r.render(this.scene, cam);
-      shot = document.createElement('canvas'); shot.width = shot.height = W;
-      shot.getContext('2d').drawImage(r.domElement, 0, 0, W, W); // same task as the render: buffer still valid
-      r.setPixelRatio(pr); r.setSize(innerWidth, innerHeight, false);
-      this.flock.sel.visible = selVis; this.render(0);
+      shot = this.renderView(cam, W, W);
     } else {
       const b = S.roost[roost]; if (!b) return null;
       pheno = M.computePheno(b.genome, b.accessory); name = b.name; gen = b.gen;
@@ -378,6 +381,30 @@ class Game {
     const card = await composeCard(shot, { name, gen, pheno, studio: id == null });
     const blob = await new Promise(res => card.toBlob(res, 'image/png'));
     return { blob, url: URL.createObjectURL(blob), name, file: 'pigeon-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.png', w: card.width, h: card.height };
+  }
+
+  // One-off render of the real scene from any camera at any size → canvas (photos, monument pictures).
+  // Same scene and shader programs as the game; the drawing buffer is resized for one frame and restored.
+  renderView(cam, W, H) {
+    const r = this.renderer, pr = r.getPixelRatio(), selVis = this.flock.sel.visible;
+    cam.aspect = W / H; cam.updateProjectionMatrix();
+    this.flock.sel.visible = false;
+    for (const fv of this.flock.views.values()) fv.rig.setLod(0); // full detail (LOD is re-chosen next frame)
+    r.setPixelRatio(1); r.setSize(W, H, false);
+    r.render(this.scene, cam);
+    const out = document.createElement('canvas'); out.width = W; out.height = H;
+    out.getContext('2d').drawImage(r.domElement, 0, 0, W, H); // same task as the render: buffer still valid
+    r.setPixelRatio(pr); r.setSize(innerWidth, innerHeight, false);
+    this.flock.sel.visible = selVis; this.render(0);
+    return out;
+  }
+  monumentPicture(id, W = 720, H = 540) {
+    const m = this.monuments.get(id); if (!m) return null;
+    const cam = new THREE.PerspectiveCamera(32, W / H, .05, 400), d = new THREE.Vector3(-m.x, 0, -m.z).normalize();
+    const dist = 1.6 + m.top * 1.1;
+    cam.position.set(m.x + d.x * dist + d.z * .6, m.top * .75 + .5, m.z + d.z * dist - d.x * .6);
+    cam.lookAt(m.x, m.top * .5, m.z);
+    return this.renderView(cam, W, H).toDataURL('image/jpeg', .9);
   }
 
   drainEvents() {
@@ -396,6 +423,7 @@ class Game {
       else if (e.type === 'hatch') this.fx.ring(e.x, e.z, '#e8b64c');
       else if (e.type === 'roosted') { this.fx.burst(e.x, .4, e.z, 1); this.ui?.renderRoost(); }
       else if (e.type === 'deselect') this.ui && (this.ui.refreshT = 0);
+      else if (e.type === 'achievement') this.monuments.add(e.id, true);
     }
     S.events.length = 0;
   }
@@ -473,6 +501,9 @@ function makeDebugApi(g) {
     setSpeed(v) { S.speed = v; },
     happen(kind) { const ok = startHappening(S, kind); g.render(0); return ok; },
     happenings: () => Object.keys(HAPPENINGS),
+    achievements: () => ({ earned: Object.keys(S.achievements), built: [...g.monuments.built.keys()], total: ACHIEVEMENTS.length }),
+    monumentScreen(id) { const m = g.monuments.get(id); if (!m) return null; const w = new THREE.Vector3(m.x, m.cy, m.z).project(g.cam.cam); return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight }; },
+    version: () => BUILD,
     code: (c) => g.enterCode(c),
     trees: () => g.world.treeOpacity(),
     pause(v = true) { g.togglePause(v); return g.paused; },

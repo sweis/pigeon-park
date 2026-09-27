@@ -6,14 +6,16 @@ import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { PARK, FOUNTAIN } from './sim.js';
-import { pigeonGeometry } from './pigeon3d.js';
+import { statueGeometry } from './pigeon3d.js';
 import { computePheno, WILD, LOCI } from './genetics.js';
+
+export const wildPheno = () => computePheno(Object.fromEntries(LOCI.map(l => [l.id, [WILD[l.id], WILD[l.id]]])), null);
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const col = (h) => new THREE.Color(h);
 
 // deterministic scatter RNG (independent of the sim's RNG)
-function mulberry(seed) { return () => { seed = (seed + 0x6d2b79f5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+export function mulberry(seed) { return () => { seed = (seed + 0x6d2b79f5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 function vnoise2(x, y, s = 0) {
   const h = (i, j) => { const v = Math.sin(i * 127.1 + j * 311.7 + s * 91.3) * 43758.5453; return v - Math.floor(v); };
   const fx = Math.floor(x), fy = Math.floor(y), tx = x - fx, ty = y - fy;
@@ -22,7 +24,7 @@ function vnoise2(x, y, s = 0) {
 }
 
 // Collects vertex-coloured geometry and merges it into one static mesh.
-class Static {
+export class Static {
   constructor() { this.geos = []; }
   add(geo, color, matrix, ao = 0) {
     let g = geo;
@@ -52,9 +54,9 @@ class Static {
     return m;
   }
 }
-const trs = (p, r = [0, 0, 0], s = [1, 1, 1]) => new THREE.Matrix4().compose(p, new THREE.Quaternion().setFromEuler(new THREE.Euler(...r)), new THREE.Vector3(...s));
+export const trs = (p, r = [0, 0, 0], s = [1, 1, 1]) => new THREE.Matrix4().compose(p, new THREE.Quaternion().setFromEuler(new THREE.Euler(...r)), new THREE.Vector3(...s));
 
-function lumpy(radius, detail, amp, seed) {
+export function lumpy(radius, detail, amp, seed) {
   let g = new THREE.IcosahedronGeometry(radius, detail);
   g.deleteAttribute('uv'); g.deleteAttribute('normal');
   g = mergeVertices(g);
@@ -230,9 +232,7 @@ export class World {
     S.add(lathe([[0, 0], [.2, 0], [.62, .12], [.72, .26], [.66, .3], [.2, .2], [0, .2]], 28), stone, trs(V(F.x, 1.0, F.z)), .2);
     // crown of the fountain: a short column, a plinth, and a stone pigeon statue that spits into the upper bowl
     S.add(lathe([[0, 0], [.1, 0], [.085, .12], [.085, .2], [.16, .24], [.17, .3], [0, .3]], 20), stone, trs(V(F.x, 1.18, F.z)), .2);
-    const genome = Object.fromEntries(LOCI.map(l => [l.id, [WILD[l.id], WILD[l.id]]]));
-    const statue = pigeonGeometry(computePheno(genome, null)).geometry.clone();
-    for (const a of ['skinIndex', 'skinWeight', 'color']) statue.deleteAttribute(a);
+    const statue = statueGeometry(wildPheno());
     const SY = 1.48, SK = 1.25, yaw = .35; // stands on the plinth in three-quarter profile
     this.statue = { x: F.x, y: SY, z: F.z, k: SK, yaw };
     const statueStone = col('#cfc5b3'), statueDark = col('#b7ac98');

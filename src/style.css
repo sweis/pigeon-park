@@ -162,6 +162,18 @@ kbd { font-family: var(--font-b); font-size: 12px; font-weight: 700; background:
 
 #recenter { position: absolute; right: 14px; bottom: calc(86px + var(--safe-b)); z-index: 2; }
 #settings .row.phone { display: none; }
+.ach-dlg { width: min(860px, 94vw); }
+.ach-body { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; overflow: hidden; min-height: 0; }
+.ach-hero img { width: 100%; border-radius: var(--r-md); box-shadow: var(--sh-md); display: block; }
+.ach-blurb { font-size: 14px; line-height: 1.45; margin: 10px 0 6px; }
+.ach-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; max-height: 62vh; padding-right: 4px; }
+.ach { background: var(--n100); border-radius: var(--r-sm); padding: 7px 10px; opacity: .7; }
+.ach.done { opacity: 1; } .ach.this { box-shadow: 0 0 0 2px var(--accent); }
+.ach-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.ach-top span { font-size: 12px; font-weight: 700; color: var(--n700); white-space: nowrap; }
+.bar { height: 5px; border-radius: 3px; background: var(--n300); margin-top: 5px; overflow: hidden; } .bar i { display: block; height: 100%; background: var(--accent-2); }
+.foot.version { text-align: right; margin-top: 4px; }
+@media (max-width: 760px) { .ach-body { grid-template-columns: 1fr; overflow-y: auto; } .ach-list { max-height: none; } }
 #settings .code input { flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 999px; border: 1.5px solid var(--n300); background: var(--n100); color: var(--ink); }
 #settings .code input:focus { outline: none; border-color: var(--accent); }
 

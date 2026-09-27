@@ -178,6 +178,13 @@ export function pigeonGeometry(pheno, lod = 0) {
 }
 export function geometryCacheSize() { return geoCache.size; }
 
+// Plain (unskinned, uncoloured) pigeon geometry for statues and monuments; caller owns the clone.
+export function statueGeometry(pheno) {
+  const g = pigeonGeometry(pheno).geometry.clone();
+  for (const a of ['skinIndex', 'skinWeight', 'color']) g.deleteAttribute(a);
+  return g;
+}
+
 function buildGeometry(pheno, lod = 0) {
   const e = pheno.e, P = palette(pheno), key = phenoKey(pheno), seed = strHash(key);
   const kind = materialKind(pheno);

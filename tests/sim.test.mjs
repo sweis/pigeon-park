@@ -3,6 +3,7 @@ import { Sim, PARK, FOUNTAIN, FIXED_DT, fountainClearance } from '../src/sim.js'
 import { setSeed } from '../src/rng.js';
 import * as M from '../src/genetics.js';
 import { HAPPENINGS, startHappening } from '../src/happenings.js';
+import { ACHIEVEMENTS, MONUMENT_SLOTS, checkAchievements } from '../src/achievements.js';
 
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
@@ -85,6 +86,20 @@ for (const kind of Object.keys(HAPPENINGS)) {
   const run = (w) => { setSeed(9); const h = new Sim(); h.initFlock(null); h.whimsy = w; if (w === 'off') h.nextHappeningAt = Infinity; let n = 0; const orig = h.emit.bind(h); h.emit = (e) => { if (e.type === 'happening') n++; orig(e); }; for (let i = 0; i < 600 / FIXED_DT; i++) h.step(); return n; };
   const some = run('some'), off = run('off');
   ok(some >= 3 && off === 0, `happenings happen on their own (10 min: ${some} at "some", ${off} at "off")`);
+}
+// achievements: earned from play, saved, and caught up quietly for older saves
+{
+  ok(MONUMENT_SLOTS.length >= ACHIEVEMENTS.length, `every achievement has a monument slot (${ACHIEVEMENTS.length} / ${MONUMENT_SLOTS.length})`);
+  setSeed(2); const a = new Sim(); a.initFlock(null);
+  const got = []; const orig = a.emit.bind(a); a.emit = (e) => { if (e.type === 'achievement') got.push(e.id); orig(e); };
+  a.summonLegends(); a.step(); for (let i = 0; i < 20; i++) a.step();
+  ok(got.includes('firstbreed') && got.includes('legend') && got.includes('cryptid'), `summoning legends earns First Registration, Summoner, Cryptozoologist (${got.join(', ')})`);
+  const saved = JSON.parse(JSON.stringify(a.serialize()));
+  const b = new Sim(); b.restore(saved); b.initFlock(saved);
+  ok(Object.keys(b.achievements).length === Object.keys(a.achievements).length, 'achievements survive save/load');
+  const old = { ...saved, ach: undefined }; const c = new Sim(); c.restore(old); c.initFlock(old);
+  const caught = checkAchievements(c, true);
+  ok(caught.length === got.length && !c.events.some(e => e.type === 'achievement'), `an older save is caught up quietly (${caught.length} awarded, one toast)`);
 }
 console.log(fails ? `\n${fails} FAILED` : '\nall sim tests passed');
 process.exit(fails ? 1 : 0);
