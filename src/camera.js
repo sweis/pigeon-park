@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { PARK, FOUNTAIN, DOVECOTE } from './sim.js';
 // how far the camera may pan: out to the monument ring
-const REACH = { x: PARK.w / 2 + 3.5, z: PARK.d / 2 + 3.5 };
+const REACH = { x: PARK.w / 2 + 4.6, z: PARK.d / 2 + 4.6 }; // a little past the monument ring, so edge pieces can be centred
 
 const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
 
@@ -49,11 +49,9 @@ export class CameraRig {
     this.name = 'custom';
   }
   zoom(f) {
+    // (zoom stays anchored where the user points — see zoomAt — with no pull back toward the centre:
+    // that fought two-finger pans, whose spread always jitters, and kept the monument ring out of reach)
     this.want.dist = THREE.MathUtils.clamp(this.want.dist * f, 1.6, this.maxDist);
-    if (f > 1 && this.want.dist > this.home * .8 && !this.follow) {
-      // drift the focus back toward the park centre as we pull out
-      this.want.target.lerp(new THREE.Vector3(0, 0, -.2), .25);
-    }
     this.name = 'custom';
   }
   // Zoom keeping a ground point (under the cursor / between the fingers) where it is on screen.

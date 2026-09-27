@@ -68,6 +68,31 @@ for (const [where, id] of Object.entries(targets)) {
   check(sel === id && p.onScreen, `${where}: reached with ${pans} pan${pans === 1 ? '' : 's'}${orbits ? ` + ${orbits} orbit${orbits > 1 ? 's' : ''}` : ''} and selected by tap (bird ~${size.toFixed(0)} px tall)`);
 }
 
+// every monument can be reached and tapped open with phone gestures (they sit in a ring beyond the plaza)
+{
+  await page.evaluate(() => { window.pp.win(); const S = window.__game.sim; S.stats.maxGen = 10; S.stats.births = 100; S.stats.happenings = 10; while (S.roost.length < 8) S.roost.push({ name: 'x', genome: S.pigeons[0].genome, accessory: null, gen: 1 }); window.pp.step(20); });
+  const ids = (await page.evaluate(() => window.pp.achievements())).built;
+  const mon = (id) => page.evaluate((id) => { const r = window.pp.monumentScreen(id); return { ...r, on: r.x > 20 && r.x < 370 && r.y > 60 && r.y < 790 }; }, id);
+  let reached = 0; const missed = [];
+  for (const id of ids) {
+    await recenter();
+    await pinch(center.x, center.y, 120, 40, 0, 0, 10); // zoom out a bit, like a player looking for it
+    for (let i = 0; i < 6; i++) {
+      const m = await mon(id);
+      if (m.on && Math.hypot(m.x - center.x, m.y - center.y) < 120) break;
+      const dx = Math.max(-230, Math.min(230, center.x - m.x)), dy = Math.max(-300, Math.min(300, center.y - m.y));
+      await pinch(center.x - dx / 2, center.y - dy / 2, 50, 50, dx, dy, 12);
+    }
+    const m = await mon(id);
+    if (m.on) { await tap(m.x, m.y); }
+    const open = await page.evaluate(() => window.__game.ui.dialog === 'achievement' && document.querySelector('.ach.this b')?.textContent);
+    if (open) reached++; else missed.push(`${id} (${m.x.toFixed(0)},${m.y.toFixed(0)})`);
+    await page.evaluate(() => window.__game.ui.closeDialog());
+  }
+  check(reached === ids.length, `every monument reachable and tappable on a phone (${reached}/${ids.length})${missed.length ? ' missed: ' + missed.join(', ') : ''}`);
+  await page.evaluate(() => window.pp.clearAll());
+}
+
 // two-finger pan moves the view without zooming much
 await recenter();
 await pinch(195, 420, 60, 60, 0, 0, 1);
