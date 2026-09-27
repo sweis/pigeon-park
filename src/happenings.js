@@ -6,7 +6,7 @@ import * as M from './genetics.js';
 import { rand } from './rng.js';
 import { PARK, FOUNTAIN, pureGenome } from './sim.js';
 
-const pick = (a) => a[Math.floor(rand() * a.length)];
+const pick = M.pick;
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const free = (S) => S.pigeons.filter(p => !p.flying && !p.held && !p.courting && !p.busy && !p.visitor);
 const say = (S, p, text, secs = 2.4) => { if (p) { p.emote = { kind: 'say', text }; p.emoteUntil = S.t + secs; } };
@@ -46,7 +46,7 @@ export const HAPPENINGS = {
       const b = pick(pool.length ? pool : M.BREEDS.filter(x => x.real));
       const sm = M.breedSample(b), genome = {};
       for (const l of M.LOCI) genome[l.id] = [sm.e[l.id], sm.e[l.id]];
-      if (S.pigeons.filter(p => !p.flying).length >= S.cap) return null;
+      if (S.alive() >= S.cap) return null;
       const p = S.spawn({ genome, accessory: sm.accessory, name: 'Visiting ' + b.name, adult: true, quiet: true, x: (rand() - .5) * PARK.w * .6, z: (rand() - .2) * PARK.d * .5, dir: Math.PI / 2 });
       p.y = 3.5; p.visitor = { leaveAt: S.t + 50, breed: b.id };
       S.toast(`A ${b.name} is visiting from out of town. Clone it before it leaves!`, 'breed');
@@ -207,7 +207,7 @@ Object.assign(HAPPENINGS, {
   seagull: {
     label: 'Seagull sighting', blurb: 'A "seagull" swaggers in. It is a large white pigeon in disguise. The flock panics anyway.',
     start(S) {
-      if (S.pigeons.filter(p => !p.flying).length >= S.cap) return null;
+      if (S.alive() >= S.cap) return null;
       const g = pureGenome({ pied: 'white', size: 'king', beak: 'long', eye: 'pearl' });
       const p = S.spawn({ genome: g, name: 'Definitely A Seagull', adult: true, quiet: true, x: PARK.w / 2 - .6, z: 0, dir: Math.PI });
       p.y = 3; p.visitor = { leaveAt: S.t + 24 }; p.busy = 'seagull';
@@ -365,7 +365,7 @@ export function tickHappenings(S) {
     if (!keep) { HAPPENINGS[H.kind].end(S, H); S.happening = null; S.nextHappeningAt = now + gapFor(S); }
     return;
   }
-  if (now < S.nextHappeningAt || S.pigeons.filter(p => !p.flying).length < 3) return;
+  if (now < S.nextHappeningAt || S.alive() < 3) return;
   const kinds = Object.keys(HAPPENINGS).filter(k => !HAPPENINGS[k].when || HAPPENINGS[k].when(S));
   startHappening(S, pick(kinds));
 }

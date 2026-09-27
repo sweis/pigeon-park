@@ -2,7 +2,7 @@
 // One read-back per new phenotype, never per frame. Warmed up at boot so its programs exist early.
 
 import * as THREE from 'three';
-import { PigeonRig, makeMaterials } from './pigeon3d.js';
+import { PigeonRig, makeMaterials, birdHeight } from './pigeon3d.js';
 import { phenoKey } from './genetics.js';
 
 export class Portraits {
@@ -38,10 +38,9 @@ export class Portraits {
   draw(pheno, rt, buf, size, { sleep = false }) {
     const rig = new PigeonRig(pheno, this.mats);
     if (sleep) { rig.bones.eyeL.scale.y = rig.bones.eyeR.scale.y = .12; }
-    const tall = pheno.e.neck === 'noodle' || pheno.e.crest === 'horn' || pheno.accessory === 'chefhat' || pheno.accessory === 'partyhat' || pheno.e.crest === 'lace' || pheno.e.mane === 'hood' || pheno.e.tail === 'fantail' || pheno.accessory === 'tophat' || pheno.e.legs === 'long';
     rig.group.rotation.y = -.55;
     this.scene.add(rig.group);
-    const cy = tall ? .36 : .3, d = tall ? 1.8 : 1.5;
+    const ht = birdHeight(pheno), cy = ht * .5, d = 1.5 * Math.max(1, ht / .6);
     this.cam.position.set(.1 + d * .2, cy + .28, d);
     this.cam.lookAt(0, cy, 0);
     const r = this.r, prevT = r.getRenderTarget(), prevC = r.getClearColor(new THREE.Color()), prevA = r.getClearAlpha();

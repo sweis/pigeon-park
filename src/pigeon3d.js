@@ -16,17 +16,17 @@ const col = (hex) => new THREE.Color(hex);
 const mix = (a, b, t) => a.clone().lerp(b, t);
 
 // ---------- skeleton ----------
-export const BONES = ['root', 'body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR', 'spin'];
+const BONES = ['root', 'body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR', 'spin'];
 const BI = Object.fromEntries(BONES.map((b, i) => [b, i]));
 const PARENT = { body: 'root', head: 'body', wingL: 'body', wingR: 'body', legL: 'root', legR: 'root', tail: 'body', eyeL: 'head', eyeR: 'head', spin: 'head' };
 const H = V(.19, .5, 0);                        // head centre
-export const LEG_LIFT = .09;                    // extra leg length for stilt-legged birds
-export const NOODLE = V(.05, .22, 0);           // how far a noodle neck raises the head
+const LEG_LIFT = .09;                    // extra leg length for stilt-legged birds
+const NOODLE = V(.05, .22, 0);           // how far a noodle neck raises the head
 // Where the head sits relative to the standard pose: noodle necks lift it, pouters perch it on the crop.
-export function headOffset(e) {
+function headOffset(e) {
   const o = V(0, 0, 0);
   if (e.neck === 'noodle') o.add(NOODLE);
-  if (e.crop === 'globe') o.add(V(.03, .1, 0));
+  if (e.crop === 'globe') o.add(V(.0, .17, 0)); // pouters carry the head on top of the balloon, not behind it
   return o;
 }
 const EYE = [V(H.x + .046, H.y + .022, -.061), V(H.x + .046, H.y + .022, .061)];
@@ -163,12 +163,23 @@ function onSurface(sh, dir, lift, rotZ = 0, scl = 1, up) {
 
 // ---------- the pigeon ----------
 const FACET = { diamond: 1, emerald: 1, goldore: 1, diamondore: 1, emeraldore: 1, redstoneore: 1, ironore: 1, lapisore: 1, coalore: 1, gemore: 1 };
-export function materialKind(pheno) {
+function materialKind(pheno) {
   if (pheno.e.glow === 'glow') return pheno.colorKey === 'void' ? 'voidglow' : 'glow';
   if (pheno.colorKey === 'diamond' || pheno.colorKey === 'emerald') return 'gem';
   if (FACET[pheno.colorKey]) return 'facet';
   if (pheno.colorKey === 'gold') return 'metal';
   return 'clay';
+}
+
+// Standing height in bird units (before size scaling): used to frame photos and portraits.
+const TALL_TOP = { lace: .16, horn: .13, hood: .06, shell: .05, rose: .05, double: .06, peak: .06 };
+const TALL_HAT = { tophat: .16, chefhat: .16, partyhat: .16, crown: .1, propeller: .1, cowboy: .08 };
+export function birdHeight(pheno) {
+  const e = pheno.e;
+  let h = .6 + headOffset(e).y + (e.legs === 'long' ? LEG_LIFT : 0);
+  h += Math.max(TALL_TOP[e.crest] || 0, e.mane === 'hood' ? .06 : 0, TALL_HAT[pheno.accessory] || 0);
+  if (e.tail === 'fantail') h = Math.max(h, .56);
+  return h;
 }
 
 export function sizeOf(pheno, jit = 1) {
@@ -177,13 +188,20 @@ export function sizeOf(pheno, jit = 1) {
 
 const geoCache = new Map();
 // lod 0 = full detail, 1 = far (overview distance): ~1/4 the triangles, same silhouette/colours.
-export function pigeonGeometry(pheno, lod = 0) {
+function pigeonGeometry(pheno, lod = 0) {
   const key = phenoKey(pheno) + '|' + lod;
   let g = geoCache.get(key);
   if (!g) { g = buildGeometry(pheno, lod); geoCache.set(key, g); }
   return g;
 }
 export function geometryCacheSize() { return geoCache.size; }
+// Dispose cached geometries no live bird uses (a long idle session would otherwise keep every phenotype
+// ever hatched on the GPU). `inUse` holds the geometries currently on screen.
+export function pruneGeometryCache(inUse) {
+  let n = 0;
+  for (const [k, v] of geoCache) if (!inUse.has(v.geometry)) { v.geometry.dispose(); geoCache.delete(k); n++; }
+  return n;
+}
 
 // Plain (unskinned, uncoloured) pigeon geometry for statues and monuments; caller owns the clone.
 export function statueGeometry(pheno) {
@@ -384,8 +402,8 @@ function buildGeometry(pheno, lod = 0) {
   // ---- breast / neck ornaments ----
   if (e.crop === 'globe') {
     b.blob('body', {
-      ws: 24, hs: 18, matrix: trs(V(.17, .385, 0)),
-      deform: (u) => u.set(u.x * .17, u.y * .175, u.z * .16),
+      ws: 24, hs: 18, matrix: trs(V(.165, .37, 0)),
+      deform: (u) => u.set(u.x * .165, u.y * .175, u.z * .158),
       paint: (u) => tint(u.y > .45 && u.x > .1 ? mix(C.body, C.white, .22) : C.body, u, 8),
     });
   }
@@ -645,8 +663,10 @@ export function makeMaterials() {
 }
 
 // ---------- instance ----------
+const BIRD_BOUNDS = new THREE.Sphere(V(0, .4, 0), 1.0);
+
 export class PigeonRig {
-  constructor(pheno, materials) {
+  constructor(pheno, materials, castShadow = true) {
     const { geometry, kind } = pigeonGeometry(pheno);
     this.kind = kind;
     const bones = {}, list = [];
@@ -669,7 +689,10 @@ export class PigeonRig {
     mesh.updateMatrixWorld(true);
     mesh.bind(new THREE.Skeleton(list));
     for (const n of BONES) bones[n].rotation.copy(this.restRot[n]); // after bind, so the pose is not baked away
-    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
+    mesh.castShadow = castShadow; mesh.receiveShadow = true;
+    // Skinned bounds are expensive to recompute per frame; a fixed sphere in the bird's local space that
+    // covers every pose (raised wings, tumbles, noodle necks, stilts, hats) lets off-screen birds be culled.
+    mesh.boundingSphere = BIRD_BOUNDS;
     this.mesh = mesh; this.bones = bones;
     this.group = new THREE.Group(); this.group.add(mesh);
   }

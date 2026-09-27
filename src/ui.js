@@ -37,7 +37,7 @@ function chip(tier) { return tier >= 3 ? 'chip-t3' : tier === 2 ? 'chip-t2' : 'c
 function fmtAge(s) { if (s < 20) return 'freshly hatched'; if (s < 60) return 'a chick'; const m = Math.floor(s / 60); return m < 60 ? m + 'm in the park' : Math.floor(m / 60) + 'h in the park'; }
 function fmtHour(h) { const hh = Math.floor(h), mm = Math.floor((h - hh) * 60 / 15) * 15; const ap = hh >= 12 ? 'pm' : 'am'; return ((hh + 11) % 12 + 1) + ':' + String(mm).padStart(2, '0') + ' ' + ap; }
 
-export const CONTROLS = [
+const CONTROLS = [
   ['Tap / click a pigeon', 'Inspect it: colours, traits, hidden DNA'],
   ['Drag a pigeon', 'Carry it somewhere. Drop it on the Roost to keep it'],
   ['Drag the park', 'Orbit the camera'],
@@ -53,7 +53,7 @@ export class UI {
     this.g = game; this.sim = game.sim;
     this.root = document.getElementById('hud');
     this.seen = { pedia: 0, breeds: 0 };
-    this.dialog = null; this.roostSel = null; this.lastSel = undefined; this.introDone = false;
+    this.dialog = null; this.roostSel = null; this.introDone = false;
     this.bubbles = new Map();
     this.refreshT = 0;
     this.build();
@@ -163,11 +163,11 @@ export class UI {
       case 'roost-add': S.roostAdd(+arg); this.roostSel = S.roost.length - 1; g.select(null, true); break;
       case 'dismiss': S.dismissPigeon(+arg); g.select(null); break;
       case 'follow': g.toggleFollow(+arg); break;
-      case 'deselect': g.select(null); this.roostSel = null; this.lastSel = undefined; break;
+      case 'deselect': g.select(null); this.roostSel = null; break;
       case 'perch': if (S.roost[+arg]) { this.roostSel = +arg; g.select(null, true); } break;
       case 'release': { const p = S.releaseRoost(+arg, false); if (p) { this.roostSel = null; g.select(p.id); } break; }
       case 'clone-out': { const p = S.releaseRoost(+arg, true); if (p) g.select(p.id); break; }
-      case 'let-go': S.removeRoost(+arg); this.roostSel = null; this.lastSel = undefined; break;
+      case 'let-go': S.removeRoost(+arg); this.roostSel = null; break;
       case 'clone-breed': { const p = S.cloneBreed(arg); if (p) { this.closeDialog(); g.select(p.id); } break; }
     }
     this.renderRoost();
@@ -255,7 +255,7 @@ export class UI {
   renderSettings(full) {
     const S = this.sim, el = this.$('settings');
     if (el.classList.contains('hidden')) return;
-    const alive = S.pigeons.filter(p => !p.flying).length;
+    const alive = S.alive();
     const stats = `<div><b>${alive}</b><span>residents</span></div><div><b>${S.stats.births}</b><span>hatched</span></div>
         <div><b>${S.stats.flown}</b><span>departed</span></div><div><b>gen ${S.stats.maxGen}</b><span>deepest line</span></div>`;
     if (!full && el.querySelector('.stats')) { const st = el.querySelector('.stats'); if (st.innerHTML !== stats) st.innerHTML = stats; return; }
@@ -284,7 +284,6 @@ export class UI {
     this.g.save();
     const el = this.$('dialog'); el.classList.remove('hidden');
     el.innerHTML = `<div class="dialog card" role="dialog">${this['dlg_' + kind]()}</div>`;
-    this.g.setPaused?.(false);
   }
   openAchievement(id) {
     const A = ACHIEVEMENTS.find(a => a.id === id), S = this.sim; if (!A) return;
@@ -410,7 +409,7 @@ export class UI {
     this.refreshT -= dt;
     if (this.refreshT <= 0) {
       this.refreshT = .4;
-      const alive = S.pigeons.filter(p => !p.flying).length;
+      const alive = S.alive();
       this.$('pop').textContent = alive + ' / ' + S.cap + ' pigeons';
       const h = phaseToHour(S.phase());
       this.$('clock').innerHTML = (S.night > .5 ? I.moon : I.sun) + `<span>${fmtHour(h)}</span>`;

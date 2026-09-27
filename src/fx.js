@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 
+const UP = new THREE.Vector3(0, 1, 0);
 const COLS = { 1: ['#e8b64c', '#fff7e0'], 2: ['#e8b64c', '#c67139', '#fff7e0'], 3: ['#e8b64c', '#c67139', '#7a8a5e', '#8f5fae', '#5aa2c8', '#fff7e0'] };
 
 export class Fx {
@@ -36,13 +37,14 @@ export class Fx {
     r.material.color.set(color); r.position.set(x, .02, z); r.userData.t = 0; r.visible = true;
   }
   update(dt) {
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    const m = this._m || (this._m = new THREE.Matrix4()), q = this._q || (this._q = new THREE.Quaternion()), s = this._s || (this._s = new THREE.Vector3());
+    if (!this.parts.length && !this.mesh.count && this.rings.every(r => !r.visible)) return; // idle: nothing to do
     this.parts = this.parts.filter(p => (p.life += dt) < p.max);
     this.parts.forEach((p, i) => {
       p.v.y -= 2.8 * dt; p.v.multiplyScalar(1 - 1.8 * dt);
       p.p.addScaledVector(p.v, dt); p.rot += dt * 6;
       const k = 1 - p.life / p.max;
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rot);
+      q.setFromAxisAngle(UP, p.rot);
       m.compose(p.p, q, s.setScalar(p.s * (.3 + k)));
       this.mesh.setMatrixAt(i, m); this.mesh.setColorAt(i, p.c);
     });

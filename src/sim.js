@@ -8,13 +8,13 @@ import { tickHappenings } from './happenings.js';
 import { checkAchievements } from './achievements.js';
 
 export const FIXED_DT = 1 / 30;          // physics step, sim seconds
-export const THINK_DT = 0.45;            // decision tick, same cadence as the prototype
-export const DAY_LEN = 170;              // seconds per full day/night cycle (wall clock)
+const THINK_DT = 0.45;            // decision tick, same cadence as the prototype
+const DAY_LEN = 170;              // seconds per full day/night cycle (wall clock)
 export const PARK = { w: 10.4, d: 6.6 };   // walkable rectangle, metres, centred on origin
 export const FOUNTAIN = { x: -1.7, z: -0.8, r: 1.3, lip: 1.42 }; // r: basin wall (visual), lip: outer rim radius
 // A bird's footprint for collisions: a segment from tail tip to beak tip, plus half its body width (size 1).
 const BODY = { back: .5, front: .31, half: .15 };
-export function bodyScale(p) { return ({ king: 1.42, dinky: .68, chonk: 1.25 }[p.pheno.e.size] || 1) * (p.jit || 1); }
+function bodyScale(p) { return ({ king: 1.42, dinky: .68, chonk: 1.25 }[p.pheno.e.size] || 1) * (p.jit || 1); }
 // Distance from the fountain centre to the nearest point of the bird's body segment, minus what it needs.
 // >= 0 means the bird is clear of the rim.
 export function fountainClearance(p) {
@@ -27,7 +27,7 @@ export function fountainClearance(p) {
   return { gap: d - (FOUNTAIN.lip + BODY.half * k), qx, qz, d };
 }
 export const ROOST_SIZE = 8;
-export const ADULT_AGE = 13;
+const ADULT_AGE = 13;
 const PX = 0.0066;                       // prototype pixel → metre (92 px pigeon ≈ 0.6 m)
 const SP = 1.4;                          // prototype's internal pace factor
 
@@ -43,11 +43,10 @@ export const MUTATIONS = [
   { id: 'chaos', label: 'Chaos', v: 3 },
 ];
 
-const pick = (arr) => arr[Math.floor(rand() * arr.length)];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // Night amount 0..1 from day phase (same curve as the prototype).
-export function nightOf(ph) {
+function nightOf(ph) {
   return ph < .55 ? 0 : ph < .62 ? (ph - .55) / .07 : ph < .88 ? 1 : ph < .95 ? 1 - (ph - .88) / .07 : 0;
 }
 // Day phase <-> clock hour. Day 07:00–18:00, dusk to 20:00, night to 05:00, dawn to 07:00.
@@ -60,7 +59,7 @@ export function phaseToHour(ph) {
   }
   return 7;
 }
-export function hourToPhase(h) {
+function hourToPhase(h) {
   h = ((h % 24) + 24) % 24; if (h < 7) h += 24;
   for (let i = 1; i < PH_KEYS.length; i++) {
     const [p0, h0] = PH_KEYS[i - 1], [p1, h1] = PH_KEYS[i];
@@ -69,7 +68,7 @@ export function hourToPhase(h) {
   return 0;
 }
 
-export function genomeHash(genome) {
+function genomeHash(genome) {
   let jh = 0; const js = JSON.stringify(genome);
   for (let i = 0; i < js.length; i++) jh = (jh * 31 + js.charCodeAt(i)) | 0;
   return jh >>> 0;
@@ -132,6 +131,8 @@ export class Sim {
   }
   // Push a bird's whole body (tail to beak, at its size and heading) clear of the fountain rim.
   keepOut(p) {
+    const fx = p.x - FOUNTAIN.x, fz = p.z - FOUNTAIN.z, far = FOUNTAIN.lip + 1.3; // > longest tail + half-width of any bird
+    if (fx * fx + fz * fz > far * far) return false; // nowhere near the rim
     const c = fountainClearance(p);
     if (c.gap >= 0) return false;
     let nx = c.qx - FOUNTAIN.x, nz = c.qz - FOUNTAIN.z, n = c.d;
@@ -218,7 +219,7 @@ export class Sim {
     p.fdx = rand() < .5 ? -1 : 1;
     this.stats.flown++;
     this.sound('whoosh');
-    if (withToast) this.toast(pick(M.COPY.flyoff).replace('{n}', p.name));
+    if (withToast) this.toast(M.pick(M.COPY.flyoff).replace('{n}', p.name));
     if (this.selId === p.id) { this.selId = null; this.emit({ type: 'deselect' }); }
   }
 
@@ -296,11 +297,11 @@ export class Sim {
         else { p.state = 'idle'; p.stateUntil = now + .9 + rand() * 2.2; }
       }
       if (!p.emote && p.state !== 'sleep' && rand() < .004) {
-        p.emote = { kind: 'say', text: this.night > .5 && rand() < .4 ? pick(M.NIGHT_THOUGHTS) : pick(M.THOUGHTS) }; p.emoteUntil = now + 2.6;
+        p.emote = { kind: 'say', text: this.night > .5 && rand() < .4 ? M.pick(M.NIGHT_THOUGHTS) : M.pick(M.THOUGHTS) }; p.emoteUntil = now + 2.6;
         if (rand() < .3) { // someone nearby has opinions
           let best = null, bd = 1.6;
           for (const q of this.pigeons) { if (q === p || q.flying || q.held) continue; const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < bd) { bd = d; best = q; } }
-          if (best) this.replies.push({ id: best.id, at: now + .9 + rand() * .6, text: pick(M.REPLIES) });
+          if (best) this.replies.push({ id: best.id, at: now + .9 + rand() * .6, text: M.pick(M.REPLIES) });
         }
       }
       // ambient cooing: about the same park-wide rate whether there are 8 birds or 45
@@ -319,7 +320,7 @@ export class Sim {
           this.court = { a: a.id, b: b.id, mx, mz, until: now + 12, eggAt: 0 };
           a.courting = b.courting = true;
           this.walkTo(a, mx - .24, mz, 56 * PX * sp);
-          if (rand() < .45) { a.emote = { kind: 'say', text: pick(M.COURT_LINES) }; a.emoteUntil = now + 2.4; }
+          if (rand() < .45) { a.emote = { kind: 'say', text: M.pick(M.COURT_LINES) }; a.emoteUntil = now + 2.4; }
           this.walkTo(b, mx + .24, mz, 56 * PX * sp);
         }
       }
@@ -353,7 +354,7 @@ export class Sim {
         this.eggs = this.eggs.filter(x => x !== eg);
         const acc = M.rollAccessory(0.02);
         const baby = this.spawn({ genome: eg.genome, accessory: acc, name: M.randomName(), gen: eg.gen, x: eg.x, z: eg.z, dir: Math.PI / 2 });
-        if (rand() < .6) { baby.emote = { kind: 'say', text: pick(M.BABY_LINES) }; baby.emoteUntil = now + 2.6; }
+        if (rand() < .6) { baby.emote = { kind: 'say', text: M.pick(M.BABY_LINES) }; baby.emoteUntil = now + 2.6; }
         if (eg.golden) { this.sparkle(eg.x, eg.z, 3); this.toast('The golden egg hatched… something: ' + baby.pheno.label + (baby.breeds.length ? ' (' + baby.breeds.map(b => b.name).join(', ') + ')' : '') + '.', 'breed'); }
         this.stats.births++;
         this.sound('pop');
@@ -361,7 +362,7 @@ export class Sim {
         const tier = baby.pheno.sparkTier;
         if (tier >= 1) this.sparkle(eg.x, eg.z, tier);
         if (tier >= 2) this.toast('A remarkable hatch: ' + baby.pheno.label + '.', 'note');
-        else if (rand() < .13) this.toast(pick(M.COPY.birth));
+        else if (rand() < .13) this.toast(M.pick(M.COPY.birth));
       }
     }
     // fly-offs: gentle pressure as the park fills, forced when over capacity
@@ -390,7 +391,8 @@ export class Sim {
   }
 
   // ---------- player actions ----------
-  full() { if (this.pigeons.filter(p => !p.flying).length >= this.cap) { this.toast(pick(M.COPY.full)); return true; } return false; }
+  alive() { let n = 0; for (const p of this.pigeons) if (!p.flying) n++; return n; }
+  full() { if (this.alive() >= this.cap) { this.toast(M.pick(M.COPY.full)); return true; } return false; }
 
   clonePigeon(id) {
     const p = this.byId(id); if (!p || p.flying || this.full()) return null;
@@ -399,23 +401,23 @@ export class Sim {
     this.stats.births++;
     this.sparkle(q.x, q.z, 1);
     this.sound('pop');
-    this.toast(pick(M.COPY.clone).replace('{n}', p.name));
+    this.toast(M.pick(M.COPY.clone).replace('{n}', p.name));
     return q;
   }
   dismissPigeon(id) {
     const p = this.byId(id); if (!p || p.flying) return;
     this.fly(p, false);
-    this.toast(pick(M.COPY.dismiss).replace('{n}', p.name));
+    this.toast(M.pick(M.COPY.dismiss).replace('{n}', p.name));
   }
   roostAdd(id) {
     const p = this.byId(id); if (!p || p.flying) return false;
-    if (this.roost.length >= ROOST_SIZE) { this.toast(pick(M.COPY.roostFull)); return false; }
+    if (this.roost.length >= ROOST_SIZE) { this.toast(M.pick(M.COPY.roostFull)); return false; }
     this.roost.push({ name: p.name, genome: p.genome, accessory: p.accessory, gen: p.gen });
     this.pigeons = this.pigeons.filter(x => x.id !== id);
     if (this.court && (this.court.a === id || this.court.b === id)) this.court = null;
     if (this.selId === id) this.selId = null;
     this.emit({ type: 'roosted', x: p.x, z: p.z });
-    this.toast(pick(M.COPY.roosted).replace('{n}', p.name), 'note');
+    this.toast(M.pick(M.COPY.roosted).replace('{n}', p.name), 'note');
     this.sound('coo', { voice: p.pheno.e.voice, vol: .7 });
     return true;
   }
@@ -477,7 +479,7 @@ export class Sim {
   grab(id) {
     const p = this.byId(id); if (!p || p.flying) return null;
     p.held = true; p.courting = false; p.state = 'held'; p.busy = null;
-    p.emote = { kind: 'say', text: pick(M.HELD_LINES) }; p.emoteUntil = this.t + 2.4;
+    p.emote = { kind: 'say', text: M.pick(M.HELD_LINES) }; p.emoteUntil = this.t + 2.4;
     if (this.court && (this.court.a === id || this.court.b === id)) {
       const o = this.byId(this.court.a === id ? this.court.b : this.court.a);
       if (o) { o.courting = false; o.stateUntil = this.t; }

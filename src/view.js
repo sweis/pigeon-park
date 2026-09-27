@@ -1,9 +1,11 @@
 // Pigeon Park — renders sim state: animated pigeon rigs, eggs, poop, contact shadows, selection ring.
 
 import * as THREE from 'three';
-import { PigeonRig, sizeOf } from './pigeon3d.js';
+import { PigeonRig, sizeOf, pruneGeometryCache } from './pigeon3d.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const POSE_BONES = ['body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR'];
+const _tgt = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
 const TAU = Math.PI * 2;
 const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
 function angDamp(a, b, k, dt) { let d = ((b - a + Math.PI) % TAU + TAU) % TAU - Math.PI; return a + d * (1 - Math.exp(-k * dt)); }
@@ -17,12 +19,12 @@ function radialTexture(inner, outer) {
   return t;
 }
 
-export function chickScale(age) { return age < 9 ? .58 : age < 18 ? .78 : 1; }
+function chickScale(age) { return age < 9 ? .58 : age < 18 ? .78 : 1; }
 
 class PigeonView {
-  constructor(p, mats) {
+  constructor(p, mats, castShadow) {
     this.pid = p.id;
-    this.rig = new PigeonRig(p.pheno, mats);
+    this.rig = new PigeonRig(p.pheno, mats, castShadow);
     this.g = this.rig.group;
     this.b = this.rig.bones; this.rest = this.rig.rest; this.restRot = this.rig.restRot;
     this.vis = V(p.x, p.y, p.z);
@@ -38,7 +40,7 @@ class PigeonView {
   update(p, simT, dt, t) {
     const b = this.b, R = this.rest;
     // position/heading smoothing (sim runs at 30 Hz, render at display rate)
-    const tgt = V(p.x, p.y, p.z);
+    const tgt = _tgt.set(p.x, p.y, p.z);
     if (tgt.distanceTo(this.vis) > 1.2) this.vis.copy(tgt);
     else { this.vis.x = damp(this.vis.x, tgt.x, 18, dt); this.vis.y = damp(this.vis.y, tgt.y, 18, dt); this.vis.z = damp(this.vis.z, tgt.z, 18, dt); }
     this.yaw = angDamp(this.yaw, -p.dir, p.flying ? 4 : 11, dt);
@@ -47,7 +49,7 @@ class PigeonView {
     this.g.rotation.set(0, this.yaw, 0);
     this.g.scale.setScalar(s);
     // reset pose
-    for (const n of ['body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR']) { b[n].position.copy(R[n]); b[n].rotation.copy(this.restRot[n]); b[n].scale.set(1, 1, 1); }
+    for (const n of POSE_BONES) { b[n].position.copy(R[n]); b[n].rotation.copy(this.restRot[n]); b[n].scale.set(1, 1, 1); }
     b.root.rotation.set(0, 0, 0); b.root.position.set(0, 0, 0);
     const headK = age < 9 ? 1.32 : age < 18 ? 1.16 : 1;
     b.head.scale.setScalar(headK);
@@ -225,18 +227,18 @@ export class FlockView {
   view(id) { return this.views.get(id); }
 
   update(sim, dt, t, camPos) {
-    const seen = new Set(), m = new THREE.Matrix4(), q = new THREE.Quaternion();
+    const seen = new Set(), m = _m, q = _q.identity();
     let si = 0, hi = 0;
     for (const p of sim.pigeons) {
       seen.add(p.id);
       let v = this.views.get(p.id);
       if (v && v.rev !== (p.rev || 0)) { this.root.remove(v.g); v.dispose(); this.views.delete(p.id); v = null; } // phenotype changed (new hat)
-      if (!v) { v = new PigeonView(p, this.mats); this.views.set(p.id, v); this.root.add(v.g); }
+      if (!v) { v = new PigeonView(p, this.mats, this.q.birdShadows); this.views.set(p.id, v); this.root.add(v.g); }
       const s = v.update(p, sim.t, dt, t);
       if (camPos) v.rig.setLod(camPos.distanceTo(v.vis) > 7.5 * Math.max(1, s) ? 1 : 0);
       // contact shadow shrinks + fades with height
       const h = v.vis.y, ss = s * .62 * Math.max(.3, 1 - h * .5);
-      m.compose(V(v.vis.x + .02 * s, .004, v.vis.z), q, V(ss * 1.2, 1, ss));
+      m.compose(_p.set(v.vis.x + .02 * s, .004, v.vis.z), q, _s.set(ss * 1.2, 1, ss));
       if (!p.flying || h < 3) this.shadows.setMatrixAt(si++, m);
       if (v.glow && hi < this.halos.length) {
         const hs = this.halos[hi++]; hs.visible = true;
@@ -249,6 +251,10 @@ export class FlockView {
     this.haloMat.opacity = .12 + sim.night * .7;
     for (let i = hi; i < this.halos.length; i++) this.halos[i].visible = false;
     for (const [id, v] of this.views) if (!seen.has(id)) { this.root.remove(v.g); v.dispose(); this.views.delete(id); }
+    if ((this.pruneT = (this.pruneT || 0) + dt) > 20) { // every ~20 s: drop geometry for phenotypes no longer in the park
+      this.pruneT = 0;
+      pruneGeometryCache(new Set([...this.views.values()].map(v => v.rig.mesh.geometry)));
+    }
     this.mats.glow.emissiveIntensity = .08 + sim.night * 1.2;
     this.mats.voidglow.emissiveIntensity = .15 + sim.night * .6;
 
@@ -283,7 +289,7 @@ export class FlockView {
     const rn = Math.floor(this.rainN * this.rainAmt);
     for (let i = 0; i < rn; i++) {
       const d = this.rainData[i], y = 9 - ((t * (7 + d[2] * 3) + d[2] * 9) % 9);
-      m.compose(V((d[0] - .5) * 18, y, (d[1] - .5) * 13), q.identity(), V(1, 1, 1));
+      m.compose(_p.set((d[0] - .5) * 18, y, (d[1] - .5) * 13), q.identity(), _s.set(1, 1, 1));
       this.rainMesh.setMatrixAt(i, m);
     }
     this.rainMesh.count = rn; if (rn) this.rainMesh.instanceMatrix.needsUpdate = true;
@@ -297,7 +303,7 @@ export class FlockView {
       let ci = 0;
       for (let i = 0; i < 24 * (1 - B.hp) + 4; i++) {
         const a = i * 2.39 + B.a, r = .15 + (i * .137 % .5);
-        m.compose(V(B.x + Math.cos(a) * r, .01, B.z + Math.sin(a) * r * .7), q.setFromAxisAngle(V(0, 1, 0), i), V(1, .6, 1));
+        m.compose(_p.set(B.x + Math.cos(a) * r, .01, B.z + Math.sin(a) * r * .7), q.setFromAxisAngle(UP, i), _s.set(1, .6, 1));
         this.crumbs.setMatrixAt(ci++, m); if (ci >= 24) break;
       }
       this.crumbs.count = ci; this.crumbs.instanceMatrix.needsUpdate = true;
@@ -307,7 +313,7 @@ export class FlockView {
     let pi = 0;
     for (const pp of sim.poops) {
       const fade = Math.max(.05, 1 - (sim.t - pp.at) / 30);
-      m.compose(V(pp.x, .002, pp.z), q.setFromAxisAngle(V(0, 1, 0), pp.r * 6), V(fade, 1, fade));
+      m.compose(_p.set(pp.x, .002, pp.z), q.setFromAxisAngle(UP, pp.r * 6), _s.set(fade, 1, fade));
       this.poop.setMatrixAt(pi++, m);
     }
     this.poop.count = pi; this.poop.instanceMatrix.needsUpdate = true;

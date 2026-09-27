@@ -15,7 +15,7 @@ const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const col = (h) => new THREE.Color(h);
 
 // deterministic scatter RNG (independent of the sim's RNG)
-export function mulberry(seed) { return () => { seed = (seed + 0x6d2b79f5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function mulberry(seed) { return () => { seed = (seed + 0x6d2b79f5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 function vnoise2(x, y, s = 0) {
   const h = (i, j) => { const v = Math.sin(i * 127.1 + j * 311.7 + s * 91.3) * 43758.5453; return v - Math.floor(v); };
   const fx = Math.floor(x), fy = Math.floor(y), tx = x - fx, ty = y - fy;
@@ -93,7 +93,7 @@ function sampleKeys(h) {
   const L = (x, y) => x + (y - x) * t, C = (x, y) => col(x).lerp(col(y), t);
   return { el: L(a[1], b[1]), sun: C(a[2], b[2]), sunI: L(a[3], b[3]), hs: C(a[4], b[4]), hg: C(a[5], b[5]), hI: L(a[6], b[6]), top: C(a[7], b[7]), hor: C(a[8], b[8]), env: L(a[9], b[9]) };
 }
-export function isMoon(h) { h = ((h % 24) + 24) % 24; return h >= 19.3 || h < 5.2; }
+function isMoon(h) { h = ((h % 24) + 24) % 24; return h >= 19.3 || h < 5.2; }
 
 export class World {
   constructor(renderer, scene, quality) {
@@ -164,7 +164,7 @@ export class World {
   }
 
   buildGround() {
-    const g = new THREE.PlaneGeometry(160, 160, 120, 120);
+    const g = new THREE.PlaneGeometry(160, 160, 72, 72); // the far hills don't need more; the plaza sits on top
     g.rotateX(-Math.PI / 2);
     const p = g.attributes.position, cols = new Float32Array(p.count * 3);
     const a = col('#93a86b'), b = col('#b4c285'), d = col('#76905a'), far = col('#a3ac80');
@@ -386,6 +386,9 @@ export class World {
 
   // ---------- per-frame ----------
   setHour(h, night) {
+    // the sky changes slowly: skip the (allocating) keyframe blend unless the time moved a little
+    if (this.hour !== undefined && Math.abs(h - this.hour) < .01 && night === this.night && !this.dirtyLight) return;
+    this.dirtyLight = false;
     const k = sampleKeys(h), moon = isMoon(h);
     this.hour = h; this.night = night;
     // sun sweeps east→west across the camera-facing half of the sky; moon parks high front-left
@@ -412,6 +415,7 @@ export class World {
   // Drizzle: dim and grey the light (called after setHour each frame).
   setRain(r) {
     if (r <= .001) return;
+    this.dirtyLight = true; // rain edits the lights in place; recompute the clean values next frame
     const grey = col('#9aa3aa');
     this.sun.intensity *= 1 - .6 * r; this.hemi.intensity *= 1 - .2 * r;
     this.skyU.top.value.lerp(grey, .7 * r); this.skyU.hor.value.lerp(col('#c3c7c6'), .6 * r); this.skyU.sunGlow.value *= 1 - r;
@@ -420,8 +424,9 @@ export class World {
 
   // Fade any tree whose canopy sits between the camera and what it's looking at (target + plaza corners).
   updateOcclusion(camPos, target, dt) {
-    const ends = [target, V(-PARK.w / 2, .3, -PARK.d / 2), V(PARK.w / 2, .3, -PARK.d / 2), V(-PARK.w / 2, .3, PARK.d / 2), V(PARK.w / 2, .3, PARK.d / 2)];
-    const seg = new THREE.Line3(), q = new THREE.Vector3();
+    const ends = this._ends || (this._ends = [null, V(-PARK.w / 2, .3, -PARK.d / 2), V(PARK.w / 2, .3, -PARK.d / 2), V(-PARK.w / 2, .3, PARK.d / 2), V(PARK.w / 2, .3, PARK.d / 2)]);
+    ends[0] = target;
+    const seg = this._seg || (this._seg = new THREE.Line3()), q = this._q || (this._q = new THREE.Vector3());
     for (const T of this.trees) {
       let block = camPos.distanceTo(T.c) < T.r * 1.3;
       for (const e of ends) {
@@ -432,14 +437,14 @@ export class World {
       const want = block ? .18 : 1;
       T.o += (want - T.o) * Math.min(1, dt * 6 || 1);
       T.mat.opacity = T.o; T.mat.depthWrite = T.o > .95;
-      T.mesh.castShadow = true;
     }
   }
   treeOpacity() { return this.trees.map(t => +t.o.toFixed(2)); }
 
   update(dt) {
     this.t += dt;
-    const F = FOUNTAIN, m = new THREE.Matrix4(), t = this.t;
+    const F = FOUNTAIN, m = this._m || (this._m = new THREE.Matrix4()), t = this.t;
+    const Q = this._qi || (this._qi = new THREE.Quaternion()), P = this._p || (this._p = new THREE.Vector3()), Sc = this._sc || (this._sc = new THREE.Vector3());
     this.dropData.forEach((d, i) => {
       const k = (t * d.sp * .8 + d.ph) % 1;
       let x, y, z;
@@ -448,7 +453,7 @@ export class World {
         const bx = st.x + ca * .29 * st.k, bz = st.z + sa * .29 * st.k, by = st.y + .485 * st.k;
         const j = (d.a - Math.PI) * .01, h = .03 + k * .26;
         x = bx + ca * h - sa * j; z = bz + sa * h + ca * j; y = by + k * .28 - k * k * (by + .28 - 1.27);
-        m.compose(V(x, y, z), new THREE.Quaternion(), V(.6, .6, .6)); this.drops.setMatrixAt(i, m); return;
+        m.compose(P.set(x, y, z), Q, Sc.set(.6, .6, .6)); this.drops.setMatrixAt(i, m); return;
       } else {            // spill from upper bowl rim to lower pool
         const rr = .72 + k * .35; x = F.x + Math.cos(d.a) * rr; z = F.z + Math.sin(d.a) * rr; y = 1.28 - k * k * .84;
       }
@@ -458,7 +463,7 @@ export class World {
     this.drops.instanceMatrix.needsUpdate = true;
     for (let i = 0; i < 4; i++) {
       const k = (t * .35 + i / 4) % 1, s = .85 + k * .45;
-      m.compose(V(F.x, .445, F.z), new THREE.Quaternion(), V(s, 1, s));
+      m.compose(P.set(F.x, .445, F.z), Q, Sc.set(s, 1, s));
       this.ripples.setMatrixAt(i, m);
     }
     this.ripples.instanceMatrix.needsUpdate = true;

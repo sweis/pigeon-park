@@ -15,4 +15,3 @@ export function rand() {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
-export const randRange = (a, b) => a + rand() * (b - a);

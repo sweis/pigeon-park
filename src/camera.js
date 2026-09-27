@@ -8,9 +8,8 @@ const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
 export class CameraRig {
   constructor(aspect) {
     this.cam = new THREE.PerspectiveCamera(34, aspect, .1, 400);
-    this.target = new THREE.Vector3(0, 0, -.2);
     this.want = { az: 0, pol: .98, dist: 16, target: new THREE.Vector3(0, 0, .1) };
-    this.cur = { ...this.want, target: this.target.clone() };
+    this.cur = { ...this.want, target: this.want.target.clone() };
     this.follow = null;   // pigeon id to follow
     this.name = 'overview';
     this.fit(aspect);

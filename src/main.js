@@ -6,7 +6,7 @@ import { setSeed, isSeeded } from './rng.js';
 import { Sim, FIXED_DT, PARK, pureGenome, migrateLegacy } from './sim.js';
 import { World } from './world.js';
 import { FlockView } from './view.js';
-import { makeMaterials, PigeonRig, geometryCacheSize } from './pigeon3d.js';
+import { makeMaterials, PigeonRig, geometryCacheSize, birdHeight } from './pigeon3d.js';
 import { CameraRig } from './camera.js';
 import { Fx } from './fx.js';
 import { Audio } from './audio.js';
@@ -28,9 +28,10 @@ function pickQuality() {
   const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && Math.min(innerWidth, innerHeight) < 820);
   let tier = params.get('quality') || (() => { try { return localStorage.getItem(GFX_KEY); } catch { return null; } })() || (mobile ? 'medium' : 'high');
   const Q = {
-    high: { tier: 'high', antialias: true, shadows: true, shadowMap: 2048, lampLights: 4, low: false, pr: 2 },
-    medium: { tier: 'medium', antialias: false, shadows: true, shadowMap: 1024, lampLights: 2, low: true, pr: 2 },
-    low: { tier: 'low', antialias: false, shadows: false, shadowMap: 512, lampLights: 0, low: true, pr: 1.5 },
+    // birdShadows: birds cast sun shadows (high only; elsewhere their soft contact shadow does the job)
+    high: { tier: 'high', antialias: true, shadows: true, shadowMap: 2048, lampLights: 4, low: false, pr: 2, birdShadows: true },
+    medium: { tier: 'medium', antialias: false, shadows: true, shadowMap: 1024, lampLights: 2, low: true, pr: 2, birdShadows: false },
+    low: { tier: 'low', antialias: false, shadows: false, shadowMap: 512, lampLights: 0, low: true, pr: 1.5, birdShadows: false },
   };
   return { ...(Q[tier] || Q.high), mobile };
 }
@@ -371,8 +372,9 @@ class Game {
     if (id != null) {
       const p = S.byId(id), v = this.flock.view(id); if (!p || !v) return null;
       pheno = p.pheno; name = p.name; gen = p.gen;
-      const s = v.size(p, S.t), c = new THREE.Vector3(v.vis.x + Math.cos(p.dir) * .04 * s, v.vis.y + .3 * s, v.vis.z + Math.sin(p.dir) * .04 * s);
-      const cam = new THREE.PerspectiveCamera(30, 1, .05, 400), a = p.dir + .8, d = 1.15 * s + .45;
+      // frame the whole bird: aim at half its standing height, back off for tall ones (raised heads, stilts, hats)
+      const s = v.size(p, S.t), ht = birdHeight(p.pheno) * s, c = new THREE.Vector3(v.vis.x + Math.cos(p.dir) * .04 * s, v.vis.y + ht * .52, v.vis.z + Math.sin(p.dir) * .04 * s);
+      const cam = new THREE.PerspectiveCamera(30, 1, .05, 400), a = p.dir + .8, d = 1.9 * Math.max(ht, .6 * s) + .3;
       cam.position.set(c.x + Math.cos(a) * d, c.y + .12 * s + .12, c.z + Math.sin(a) * d); cam.lookAt(c);
       shot = this.renderView(cam, W, W);
     } else {
@@ -433,7 +435,7 @@ class Game {
 }
 
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
-export const CODES = {
+const CODES = {
   rizz: (S) => S.summonLegends(),
   ore: (S) => S.summonOres(),
   bread: (S) => startHappening(S, 'bread'),
@@ -485,7 +487,7 @@ function makeDebugApi(g) {
       return {
         t: +S.t.toFixed(3), wall: +S.wall.toFixed(3), hour: +S.hour().toFixed(2), night: S.night, frozen: g.frozen, seeded: isSeeded(),
         speed: S.speed, mut: S.mut, whimsy: S.whimsy, paused: g.paused, happening: S.happening?.kind || null, bread: S.bread ? +S.bread.hp.toFixed(2) : null, cap: S.cap, selId: S.selId, follow: g.cam.follow, cam: g.cam.name,
-        pop: S.pigeons.filter(p => !p.flying).length, eggs: S.eggs.length, poops: S.poops.length, court: !!S.court,
+        pop: S.alive(), eggs: S.eggs.length, poops: S.poops.length, court: !!S.court,
         roost: S.roost.map(r => r.name), stats: { ...S.stats },
         breedsFound: Object.keys(S.breeds), breedsTotal: M.BREEDS.length, traitsFound: Object.keys(S.discovered).length, traitsTotal: Object.keys(M.PEDIA).length,
         pigeons: S.pigeons.map(p => ({ id: p.id, name: p.name, x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), dir: +p.dir.toFixed(2), state: p.state, flying: p.flying, held: p.held, gen: p.gen, label: p.pheno.label, breeds: p.breeds.map(b => b.id) })),

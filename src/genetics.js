@@ -165,7 +165,7 @@ export function offspring(gA, gB, mutFactor = 1) {
   return { genome: g, mutated };
 }
 
-export function expressedOf(genome) {
+function expressedOf(genome) {
   const e = {};
   for (const l of LOCI) {
     const [a, b] = genome[l.id];
@@ -187,7 +187,7 @@ const COLOR_LABELS = {
 };
 const PATTERN_LABELS = { tcheck: 'T-Check', check: 'Check', bar: 'Bar', barless: 'Barless' };
 
-export function derivePheno(e, accessory) {
+function derivePheno(e, accessory) {
   let colorKey;
   if (e.fantasy !== 'none') colorKey = e.fantasy;
   else if (e.pied === 'white') colorKey = 'white';
@@ -328,7 +328,7 @@ export function matchBreeds(pheno) {
 }
 
 // Genes that produce a given colour key (inverse of derivePheno's colour logic).
-export function colorGenes(key) {
+function colorGenes(key) {
   if (key === 'red' || key === 'redd') return { recred: 'red', dilute: key === 'redd' ? 'dilute' : 'full' };
   if (key === 'indigo' || key === 'indigoS') return { base: 'blue', indigo: 'indigo', spread: key === 'indigoS' ? 'spread' : 'no' };
   const m = /^(blue|ash|brown)(S?)(d?)$/.exec(key);
