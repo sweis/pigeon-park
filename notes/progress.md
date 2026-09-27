@@ -15,6 +15,8 @@
 - `src/pigeon3d.js` — procedural pigeon: one SkinnedMesh per bird (11 bones), geometry cached per phenotype + LOD (far = ~¼ tris).
 - `src/world.js` — plaza, fountain, props (merged static mesh), instanced paving/grass/flowers, sky, keyed day/night.
 - `src/view.js` — animation (walk head-bob, peck, sleep, tumble, parlor roll, fly, held, court, blinks), eggs, poop, contact shadows, selection ring.
+- `src/audio.js` — all synthesised: per-bird coo pitch + 5 coo shapes, trumpet/laugher voices, SFX; generative soundtrack (C–Am–F–G, coo lead / pizz bass / peck woodblock / flap shaker) with day/night/dance moods, ducked when paused. Separate sfx/music buses (toggles + sliders, saved). Master compressor.
+- Photo mode (`Game.photo`): park birds = one-off 2400² render of the real scene from a close camera (full LOD forced); roost birds = studio portrait; composed onto a captioned PNG card; Download / Web Share.
 - `src/ui.js` — DOM HUD; `src/portraits.js` — 3D portraits for HUD (own materials — see gotcha).
 - `src/main.js` — boot, warm-up, input, save/load (key `pigeon-park-3d-v1`, imports prototype `pigeon-park-save-v1`), `window.pp` debug API.
 
@@ -25,6 +27,7 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 ## Tests
 - `node tests/sim.test.mjs` — headless sim: determinism, bounds, births, save round-trip, actions, cheats, every breed sample matches, old genomes load.
 - `node tests/e2e.mjs [--dist]` — Playwright, real mouse/touch/keyboard: cold boot 10 s, program count constant, birds render (pixel diff), select/clone/drag-to-roost/drag-drop/orbit/zoom, dialogs, Start over (two-tap), cheats, save→reload, legacy save import, seeded replay, 7-hour stills sweep, phone.
+- `node tests/audio-photo.mjs [--dist]` (music audible via analyser RMS, toggles/sliders/persistence, per-bird pitch, photo download park + roost)
 - `node tests/happenings.mjs` (every happening in-game + pause button), `node tests/fountain.mjs` (rim crowding)
 - `node tests/lifecycle.mjs` (court→egg→hatch captures), `tests/lineup.mjs` (every breed + accessories), `tests/census.mjs` (full park budget), `tests/look.mjs` (quick look-dev).
 

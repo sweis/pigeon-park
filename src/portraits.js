@@ -23,24 +23,39 @@ export class Portraits {
     this.canvas = document.createElement('canvas'); this.canvas.width = this.canvas.height = this.size;
     this.ctx = this.canvas.getContext('2d');
   }
+  // High-res studio render (transparent background) for photo mode; a temporary MSAA target, one read-back.
+  studio(pheno, size) {
+    const rt = new THREE.WebGLRenderTarget(size, size, { samples: 4 }); rt.texture.colorSpace = THREE.SRGBColorSpace;
+    const buf = new Uint8Array(size * size * 4), canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    this.draw(pheno, rt, buf, size, {});
+    rt.dispose();
+    const ctx = canvas.getContext('2d'), img = ctx.createImageData(size, size), row = size * 4;
+    for (let y = 0; y < size; y++) img.data.set(buf.subarray((size - 1 - y) * row, (size - y) * row), y * row);
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+  }
+  draw(pheno, rt, buf, size, { sleep = false }) {
+    const rig = new PigeonRig(pheno, this.mats);
+    if (sleep) { rig.bones.eyeL.scale.y = rig.bones.eyeR.scale.y = .12; }
+    const tall = pheno.e.neck === 'noodle' || pheno.e.crest === 'horn' || pheno.accessory === 'chefhat' || pheno.accessory === 'partyhat' || pheno.e.crest === 'lace' || pheno.e.mane === 'hood' || pheno.e.tail === 'fantail' || pheno.accessory === 'tophat' || pheno.e.legs === 'long';
+    rig.group.rotation.y = -.55;
+    this.scene.add(rig.group);
+    const cy = tall ? .36 : .3, d = tall ? 1.8 : 1.5;
+    this.cam.position.set(.1 + d * .2, cy + .28, d);
+    this.cam.lookAt(0, cy, 0);
+    const r = this.r, prevT = r.getRenderTarget(), prevC = r.getClearColor(new THREE.Color()), prevA = r.getClearAlpha();
+    r.setRenderTarget(rt); r.setClearColor(0x000000, 0); r.clear();
+    r.render(this.scene, this.cam);
+    r.readRenderTargetPixels(rt, 0, 0, size, size, buf);
+    r.setRenderTarget(prevT); r.setClearColor(prevC, prevA);
+    this.scene.remove(rig.group); rig.dispose();
+  }
   get(pheno, { sleep = false } = {}) {
     const k = phenoKey(pheno) + (sleep ? '|s' : '');
     let url = this.cache.get(k);
     if (url) return url;
-    const rig = new PigeonRig(pheno, this.mats);
-    if (sleep) { rig.bones.eyeL.scale.y = rig.bones.eyeR.scale.y = .12; }
-    const tall = pheno.e.neck === 'noodle' || pheno.e.crest === 'horn' || pheno.accessory === 'chefhat' || pheno.accessory === 'partyhat' || pheno.e.crest === 'lace' || pheno.e.mane === 'hood' || pheno.e.tail === 'fantail' || pheno.accessory === 'tophat';
-    rig.group.rotation.y = -.55;
-    this.scene.add(rig.group);
-    const cy = tall ? .34 : .3, d = tall ? 1.72 : 1.5;
-    this.cam.position.set(.1 + d * .2, cy + .28, d);
-    this.cam.lookAt(0, cy, 0);
-    const r = this.r, prevT = r.getRenderTarget(), prevC = r.getClearColor(new THREE.Color()), prevA = r.getClearAlpha();
-    r.setRenderTarget(this.rt); r.setClearColor(0x000000, 0); r.clear();
-    r.render(this.scene, this.cam);
-    r.readRenderTargetPixels(this.rt, 0, 0, this.size, this.size, this.buf);
-    r.setRenderTarget(prevT); r.setClearColor(prevC, prevA);
-    this.scene.remove(rig.group); rig.dispose();
+    this.draw(pheno, this.rt, this.buf, this.size, { sleep });
     // flip Y into a canvas → PNG
     const img = this.ctx.createImageData(this.size, this.size), row = this.size * 4;
     for (let y = 0; y < this.size; y++) img.data.set(this.buf.subarray((this.size - 1 - y) * row, (this.size - y) * row), y * row);

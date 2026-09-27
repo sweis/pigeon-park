@@ -73,8 +73,10 @@ class Game {
     this.ui = new UI(this);
     this.ui.seen = { ...this.ui.seen, ...(this.savedUI?.seen || {}) };
     this.ui.introDone = !!this.savedUI?.introDone;
-    this.audio.muted = !!this.savedUI?.muted;
-    this.ui.renderMute();
+    const su = this.savedUI || {};
+    this.audio.sfxOn = su.sfxOn ?? !su.muted; this.audio.musicOn = su.musicOn ?? true;
+    if (su.sfxVol != null) this.audio.sfxVol = su.sfxVol; if (su.musicVol != null) this.audio.musicVol = su.musicVol;
+    this.ui.renderSound();
     this.diag = new Diagnostics(this, flag('debug'));
     this.bindInput();
     addEventListener('resize', () => this.resize());
@@ -132,7 +134,7 @@ class Game {
   save() {
     if (this.nosave || !this.sim.ready) return; // never write before the flock has loaded
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(this.sim.serialize({ ui: { seen: this.ui?.seen, introDone: this.ui?.introDone, muted: this.audio?.muted }, build: BUILD })));
+      localStorage.setItem(SAVE_KEY, JSON.stringify(this.sim.serialize({ ui: { seen: this.ui?.seen, introDone: this.ui?.introDone, sfxOn: this.audio?.sfxOn, musicOn: this.audio?.musicOn, sfxVol: this.audio?.sfxVol, musicVol: this.audio?.musicVol }, build: BUILD })));
     } catch (e) { /* storage full or blocked — fine */ }
   }
   resetAll() {
@@ -188,7 +190,7 @@ class Game {
         lastTap = { t: now, id };
         cand = { id, x: e.clientX, y: e.clientY };
         this.select(id);
-        const p = this.sim.byId(id); if (p) this.audio.play('coo', { voice: p.pheno.e.voice, vol: .8 });
+        const p = this.sim.byId(id); if (p) this.audio.play('coo', { voice: p.pheno.e.voice, vol: .8, pitch: this.cooPitch(p) });
       } else {
         orbit = { x: e.clientX, y: e.clientY, moved: 0, btn: e.button };
       }
@@ -296,6 +298,8 @@ class Game {
     this.time += dt;
     this.drainEvents();
     this.world.setHour(S.hour(), S.night);
+    this.audio.setMood(S.happening?.kind === 'dance' ? 'dance' : S.night > .55 ? 'night' : 'day');
+    this.audio.setDuck(this.paused ? .35 : 1);
     this.world.update(dt);
     this.flock.update(S, dt, this.time, this.cam.cam.position);
     this.fx.update(dt);
@@ -306,11 +310,46 @@ class Game {
     this.ui?.frame(dt, this.cam.cam);
     this.diag?.frame();
   }
+  // Each bird has its own voice: big birds low, small birds high, plus a fixed per-genome offset.
+  cooPitch(p) { return ({ king: .78, dinky: 1.32, chonk: .84 }[p.pheno.e.size] || 1) / Math.pow(p.jit || 1, 2.5); }
+
+  // ---------- photo mode ----------
+  // Park birds: a one-off high-res render of the real scene from a close three-quarter camera (same
+  // scene, same shader programs). Roost birds: a studio portrait. Either way, composed onto a caption card.
+  async photo({ id, roost }) {
+    const S = this.sim, W = this.q.mobile ? 1600 : 2400;
+    let pheno, name, gen, shot;
+    if (id != null) {
+      const p = S.byId(id), v = this.flock.view(id); if (!p || !v) return null;
+      pheno = p.pheno; name = p.name; gen = p.gen;
+      const s = v.size(p, S.t), c = new THREE.Vector3(v.vis.x + Math.cos(p.dir) * .04 * s, v.vis.y + .3 * s, v.vis.z + Math.sin(p.dir) * .04 * s);
+      const cam = new THREE.PerspectiveCamera(30, 1, .05, 400), a = p.dir + .8, d = 1.15 * s + .45;
+      cam.position.set(c.x + Math.cos(a) * d, c.y + .12 * s + .12, c.z + Math.sin(a) * d); cam.lookAt(c);
+      const r = this.renderer, pr = r.getPixelRatio(), selVis = this.flock.sel.visible;
+      this.flock.sel.visible = false;
+      for (const fv of this.flock.views.values()) fv.rig.setLod(0); // full detail for the photo (restored next frame)
+      r.setPixelRatio(1); r.setSize(W, W, false);
+      r.render(this.scene, cam);
+      shot = document.createElement('canvas'); shot.width = shot.height = W;
+      shot.getContext('2d').drawImage(r.domElement, 0, 0, W, W); // same task as the render: buffer still valid
+      r.setPixelRatio(pr); r.setSize(innerWidth, innerHeight, false);
+      this.flock.sel.visible = selVis; this.render(0);
+    } else {
+      const b = S.roost[roost]; if (!b) return null;
+      pheno = M.computePheno(b.genome, b.accessory); name = b.name; gen = b.gen;
+      shot = this.portraits.studio(pheno, W);
+    }
+    this.audio.play('shutter');
+    const card = await composeCard(shot, { name, gen, pheno, studio: id == null });
+    const blob = await new Promise(res => card.toBlob(res, 'image/png'));
+    return { blob, url: URL.createObjectURL(blob), name, file: 'pigeon-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.png', w: card.width, h: card.height };
+  }
+
   drainEvents() {
     const S = this.sim;
     for (const e of S.events) {
       if (e.type === 'toast') this.ui?.toast(e.msg, e.kind);
-      else if (e.type === 'sound') this.audio.play(e.name, e);
+      else if (e.type === 'sound') { const p = e.id != null && S.byId(e.id); this.audio.play(e.name, { ...e, pitch: p ? this.cooPitch(p) : 1 }); }
       else if (e.type === 'sparkle') this.fx.burst(e.x, .45, e.z, e.tier);
       else if (e.type === 'hatch') this.fx.ring(e.x, e.z, '#e8b64c');
       else if (e.type === 'roosted') { this.fx.burst(e.x, .4, e.z, 1); this.ui?.renderRoost(); }
@@ -318,6 +357,33 @@ class Game {
     }
     S.events.length = 0;
   }
+}
+
+// Photo card: the picture on top, a caption band with name / colour / breeds and a small footer.
+async function composeCard(shot, { name, gen, pheno, studio }) {
+  const W = shot.width, cap = Math.round(W * .2), c = document.createElement('canvas');
+  c.width = W; c.height = W + cap;
+  const g = c.getContext('2d');
+  try { await Promise.all([document.fonts.load(`${W * .06}px Caprasimo`), document.fonts.load(`600 ${W * .03}px Figtree`)]); } catch (e) {}
+  if (studio) { // soft backdrop + contact shadow for studio portraits
+    const bg = g.createRadialGradient(W / 2, W * .42, W * .05, W / 2, W / 2, W * .75);
+    bg.addColorStop(0, '#f0fae1'); bg.addColorStop(1, '#ccdbb2'); g.fillStyle = bg; g.fillRect(0, 0, W, W);
+    g.fillStyle = 'rgba(46,43,37,.16)'; g.beginPath(); g.ellipse(W / 2, W * .86, W * .26, W * .045, 0, 0, Math.PI * 2); g.fill();
+  }
+  g.drawImage(shot, 0, 0, W, W);
+  g.fillStyle = '#f5ead8'; g.fillRect(0, W, W, cap);
+  const pad = W * .05;
+  g.fillStyle = '#201e1d'; g.font = `${W * .058}px Caprasimo, serif`; g.textBaseline = 'alphabetic';
+  g.fillText(name, pad, W + cap * .38, W - pad * 2);
+  g.font = `600 ${W * .027}px Figtree, sans-serif`; g.fillStyle = '#474238';
+  g.fillText(`${pheno.label} · Generation ${gen}`, pad, W + cap * .6, W - pad * 2);
+  const breeds = M.matchBreeds(pheno).map(b => '★ ' + b.name).join('   ');
+  const traits = pheno.traits.slice(0, 5).map(t => t.label).join(' · ');
+  g.fillStyle = breeds ? '#c67139' : '#645c50'; g.font = `700 ${W * .024}px Figtree, sans-serif`;
+  g.fillText(breeds || traits || 'A perfectly ordinary pigeon', pad, W + cap * .8, W - pad * 2);
+  g.textAlign = 'right'; g.fillStyle = 'rgba(32,30,29,.45)'; g.font = `600 ${W * .018}px Figtree, sans-serif`;
+  g.fillText('Pigeon Park · pigeonpark.live', W - pad, W + cap * .93);
+  return c;
 }
 
 const game = new Game();
@@ -383,6 +449,15 @@ function makeDebugApi(g) {
     win() { for (const b of M.BREEDS) S.breeds[b.id] ||= { by: 'debug', at: Date.now() }; for (const k of Object.keys(M.PEDIA)) S.discovered[k] = 1; },
     lose() { api.clearAll(); S.roost.length = 0; },
     render() { g.render(0); },
+    async photo(id) { const r = await g.photo({ id }); return r && { w: r.w, h: r.h, size: r.blob.size, file: r.file }; },
+    audio: () => ({ unlocked: !!g.audio.ac, sfxOn: g.audio.sfxOn, musicOn: g.audio.musicOn, sfxVol: g.audio.sfxVol, musicVol: g.audio.musicVol, mood: g.audio.mood, musicRunning: !!g.audio.music?.timer, state: g.audio.ac?.state }),
+    audioLevel() { // RMS of the master output right now (verifies sound is actually produced)
+      const A = g.audio; if (!A.ac) return null;
+      if (!A.an) { A.an = A.ac.createAnalyser(); A.an.fftSize = 2048; A.master.connect(A.an); }
+      const d = new Float32Array(A.an.fftSize); A.an.getFloatTimeDomainData(d);
+      let s2 = 0; for (const x of d) s2 += x * x; return Math.sqrt(s2 / d.length);
+    },
+    cooPitches() { return S.pigeons.map(p => +g.cooPitch(p).toFixed(3)); },
     hideHud(v = true) { document.getElementById('hud').style.display = v ? 'none' : ''; },
   };
   return api;

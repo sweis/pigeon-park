@@ -19,6 +19,11 @@ const I = {
   gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
   help: svg('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
   x: svg('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>', 15),
+  music: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'),
+  musicOff: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><line x1="3" y1="3" x2="21" y2="21"/>'),
+  camera: svg('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>', 14),
+  download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', 14),
+  share: svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>', 14),
   pause: svg('<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'),
   play: svg('<polygon points="6 4 20 12 6 20 6 4"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', 14),
@@ -75,7 +80,8 @@ export class UI {
         <button class="btn panel" data-act="pedia" id="b-pedia" aria-label="Pigeonpedia">${I.book}<span class="lbl">Pigeonpedia</span><i class="dot"></i></button>
         <button class="btn panel" data-act="breeds" id="b-breeds" aria-label="Breed Registry">${I.award}<span class="lbl">Breeds</span> <span class="count" id="breedcount"></span><i class="dot"></i></button>
         <button class="btn icon panel" data-act="pause" id="b-pause" aria-label="Pause" title="Pause (P / Space)"></button>
-        <button class="btn icon panel" data-act="mute" id="b-mute" aria-label="Sound"></button>
+        <button class="btn icon panel" data-act="sfx" id="b-sfx" aria-label="Sound effects" title="Sound effects"></button>
+        <button class="btn icon panel" data-act="music" id="b-music" aria-label="Music" title="Music"></button>
         <button class="btn icon panel" data-act="settings" id="b-settings" aria-label="Settings">${I.gear}</button>
         <button class="btn icon panel" data-act="help" aria-label="Help">${I.help}</button>
       </header>
@@ -95,7 +101,16 @@ export class UI {
       <img id="ghost" class="dragghost hidden" alt="">
     `;
     this.$ = (id) => document.getElementById(id);
-    this.renderRoost(); this.renderMute(); this.renderPause();
+    this.renderRoost(); this.renderSound(); this.renderPause();
+    // volume sliders (live while dragging; the settings panel is not rebuilt underneath them)
+    this.root.addEventListener('input', (e) => {
+      const a = e.target.closest('[data-act]'); if (!a) return;
+      const v = +a.value / 100;
+      if (a.dataset.act === 'sfxvol') this.g.audio.setSfx(v > 0, v);
+      if (a.dataset.act === 'musicvol') this.g.audio.setMusic(v > 0, v);
+      this.renderSound();
+    });
+    this.root.addEventListener('change', (e) => { if (e.target.closest('[data-act$="vol"]')) { this.g.save(); if (e.target.dataset.act === 'sfxvol') this.g.audio.play('coo', { vol: .8 }); } });
   }
 
   // ---------- events from game ----------
@@ -118,14 +133,18 @@ export class UI {
       case 'help': this.openDialog('help'); break;
       case 'backdrop': case 'close': this.closeDialog(); break;
       case 'pause': g.togglePause(); break;
-      case 'whimsy': S.whimsy = arg; S.nextHappeningAt = S.t + gapFor(S); this.renderSettings(); g.save(); break;
-      case 'mute': g.audio.muted = !g.audio.muted; this.renderMute(); g.save(); break;
-      case 'settings': this.$('settings').classList.toggle('hidden'); this.renderSettings(); break;
-      case 'speed': S.speed = +arg; this.renderSettings(); g.save(); break;
-      case 'mut': S.mut = arg; this.renderSettings(); g.save(); break;
+      case 'whimsy': S.whimsy = arg; S.nextHappeningAt = S.t + gapFor(S); this.renderSettings(true); g.save(); break;
+      case 'sfx': g.audio.setSfx(!g.audio.sfxOn); if (g.audio.sfxOn && g.audio.sfxVol < .05) g.audio.setSfx(true, .8); this.renderSound(); this.renderSettings(true); g.save(); break;
+      case 'music': g.audio.setMusic(!g.audio.musicOn); if (g.audio.musicOn && g.audio.musicVol < .05) g.audio.setMusic(true, .55); this.renderSound(); this.renderSettings(true); g.save(); break;
+      case 'settings': this.$('settings').classList.toggle('hidden'); this.renderSettings(true); break;
+      case 'photo': this.openPhoto({ id: +arg }); break;
+      case 'photo-roost': this.openPhoto({ roost: +arg }); break;
+      case 'share': this.sharePhoto(); break;
+      case 'speed': S.speed = +arg; this.renderSettings(true); g.save(); break;
+      case 'mut': S.mut = arg; this.renderSettings(true); g.save(); break;
       case 'reset': // two-tap confirm; the armed state lives here because the panel re-renders every 0.4 s
         if (this.resetArmed && performance.now() - this.resetArmed < 5000) { this.resetArmed = 0; g.resetAll(); this.$('settings').classList.add('hidden'); }
-        else { this.resetArmed = performance.now(); this.renderSettings(); }
+        else { this.resetArmed = performance.now(); this.renderSettings(true); setTimeout(() => this.renderSettings(true), 5100); }
         break;
       case 'intro-ok': this.introDone = true; this.$('intro').classList.add('hidden'); g.save(); break;
       case 'clone': { const q = S.clonePigeon(+arg); if (q) g.select(q.id); break; }
@@ -149,7 +168,12 @@ export class UI {
     this.$('b-pause').classList.toggle('on', p);
     this.$('paused').classList.toggle('hidden', !p);
   }
-  renderMute() { this.$('b-mute').innerHTML = this.g.audio.muted ? I.mute : I.sound; }
+  renderSound() {
+    const A = this.g.audio;
+    this.$('b-sfx').innerHTML = A.sfxOn ? I.sound : I.mute;
+    this.$('b-music').innerHTML = A.musicOn ? I.music : I.musicOff;
+    this.$('b-sfx').classList.toggle('off', !A.sfxOn); this.$('b-music').classList.toggle('off', !A.musicOn);
+  }
 
   // ---------- roost ----------
   renderRoost() {
@@ -187,14 +211,14 @@ export class UI {
         actions: `<button class="btn primary" data-act="clone" data-arg="${sel.id}">${I.clone} Clone</button>
                   <button class="btn" data-act="roost-add" data-arg="${sel.id}">${I.roost} Roost</button>
                   <button class="btn ghost" data-act="dismiss" data-arg="${sel.id}">Dismiss politely</button>`,
-        follow: sel.id };
+        follow: sel.id, photo: `data-act="photo" data-arg="${sel.id}"` };
     } else if (this.roostSel != null && S.roost[this.roostSel]) {
       const i = this.roostSel, r = S.roost[i], ph = M.computePheno(r.genome, r.accessory);
       d = { img: P.get(ph), kicker: 'Roost resident', name: r.name, meta: 'Generation ' + r.gen + ' · kept bird', color: ph.label,
         breeds: M.matchBreeds(ph), traits: ph.traits, carries: M.carriersOf(r.genome),
         actions: `<button class="btn primary" data-act="clone-out" data-arg="${i}">${I.clone} Clone into park</button>
                   <button class="btn" data-act="release" data-arg="${i}">Release to park</button>
-                  <button class="btn ghost" data-act="let-go" data-arg="${i}">Let go</button>` };
+                  <button class="btn ghost" data-act="let-go" data-arg="${i}">Let go</button>`, photo: `data-act="photo-roost" data-arg="${i}"` };
     }
     if (!d) { el.classList.add('hidden'); this._insKey = null; return; }
     const key = JSON.stringify([d.kicker, d.name, d.meta, this.g.cam.follow]);
@@ -210,23 +234,28 @@ export class UI {
       ${d.breeds.length ? `<div class="chips">${d.breeds.map(b => `<span class="chip chip-breed">★ ${esc(b.name)}</span>`).join('')}</div>` : ''}
       ${d.traits.length ? `<div class="chips">${d.traits.map(t => `<span class="chip ${chip(t.tier)}">${esc(t.label)}</span>`).join('')}</div>` : ''}
       ${d.carries.length ? `<div><div class="label">Hidden in the DNA</div><div class="chips">${d.carries.map(c => `<span class="chip chip-carry">½ ${esc(c.label)}</span>`).join('')}</div></div>` : ''}
-      <div class="actions">${d.actions}${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye} ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</button>` : ''}</div>`;
+      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera} Photo</button>${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye} ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</button>` : ''}</div>`;
   }
 
   // ---------- settings ----------
-  renderSettings() {
+  // full=true rebuilds the panel (on open / after a change); otherwise only the live stats update,
+  // so a slider being dragged is never replaced underneath the pointer.
+  renderSettings(full) {
     const S = this.sim, el = this.$('settings');
     if (el.classList.contains('hidden')) return;
-    const seg = (list, cur, act) => `<div class="seg">${list.map(o => `<button class="${cur(o) ? 'on' : ''}" data-act="${act}" data-arg="${act === 'speed' ? o.v : o.id}">${o.label}</button>`).join('')}</div>`;
     const alive = S.pigeons.filter(p => !p.flying).length;
+    const stats = `<div><b>${alive}</b><span>residents</span></div><div><b>${S.stats.births}</b><span>hatched</span></div>
+        <div><b>${S.stats.flown}</b><span>departed</span></div><div><b>gen ${S.stats.maxGen}</b><span>deepest line</span></div>`;
+    if (!full && el.querySelector('.stats')) { const st = el.querySelector('.stats'); if (st.innerHTML !== stats) st.innerHTML = stats; return; }
+    const A = this.g.audio, vol = (act, v, on) => `<input type="range" min="0" max="100" value="${on ? Math.round(v * 100) : 0}" data-act="${act}" aria-label="${act}">`;
+    const seg = (list, cur, act) => `<div class="seg">${list.map(o => `<button class="${cur(o) ? 'on' : ''}" data-act="${act}" data-arg="${act === 'speed' ? o.v : o.id}">${o.label}</button>`).join('')}</div>`;
     el.innerHTML = `
+      <div class="row"><div class="label">Music</div>${vol('musicvol', A.musicVol, A.musicOn)}</div>
+      <div class="row"><div class="label">Sounds</div>${vol('sfxvol', A.sfxVol, A.sfxOn)}</div>
       <div class="row"><div class="label">Park speed</div>${seg(SPEEDS, o => Math.abs(S.speed - o.v) < .05, 'speed')}</div>
       <div class="row"><div class="label">Mutations</div>${seg(MUTATIONS, o => S.mut === o.id, 'mut')}</div>
       <div class="row"><div class="label">Weirdness</div>${seg(WHIMSY, o => S.whimsy === o.id, 'whimsy')}</div>
-      <div class="stats">
-        <div><b>${alive}</b><span>residents</span></div><div><b>${S.stats.births}</b><span>hatched</span></div>
-        <div><b>${S.stats.flown}</b><span>departed</span></div><div><b>gen ${S.stats.maxGen}</b><span>deepest line</span></div>
-      </div>
+      <div class="stats">${stats}</div>
       <button class="btn ghost small" data-act="reset">${this.resetArmed && performance.now() - this.resetArmed < 5000 ? 'Really? Tap again to start over' : 'Start over with fresh ferals'}</button>`;
   }
 
@@ -240,6 +269,27 @@ export class UI {
     const el = this.$('dialog'); el.classList.remove('hidden');
     el.innerHTML = `<div class="dialog card" role="dialog">${this['dlg_' + kind]()}</div>`;
     this.g.setPaused?.(false);
+  }
+  async openPhoto(target) {
+    this.dialog = 'photo';
+    const el = this.$('dialog'); el.classList.remove('hidden');
+    el.innerHTML = `<div class="dialog card photo-dlg" role="dialog">${this.dlgHead('Photo', '')}<div class="photo-wrap"><div class="developing">Developing…</div></div></div>`;
+    await new Promise(r => requestAnimationFrame(r));
+    const res = await this.g.photo(target);
+    if (this.dialog !== 'photo') return;
+    if (!res) { this.closeDialog(); return; }
+    if (this.photoRes) URL.revokeObjectURL(this.photoRes.url);
+    this.photoRes = res;
+    const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File([res.blob], res.file, { type: 'image/png' })] }));
+    el.querySelector('.photo-wrap').innerHTML = `<img src="${res.url}" alt="${esc(res.name)}" class="photo-img">`;
+    el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
+        <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} Download PNG</a>
+        ${canShare ? `<button class="btn" data-act="share">${I.share} Share</button>` : ''}
+        <span class="foot">${res.w} × ${res.h} px</span></div>`);
+  }
+  async sharePhoto() {
+    const r = this.photoRes; if (!r) return;
+    try { await navigator.share({ files: [new File([r.blob], r.file, { type: 'image/png' })], title: r.name, text: r.name + ' — Pigeon Park' }); } catch (e) { /* cancelled */ }
   }
   closeDialog() { this.dialog = null; this.$('dialog').classList.add('hidden'); this.$('dialog').innerHTML = ''; }
   dlgHead(title, tag) { return `<div class="dlg-head"><div class="dlg-title">${title}</div>${tag}<span class="spacer"></span><button class="btn icon" data-act="close" aria-label="Close">${I.x}</button></div>`; }
@@ -299,6 +349,8 @@ export class UI {
           <li>A registry card reveals its recipe once you've observed every trait it needs. Found breeds can be cloned straight into the park.</li>
           <li>Fantasy colours only appear through mutation — turn Mutations up to <b>${MUTATIONS[2].label}</b> to fish for them.</li>
           <li>Park speed goes from ${SPEEDS[0].label} to ${SPEEDS[SPEEDS.length - 1].label}. It's fine to just leave the park running.</li>
+          <li>Tap <b>Photo</b> on any bird for a high-res picture card you can download or share.</li>
+          <li>Music and sound effects have separate buttons in the top bar and volume sliders in settings.</li>
           <li>Some words, typed while the park is open, do things.</li>
         </ul></section>
       </div>`;
