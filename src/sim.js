@@ -27,6 +27,8 @@ export function fountainClearance(p) {
   return { gap: d - (FOUNTAIN.lip + BODY.half * k), qx, qz, d };
 }
 export const ROOST_SIZE = 8;
+// Park layout outside the plaza, in rings: benches/lamps → open lawn → monument ring → hedges, bushes, trees.
+export const DOVECOTE = { x: 8.9, z: -6.5 };
 const ADULT_AGE = 13;
 const PX = 0.0066;                       // prototype pixel → metre (92 px pigeon ≈ 0.6 m)
 const SP = 1.4;                          // prototype's internal pace factor

@@ -121,7 +121,7 @@ export class Monuments {
     const group = new THREE.Group();
     for (const [c, m] of [[S, this.mats.stone], [Mt, this.mats.metal], [G, this.mats.glow]]) if (c.geos.length) group.add(c.mesh(m));
     group.position.set(x, 0, z);
-    group.rotation.y = (x > 6 ? -Math.PI / 2 : x < -6 ? Math.PI / 2 : z > 4 ? Math.PI : 0) + .3; // face the plaza, slightly turned
+    group.rotation.y = Math.atan2(-x, -z) + .3; // face the plaza, slightly turned
     const box = new THREE.Box3().setFromObject(group);
     if (animate) group.scale.setScalar(.001);
     this.scene.add(group);

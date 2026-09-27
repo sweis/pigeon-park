@@ -7,8 +7,12 @@ await page.keyboard.type('rizz');
 await page.waitForTimeout(2500);
 let a = await page.evaluate(() => window.pp.achievements());
 check(a.built.includes('legend') && a.built.includes('firstbreed') && a.built.length === a.earned.length, `rizz earns achievements and builds their monuments (${a.built.join(', ')})`);
-await page.evaluate(() => window.pp.cam('overview')); await page.waitForTimeout(600);
+// the monument ring sits beyond the default framing: zoom out with the real wheel, like a player would
+await page.evaluate(() => window.pp.cam('overview')); await page.waitForTimeout(300);
+await page.mouse.move(640, 400); for (let i = 0; i < 6; i++) { await page.mouse.wheel(0, 300); await page.waitForTimeout(80); }
+await page.waitForTimeout(900);
 const m = await page.evaluate(() => window.pp.monumentScreen('legend'));
+check(m.x > 0 && m.x < 1280 && m.y > 60 && m.y < 700, `zooming out brings the monument ring into view (monolith at ${m.x.toFixed(0)}, ${m.y.toFixed(0)})`);
 await page.mouse.click(m.x, m.y);
 await page.waitForSelector('.ach-dlg', { timeout: 10000 });
 check((await page.textContent('.ach-dlg .dlg-title')) === 'Summoner', 'clicking the monolith opens the Summoner pane');
@@ -23,8 +27,10 @@ a = await page.evaluate(() => window.pp.achievements());
 check(a.built.length === a.total, `all ${a.total} monuments built`);
 await page.evaluate(() => { window.pp.freeze(); window.pp.cam('overview'); }); await frames(page, 3);
 await shot(page, 'ach-all-overview.png', { hud: false });
+await page.evaluate(() => { const c = window.__game.cam; c.want.dist = c.maxDist; c.snap(); window.pp.render(); }); await frames(page, 2);
+await shot(page, 'ach-all-zoomed-out.png', { hud: false });
 for (const [n, az] of [['left', -1.1], ['right', 1.1], ['back', 0]]) {
-  await page.evaluate(({ az, n }) => window.pp.cam('hero-close', n === 'back' ? { x: 0, z: -5, y: .8, dist: 7.5, az: .0 } : { x: az < 0 ? -6.7 : 6.7, z: .2, y: .8, dist: 6.5, az: az * .9 }), { az, n });
+  await page.evaluate(({ az, n }) => window.pp.cam('hero-close', n === 'back' ? { x: 0, z: -6.6, y: .8, dist: 9, az: .0 } : { x: az < 0 ? -8.4 : 8.4, z: .9, y: .8, dist: 9, az: az * .9 }), { az, n });
   await frames(page, 2); await shot(page, `ach-${n}.png`, { hud: false });
 }
 const s = await state(page);

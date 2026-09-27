@@ -43,10 +43,11 @@ export const ACHIEVEMENTS = [
     ...count(10, (S) => S.stats.happenings || 0) },
 ];
 
-// Lawn spots just outside the plaza curb, clear of benches, lamps and the dovecote; one per achievement.
+// The monument ring: beyond the benches and a strip of open lawn, in front of the hedges and trees.
+// Four down each side, four along the back, one at each front corner; filled roughly nearest-first.
 export const MONUMENT_SLOTS = [
-  [-6.75, -2.3], [-6.75, -.5], [-6.75, 3.0], [6.75, -2.3], [6.75, -.7], [6.75, .9], [6.75, 2.5],
-  [-4.4, -5.05], [-.2, -5.05], [4.3, -5.05], [-3.3, 4.95], [1.3, 4.95], [5.4, 5.0], [-5.7, 4.95],
+  [-8.5, .9], [8.5, .9], [-8.5, -1.1], [8.5, -1.1], [-1.9, -6.8], [1.9, -6.8], [-8.5, 3.0],
+  [8.5, 3.0], [-8.5, -3.2], [8.5, -3.2], [-5.6, -6.8], [5.6, -6.8], [-8.0, 6.0], [8.0, 6.0],
 ];
 
 // Earn anything newly satisfied. quiet: award silently (e.g. catching up an older save), returns new ids.

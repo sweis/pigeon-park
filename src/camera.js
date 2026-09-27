@@ -1,7 +1,9 @@
 // Pigeon Park — orbit/zoom camera with named fixed shots for comparable captures.
 
 import * as THREE from 'three';
-import { PARK, FOUNTAIN } from './sim.js';
+import { PARK, FOUNTAIN, DOVECOTE } from './sim.js';
+// how far the camera may pan: out to the monument ring
+const REACH = { x: PARK.w / 2 + 3.5, z: PARK.d / 2 + 3.5 };
 
 const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
 
@@ -27,7 +29,7 @@ export class CameraRig {
     this.home = this.fitDist(aspect);
     this.overviewAz = aspect < .8 ? Math.PI / 2 : 0;
     if (this.name === 'overview') this.want.az = this.overviewAz;
-    this.maxDist = this.home * 1.35;
+    this.maxDist = this.home * 1.6; // pull back far enough to see the whole monument ring
     if (this.name === 'overview') this.want.dist = this.home;
   }
   snap() { this.cur = { ...this.want, target: this.want.target.clone() }; this.apply(); }
@@ -36,7 +38,7 @@ export class CameraRig {
     const W = this.want;
     if (name === 'overview' || name === 'hud-check') Object.assign(W, { az: this.overviewAz, pol: .98, dist: this.home, target: new THREE.Vector3(0, 0, .1) });
     else if (name === 'fountain') Object.assign(W, { az: .35, pol: 1.05, dist: 7.5, target: new THREE.Vector3(FOUNTAIN.x, .6, FOUNTAIN.z) });
-    else if (name === 'dovecote') Object.assign(W, { az: -.55, pol: 1.15, dist: 6, target: new THREE.Vector3(PARK.w / 2 + 1.9, 1.8, -PARK.d / 2 - 1.5) });
+    else if (name === 'dovecote') Object.assign(W, { az: -.55, pol: 1.15, dist: 6, target: new THREE.Vector3(DOVECOTE.x, 1.8, DOVECOTE.z) });
     else if (name === 'hero-close') Object.assign(W, { az: opts.az ?? .5, pol: 1.3, dist: opts.dist ?? 2.1, target: new THREE.Vector3(opts.x ?? 0, opts.y ?? .28, opts.z ?? 0) });
     else if (name === 'follow') { Object.assign(W, { pol: 1.12, dist: opts.dist ?? 3.6 }); this.follow = opts.id; }
     if (opts.snap !== false) this.snap();
@@ -61,13 +63,13 @@ export class CameraRig {
     if (!gp || this.follow) return;
     const k = 1 - this.want.dist / d0; // >0 zooming in: move focus toward the point; <0: away from it
     const t = this.want.target;
-    t.x = THREE.MathUtils.clamp(t.x + (gp.x - t.x) * k, -PARK.w / 2, PARK.w / 2);
-    t.z = THREE.MathUtils.clamp(t.z + (gp.z - t.z) * k, -PARK.d / 2, PARK.d / 2);
+    t.x = THREE.MathUtils.clamp(t.x + (gp.x - t.x) * k, -REACH.x, REACH.x);
+    t.z = THREE.MathUtils.clamp(t.z + (gp.z - t.z) * k, -REACH.z, REACH.z);
   }
   pan(dx, dz) {
     const t = this.want.target;
-    t.x = THREE.MathUtils.clamp(t.x + dx, -PARK.w / 2, PARK.w / 2);
-    t.z = THREE.MathUtils.clamp(t.z + dz, -PARK.d / 2, PARK.d / 2);
+    t.x = THREE.MathUtils.clamp(t.x + dx, -REACH.x, REACH.x);
+    t.z = THREE.MathUtils.clamp(t.z + dz, -REACH.z, REACH.z);
     this.follow = null; this.name = 'custom';
   }
   // Pans driven by fingers should track 1:1, not lag behind the smoothing.

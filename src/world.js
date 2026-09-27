@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { PARK, FOUNTAIN } from './sim.js';
+import { PARK, FOUNTAIN, DOVECOTE } from './sim.js';
 import { statueGeometry } from './pigeon3d.js';
 import { computePheno, WILD, LOCI } from './genetics.js';
 
@@ -129,7 +129,8 @@ export class World {
     s.add(sun); s.add(sun.target);
     // lamp lights: fixed count, intensity 0 by day (never toggled → no shader recompiles)
     this.lampLights = [];
-    this.lampSpots = [V(-PARK.w / 2 - .9, 0, PARK.d / 2 + .9), V(PARK.w / 2 + .9, 0, PARK.d / 2 + .9), V(-PARK.w / 2 - .9, 0, -PARK.d / 2 - .9), V(PARK.w / 2 + .9, 0, -PARK.d / 2 - .9)];
+    const lx = PARK.w / 2 + 1.35, lz = PARK.d / 2 + 1.35; // corners of the bench strip
+    this.lampSpots = [V(-lx, 0, lz), V(lx, 0, lz), V(-lx, 0, -lz), V(lx, 0, -lz)];
     for (let i = 0; i < this.q.lampLights; i++) {
       const L = new THREE.PointLight('#ffc27a', 0, 6.5, 2);
       L.position.copy(this.lampSpots[i]).setY(2.35);
@@ -270,9 +271,9 @@ export class World {
         add(new THREE.BoxGeometry(.06, .05, .46), iron, V(sx, .44, -.05));
       }
     };
-    const bz = PARK.d / 2 + .95;
+    const bz = PARK.d / 2 + 1.55; // a strip of lawn between the curb and the benches
     bench(-2.6, -bz, 0); bench(2.2, -bz, 0); bench(-.8, bz + .1, Math.PI); bench(3.4, bz + .1, Math.PI);
-    bench(-PARK.w / 2 - 1.05, 1.6, Math.PI / 2);
+    bench(-PARK.w / 2 - 1.7, 1.6, Math.PI / 2);
     // lamp posts
     for (const p of this.lampSpots) {
       const b = trs(p);
@@ -286,7 +287,7 @@ export class World {
     this.lampSpots.forEach((p, i) => globes.setMatrixAt(i, trs(V(p.x, 2.38, p.z))));
     this.scene.add(globes);
     // dovecote (the Roost) — back-right corner
-    const dv = this.dovecote = V(PARK.w / 2 + 1.9, 0, -PARK.d / 2 - 1.5);
+    const dv = this.dovecote = V(DOVECOTE.x, 0, DOVECOTE.z);
     const db = trs(dv, [0, -.6, 0]);
     const white = col('#efe7d8'), roof = col('#b7593f'), hole = col('#3a302a');
     S.add(new THREE.CylinderGeometry(.08, .1, 2.2, 10), col('#8a6a4a'), db.clone().multiply(trs(V(0, 1.1, 0))));
@@ -320,16 +321,16 @@ export class World {
       const mesh = T.mesh(mat); this.scene.add(mesh);
       this.trees.push({ mesh, mat, c: V(x, 3.1 * s, z), r: 1.75 * s, o: 1 });
     };
-    const TREES = [[-9.2, -6.2, 1.25], [-4.8, -7.6, 1.05], [1.4, -8.3, 1.3], [6.2, -7.8, 1.1], [10.4, -5.4, 1.2], [-10.8, -1.2, 1.1], [11.4, 1.2, 1.05], [-9.6, 5.4, .95], [10.2, 6.8, 1.0], [-13, -9, 1.4], [14, -10, 1.5], [-2, -12, 1.6], [7, -13, 1.4]];
+    const TREES = [[-10.6, -7.4, 1.25], [-5.2, -10.2, 1.05], [1.4, -10.9, 1.3], [6.4, -10.3, 1.1], [12.2, -6.6, 1.2], [-11.8, -1.2, 1.1], [12.3, 1.4, 1.05], [-11.2, 6.2, .95], [11.4, 7.4, 1.0], [-14.5, -10.5, 1.4], [15.5, -11.5, 1.5], [-2, -14, 1.6], [8, -15, 1.4]];
     for (const [x, z, s] of TREES) tree(x, z, s);
     // hedges along the back
     for (let i = 0; i < 30; i++) {
-      const x = -12 + i * .85, z = -PARK.d / 2 - 2.6 - Math.sin(i * .7) * .25;
+      const x = -12 + i * .85, z = -PARK.d / 2 - 5.0 - Math.sin(i * .7) * .25; // behind the monument ring
       if (Math.abs(x - dv.x) < 1.1) continue;
       S.add(lumpy(.55 + r() * .15, 1, .3, i * 3.1), greens[i % 4].clone().multiplyScalar(.85), trs(V(x, .35, z), [0, r() * 3, 0], [1, .85, 1]), .35);
     }
     // bushes + flower beds at the front corners
-    for (const [x, z] of [[-7.4, 4.9], [-6.3, 5.5], [7.6, 5.0], [6.6, 5.6], [-8.2, -3.6], [8.4, -2.8]]) {
+    for (const [x, z] of [[-10.4, 4.2], [-10.9, 3.3], [10.5, 4.4], [11.0, 3.5], [-10.4, -4.4], [10.6, -3.8]]) {
       S.add(lumpy(.5 + r() * .2, 1, .35, x * z), greens[Math.floor(r() * 4)], trs(V(x, .3, z)), .4);
     }
   }
@@ -356,7 +357,7 @@ export class World {
     this.scene.add(inst);
     // flowers
     const fl = [], fc = ['#f2c94c', '#f6f1e6', '#e58bad', '#c95f5f', '#a98cc9'].map(col);
-    for (const [cx, cz, n] of [[-7, 5.2, 26], [7.1, 5.3, 26], [-8.4, -3.2, 14], [8.6, -2.4, 14], [-3, 6.4, 18], [3.4, 6.6, 18]]) {
+    for (const [cx, cz, n] of [[-10.2, 7.8, 26], [10.2, 8.0, 26], [-11.8, -3.2, 14], [11.8, -2.4, 14], [-3.5, 7.6, 18], [3.5, 7.8, 18]]) {
       for (let i = 0; i < n; i++) fl.push([cx + (r() - .5) * 2.2, cz + (r() - .5) * 1.1, fc[Math.floor(r() * fc.length)]]);
     }
     const fi = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.07, 0), new THREE.MeshStandardMaterial({ roughness: .7 }), fl.length);
