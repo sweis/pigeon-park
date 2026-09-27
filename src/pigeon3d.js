@@ -26,7 +26,7 @@ const NOODLE = V(.05, .22, 0);           // how far a noodle neck raises the hea
 function headOffset(e) {
   const o = V(0, 0, 0);
   if (e.neck === 'noodle') o.add(NOODLE);
-  if (e.crop === 'globe') o.add(V(.0, .17, 0)); // pouters carry the head on top of the balloon, not behind it
+  if (e.crop === 'globe') o.add(V(.03, .13, 0)); // pouters: head sits right on top of the balloon (no visible neck)
   return o;
 }
 const EYE = [V(H.x + .046, H.y + .022, -.061), V(H.x + .046, H.y + .022, .061)];
@@ -402,8 +402,8 @@ function buildGeometry(pheno, lod = 0) {
   // ---- breast / neck ornaments ----
   if (e.crop === 'globe') {
     b.blob('body', {
-      ws: 24, hs: 18, matrix: trs(V(.165, .37, 0)),
-      deform: (u) => u.set(u.x * .165, u.y * .175, u.z * .158),
+      ws: 28, hs: 20, matrix: trs(V(.165, .41, 0)),
+      deform: (u) => u.set(u.x * .215, u.y * .215, u.z * .205), // enormous, on purpose
       paint: (u) => tint(u.y > .45 && u.x > .1 ? mix(C.body, C.white, .22) : C.body, u, 8),
     });
   }
