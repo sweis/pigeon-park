@@ -173,6 +173,21 @@ const shots = [];
     await page.mouse.click(gb.x + gb.width / 2, gb.y + gb.height / 2);
   }
 
+  // New codes on the keyboard: bread → baguette, boogie → disco
+  await page.keyboard.type('bread');
+  check((await state(page)).happening === 'bread', 'typing "bread" drops a baguette');
+  await page.keyboard.type('boogie');
+  check((await state(page)).happening === 'dance', 'typing "boogie" starts a disco');
+  await page.evaluate(() => { const S = window.__game.sim; S.happening = null; S.bread = null; for (const p of S.pigeons) p.busy = null; });
+  // Trees fade when they stand between the camera and the park
+  await page.evaluate(() => window.pp.cam('hero-close', { x: 0, z: 0, y: .3, dist: 16, az: -Math.PI / 2 }));
+  await page.evaluate(() => { window.pp.render(); for (let i = 0; i < 40; i++) window.__game.world.updateOcclusion(window.__game.cam.cam.position, window.__game.cam.cur.target, .05); window.pp.render(); });
+  const faded = (await page.evaluate(() => window.pp.trees())).filter(o => o < .5).length;
+  check(faded >= 1, `a tree between the camera and the park fades out (${faded} faded)`);
+  shots.push(await shot(page, 'e2e-tree-fade.png', { hud: false }));
+  await page.evaluate(() => { window.pp.cam('overview'); for (let i = 0; i < 40; i++) window.__game.world.updateOcclusion(window.__game.cam.cam.position, window.__game.cam.cur.target, .05); });
+  check((await page.evaluate(() => window.pp.trees())).every(o => o > .95), 'trees are solid again from the overview');
+
   // Cheats typed on the real keyboard
   const n0 = (await state(page)).pigeons.length;
   await page.keyboard.type('rizz');

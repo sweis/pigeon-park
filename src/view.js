@@ -31,6 +31,7 @@ class PigeonView {
     this.blinkAt = 1 + Math.random() * 3; this.blinkT = 0;
     this.glow = p.pheno.e.glow === 'glow';
     this.googly = p.pheno.e.eye === 'googly';
+    this.rev = p.rev || 0;
     this.baseSize = sizeOf(p.pheno, p.jit);
   }
   size(p, simT) { return this.baseSize * chickScale(simT - p.born); }
@@ -60,7 +61,7 @@ class PigeonView {
       b.legL.rotation.z = b.legR.rotation.z = -1.1;
       b.body.rotation.z = .25;
       b.tail.rotation.z = -.2;
-    } else if (p.held) {
+    } else if (p.held || st === 'abducted') {
       const f = Math.sin(t * 13 + this.seed);
       b.wingL.rotation.x = .55 + f * .45; b.wingR.rotation.x = -(.55 + f * .45);
       b.legL.rotation.z = -.35 + Math.sin(t * 5) * .2; b.legR.rotation.z = -.35 - Math.sin(t * 5) * .2;
@@ -83,6 +84,16 @@ class PigeonView {
       b.root.rotation.x = Math.sin(t * 5 + this.seed) * .25; b.body.rotation.z = .2;
       b.legL.rotation.z = Math.sin(t * 20) * .7; b.legR.rotation.z = -Math.sin(t * 20) * .7;
       b.root.position.y = .04 + Math.abs(Math.sin(t * 9)) * .05;
+    } else if (st === 'loaf') { // rain: fluffed up, head sunk into the shoulders, eyes open and unimpressed
+      b.head.position.y -= .05; b.head.position.x -= .02; b.head.rotation.z += .15;
+      b.body.scale.set(1.08, 1.06 + breathe * .02, 1.12); b.body.position.y -= .03;
+      b.legL.scale.y = b.legR.scale.y = .6; b.tail.rotation.z = .1;
+    } else if (st === 'sync') { // synchronised pecking: same phase for everyone (no per-bird seed)
+      const k = ((simT - p.stateAt) * 1.6) % 1, dip = k < .25 ? k / .25 : k < .4 ? 1 : Math.max(0, 1 - (k - .4) / .3);
+      b.head.rotation.z += -dip * 1.05; b.head.position.x += dip * .02; b.body.rotation.z = -dip * .12; b.tail.rotation.z = dip * .15;
+    } else if (st === 'stare') { // staring contest: locked, leaning in, never blinking
+      b.body.rotation.z = -.08; b.head.position.x += .025; b.head.rotation.z += -.05;
+      eyesOpen = 2;
     } else if (st === 'statue') { // very still, chin up, chest out
       b.head.rotation.z += .18; b.body.scale.set(1.02, 1.04, 1.04); b.tail.rotation.z = -.1;
       eyesOpen = 2; // no blinking on duty
@@ -184,6 +195,20 @@ export class FlockView {
     this.crumbs = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.018, 0), scoreMat, 24);
     this.crumbs.frustumCulled = false; this.crumbs.count = 0; scene.add(this.crumbs);
     this.goldMat = new THREE.MeshStandardMaterial({ color: '#e8b64c', roughness: .22, metalness: .9, emissive: new THREE.Color('#5a3a00'), emissiveIntensity: .4 });
+    // UFO (close-encounter happening): saucer, dome, rim lights and a tractor beam
+    const ufo = this.ufo = new THREE.Group();
+    const hull = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 14).scale(1.1, .22, 1.1), new THREE.MeshStandardMaterial({ color: '#b9c2cc', metalness: .8, roughness: .3 }));
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(.45, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#9fe0ff', roughness: .1, emissive: new THREE.Color('#3aa0c0'), emissiveIntensity: .6 }));
+    dome.position.y = .12; ufo.add(hull, dome);
+    this.ufoLights = new THREE.MeshStandardMaterial({ color: '#fff3b0', emissive: new THREE.Color('#ffd84a'), emissiveIntensity: 1.5 });
+    for (let i = 0; i < 8; i++) { const l = new THREE.Mesh(new THREE.SphereGeometry(.06, 8, 6), this.ufoLights); l.position.set(Math.cos(i / 8 * Math.PI * 2) * 1.02, -.02, Math.sin(i / 8 * Math.PI * 2) * 1.02); ufo.add(l); }
+    this.beam = new THREE.Mesh(new THREE.CylinderGeometry(.25, 1.0, 1, 24, 1, true).translate(0, -.5, 0), new THREE.MeshBasicMaterial({ color: '#c8fbff', transparent: true, opacity: .3, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+    ufo.add(this.beam); ufo.visible = false; hull.castShadow = true; scene.add(ufo);
+    // rain streaks
+    this.rainN = 420;
+    this.rainMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(.012, .35, .012), new THREE.MeshBasicMaterial({ color: '#dbe8f2', transparent: true, opacity: .55, depthWrite: false }), this.rainN);
+    this.rainMesh.frustumCulled = false; this.rainMesh.count = 0; scene.add(this.rainMesh);
+    this.rainData = Array.from({ length: this.rainN }, () => [Math.random(), Math.random(), Math.random()]);
     // poop
     this.poop = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 5).scale(.05, .012, .04), new THREE.MeshStandardMaterial({ color: '#f1ece0', roughness: .7 }), 16);
     this.poop.frustumCulled = false; this.poop.receiveShadow = true;
@@ -205,6 +230,7 @@ export class FlockView {
     for (const p of sim.pigeons) {
       seen.add(p.id);
       let v = this.views.get(p.id);
+      if (v && v.rev !== (p.rev || 0)) { this.root.remove(v.g); v.dispose(); this.views.delete(p.id); v = null; } // phenotype changed (new hat)
       if (!v) { v = new PigeonView(p, this.mats); this.views.set(p.id, v); this.root.add(v.g); }
       const s = v.update(p, sim.t, dt, t);
       if (camPos) v.rig.setLod(camPos.distanceTo(v.vis) > 7.5 * Math.max(1, s) ? 1 : 0);
@@ -243,6 +269,24 @@ export class FlockView {
       ev.scale.setScalar(Math.min(1, (sim.t - eg.laidAt) * 4 + .2));
     }
     for (const [id, ev] of this.eggViews) if (!eseen.has(id)) { ev.visible = false; this.eggPool.push(ev); this.eggViews.delete(id); }
+
+    // UFO
+    const U = sim.ufo;
+    this.ufo.visible = !!U;
+    if (U) {
+      this.ufo.position.set(U.x, U.y, U.z); this.ufo.rotation.y = t * 1.5;
+      this.beam.visible = U.beam > 0; this.beam.scale.set(1, U.y, 1);
+      this.beam.material.opacity = .22 + Math.sin(t * 9) * .08;
+    }
+    // rain around the park
+    this.rainAmt = (this.rainAmt || 0) + ((sim.rain ? 1 : 0) - (this.rainAmt || 0)) * Math.min(1, dt * 1.5);
+    const rn = Math.floor(this.rainN * this.rainAmt);
+    for (let i = 0; i < rn; i++) {
+      const d = this.rainData[i], y = 9 - ((t * (7 + d[2] * 3) + d[2] * 9) % 9);
+      m.compose(V((d[0] - .5) * 18, y, (d[1] - .5) * 13), q.identity(), V(1, 1, 1));
+      this.rainMesh.setMatrixAt(i, m);
+    }
+    this.rainMesh.count = rn; if (rn) this.rainMesh.instanceMatrix.needsUpdate = true;
 
     // bread
     const B = sim.bread;

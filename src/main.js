@@ -103,6 +103,7 @@ class Game {
     });
     this.sim.eggs.push({ id: -1, x: 0, z: 2, laidAt: 0, hatchAt: 1, genome: null }, { id: -2, x: .5, z: 2, laidAt: 0, hatchAt: 1, genome: null, golden: true });
     this.sim.bread = { x: 0, z: 2.5, hp: .5, a: 0 }; // bread happening props
+    this.sim.ufo = { x: 0, z: 0, y: 4, beam: 1 }; this.sim.rain = 1; this.flock.rainAmt = 1;
     this.fx.burst(0, .5, 2, 3);
     this.flock.update(this.sim, 0, 0);
     this.sim.pigeons.length = 0;
@@ -111,7 +112,7 @@ class Game {
     this.renderer.compile(this.scene, this.cam.cam);
     this.renderer.render(this.scene, this.cam.cam);
     rigs.forEach(r => { this.scene.remove(r.group); r.dispose(); });
-    this.sim.eggs.length = 0; this.sim.bread = null;
+    this.sim.eggs.length = 0; this.sim.bread = null; this.sim.ufo = null; this.sim.rain = 0; this.flock.rainAmt = 0;
     this.flock.update(this.sim, 0, 0);
     this.fx.parts.length = 0; this.fx.update(0);
   }
@@ -171,7 +172,20 @@ class Game {
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const toRay = (x, y) => { ndc.set(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1); ray.setFromCamera(ndc, this.cam.cam); return ray.ray; };
     const ground = (x, y) => { const p = new THREE.Vector3(); return toRay(x, y).intersectPlane(plane, p) ? p : null; };
-    this.pickAt = (x, y) => this.flock.pick(toRay(x, y), this.sim);
+    // Exact ray hit first; otherwise the nearest bird within a fingertip of the tap (small, distant birds).
+    this.pickAt = (x, y, touch = false) => {
+      const hit = this.flock.pick(toRay(x, y), this.sim);
+      if (hit != null) return hit;
+      let best = null, bd = touch ? 34 : 14; const v = new THREE.Vector3();
+      for (const p of this.sim.pigeons) {
+        const fv = this.flock.view(p.id); if (!fv || p.flying) continue;
+        v.set(fv.vis.x, fv.vis.y + .25 * fv.size(p, this.sim.t), fv.vis.z).project(this.cam.cam);
+        if (v.z > 1) continue;
+        const d = Math.hypot((v.x * .5 + .5) * innerWidth - x, (-v.y * .5 + .5) * innerHeight - y);
+        if (d < bd) { bd = d; best = p.id; }
+      }
+      return best;
+    };
 
     c.addEventListener('pointerdown', (e) => {
       this.audio.unlock();
@@ -181,9 +195,10 @@ class Game {
         cand = null; orbit = null;
         const [a, b] = [...pointers.values()];
         pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+        if (drag) { const p = this.sim.byId(drag.id); if (p) this.sim.drop(drag.id, p.x, p.z); drag = null; this.ui.ghost(null); this.ui.setOverRoost(false); }
         return;
       }
-      const id = this.pickAt(e.clientX, e.clientY);
+      const id = this.pickAt(e.clientX, e.clientY, e.pointerType === 'touch');
       if (id != null) {
         const now = performance.now();
         if (lastTap.id === id && now - lastTap.t < 350) this.toggleFollow(id);
@@ -200,8 +215,13 @@ class Game {
       const dx = e.clientX - pp.x, dy = e.clientY - pp.y;
       pp.x = e.clientX; pp.y = e.clientY;
       if (pinch && pointers.size === 2) {
-        const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
-        this.cam.zoom(pinch.d / Math.max(20, d)); pinch.d = d;
+        // two fingers: the midpoint pans (the ground follows the fingers), the spread zooms toward them
+        const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+        const g0 = ground(pinch.cx, pinch.cy), g1 = ground(cx, cy);
+        if (g0 && g1) this.cam.pan(g0.x - g1.x, g0.z - g1.z);
+        this.cam.zoomAt(pinch.d / Math.max(20, d), ground(cx, cy));
+        this.cam.snapTarget();
+        pinch.d = d; pinch.cx = cx; pinch.cy = cy;
         return;
       }
       if (cand && !drag && Math.hypot(e.clientX - cand.x, e.clientY - cand.y) > 8) {
@@ -232,6 +252,9 @@ class Game {
         this.ui.setOverRoost(false); this.ui.ghost(null);
         drag = null;
       } else if (orbit && orbit.moved < 6 && e.type === 'pointerup') {
+        const now = performance.now();
+        if (now - (this.lastEmptyTap || 0) < 350 && this.cam.name !== 'overview') this.cam.shot('overview', { snap: false }); // double-tap empty ground: recenter
+        this.lastEmptyTap = now;
         this.select(null); this.ui.roostSel = null;
       }
       cand = null; orbit = null;
@@ -239,7 +262,7 @@ class Game {
     c.addEventListener('pointerup', up);
     c.addEventListener('pointercancel', up);
     c.addEventListener('contextmenu', (e) => e.preventDefault());
-    c.addEventListener('wheel', (e) => { e.preventDefault(); this.cam.zoom(Math.exp(e.deltaY * .0012)); }, { passive: false });
+    c.addEventListener('wheel', (e) => { e.preventDefault(); this.cam.zoomAt(Math.exp(e.deltaY * .0012), ground(e.clientX, e.clientY)); }, { passive: false });
 
     let cheat = '';
     addEventListener('keydown', (e) => {
@@ -248,11 +271,20 @@ class Game {
       if ((e.key === 'p' || e.key === ' ') && !e.repeat) { if (e.key === ' ') e.preventDefault(); this.togglePause(); if (e.key === 'p') cheat = ''; return; }
       if (e.key === '?') { this.ui.dialog === 'help' ? this.ui.closeDialog() : this.ui.openDialog('help'); return; }
       if (e.key.length !== 1) return;
-      cheat = (cheat + e.key.toLowerCase()).slice(-8);
-      if (cheat.endsWith('rizz')) { cheat = ''; this.sim.summonLegends(); }
-      else if (cheat.endsWith('ore')) { cheat = ''; this.sim.summonOres(); }
+      cheat = (cheat + e.key.toLowerCase()).slice(-12);
+      const code = Object.keys(CODES).find(c => cheat.endsWith(c));
+      if (code) { cheat = ''; this.enterCode(code); }
       else if (e.key.toLowerCase() === 'f' && this.sim.selId != null) this.toggleFollow(this.sim.selId);
     });
+  }
+
+  // Secret codes: typed anywhere on a keyboard, or entered in Settings (phones).
+  enterCode(raw) {
+    const code = String(raw || '').toLowerCase().replace(/[^a-z]/g, '');
+    const fn = CODES[code];
+    if (!fn) { this.ui.toast(pick(['Nothing happens. A pigeon somewhere laughs at you.', 'The park does not recognise that word.', 'Incorrect. The pigeons judge you silently.'])); return false; }
+    fn(this.sim);
+    return true;
   }
 
   togglePause(v = !this.paused) {
@@ -298,6 +330,8 @@ class Game {
     this.time += dt;
     this.drainEvents();
     this.world.setHour(S.hour(), S.night);
+    this.world.setRain(this.flock.rainAmt || 0);
+    this.audio.setRain(!!S.rain);
     this.audio.setMood(S.happening?.kind === 'dance' ? 'dance' : S.night > .55 ? 'night' : 'day');
     this.audio.setDuck(this.paused ? .35 : 1);
     this.world.update(dt);
@@ -306,6 +340,7 @@ class Game {
     let fp = null;
     if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.cam.shot('overview', { snap: false }); }
     this.cam.update(this.camDt || 1 / 60, fp);
+    this.world.updateOcclusion(this.cam.cam.position, this.cam.cur.target, this.camDt || 1 / 60);
     this.renderer.render(this.scene, this.cam.cam);
     this.ui?.frame(dt, this.cam.cam);
     this.diag?.frame();
@@ -365,6 +400,14 @@ class Game {
     S.events.length = 0;
   }
 }
+
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+export const CODES = {
+  rizz: (S) => S.summonLegends(),
+  ore: (S) => S.summonOres(),
+  bread: (S) => startHappening(S, 'bread'),
+  boogie: (S) => startHappening(S, 'dance'),
+};
 
 // Photo card: the picture on top, a caption band with name / colour / breeds and a small footer.
 async function composeCard(shot, { name, gen, pheno, studio }) {
@@ -430,6 +473,8 @@ function makeDebugApi(g) {
     setSpeed(v) { S.speed = v; },
     happen(kind) { const ok = startHappening(S, kind); g.render(0); return ok; },
     happenings: () => Object.keys(HAPPENINGS),
+    code: (c) => g.enterCode(c),
+    trees: () => g.world.treeOpacity(),
     pause(v = true) { g.togglePause(v); return g.paused; },
     // kind: 'founder' | 'legends' | 'ores' | breed id | genome overrides object
     spawn(kind = 'founder', at) {

@@ -24,6 +24,7 @@ const I = {
   camera: svg('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>', 14),
   download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', 14),
   share: svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>', 14),
+  target: svg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/>'),
   pause: svg('<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'),
   play: svg('<polygon points="6 4 20 12 6 20 6 4"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', 14),
@@ -80,12 +81,13 @@ export class UI {
         <button class="btn panel" data-act="pedia" id="b-pedia" aria-label="Pigeonpedia">${I.book}<span class="lbl">Pigeonpedia</span><i class="dot"></i></button>
         <button class="btn panel" data-act="breeds" id="b-breeds" aria-label="Breed Registry">${I.award}<span class="lbl">Breeds</span> <span class="count" id="breedcount"></span><i class="dot"></i></button>
         <button class="btn icon panel" data-act="pause" id="b-pause" aria-label="Pause" title="Pause (P / Space)"></button>
-        <button class="btn icon panel" data-act="sfx" id="b-sfx" aria-label="Sound effects" title="Sound effects"></button>
-        <button class="btn icon panel" data-act="music" id="b-music" aria-label="Music" title="Music"></button>
+        <button class="btn icon panel desk" data-act="sfx" id="b-sfx" aria-label="Sound effects" title="Sound effects"></button>
+        <button class="btn icon panel desk" data-act="music" id="b-music" aria-label="Music" title="Music"></button>
         <button class="btn icon panel" data-act="settings" id="b-settings" aria-label="Settings">${I.gear}</button>
-        <button class="btn icon panel" data-act="help" aria-label="Help">${I.help}</button>
+        <button class="btn icon panel desk" data-act="help" aria-label="Help">${I.help}</button>
       </header>
       <div id="bubbles"></div>
+      <button id="recenter" class="btn icon panel hidden" data-act="recenter" aria-label="Recenter camera" title="Recenter camera (double-tap the ground)">${I.target}</button>
       <button id="paused" class="pill panel hidden" data-act="pause">${I.play}<span>Paused — tap to resume</span></button>
       <aside id="inspector" class="card panel hidden"></aside>
       <div id="settings" class="card panel pop hidden"></div>
@@ -110,6 +112,12 @@ export class UI {
       if (a.dataset.act === 'musicvol') this.g.audio.setMusic(v > 0, v);
       this.renderSound();
     });
+    this.root.addEventListener('submit', (e) => {
+      const f = e.target.closest('form[data-code]'); if (!f) return;
+      e.preventDefault(); this.g.audio.unlock();
+      const inp = f.querySelector('input'), ok = this.g.enterCode(inp.value);
+      inp.value = ''; if (ok) this.$('settings').classList.add('hidden');
+    });
     this.root.addEventListener('change', (e) => { if (e.target.closest('[data-act$="vol"]')) { this.g.save(); if (e.target.dataset.act === 'sfxvol') this.g.audio.play('coo', { vol: .8 }); } });
   }
 
@@ -133,6 +141,7 @@ export class UI {
       case 'help': this.openDialog('help'); break;
       case 'backdrop': case 'close': this.closeDialog(); break;
       case 'pause': g.togglePause(); break;
+      case 'recenter': g.cam.shot('overview', { snap: false }); break;
       case 'whimsy': S.whimsy = arg; S.nextHappeningAt = S.t + gapFor(S); this.renderSettings(true); g.save(); break;
       case 'sfx': g.audio.setSfx(!g.audio.sfxOn); if (g.audio.sfxOn && g.audio.sfxVol < .05) g.audio.setSfx(true, .8); this.renderSound(); this.renderSettings(true); g.save(); break;
       case 'music': g.audio.setMusic(!g.audio.musicOn); if (g.audio.musicOn && g.audio.musicVol < .05) g.audio.setMusic(true, .55); this.renderSound(); this.renderSettings(true); g.save(); break;
@@ -210,7 +219,7 @@ export class UI {
         meta: 'Generation ' + sel.gen + ' · ' + fmtAge(S.age(sel)), color: sel.pheno.label, breeds: sel.breeds, traits: sel.pheno.traits, carries,
         actions: `<button class="btn primary" data-act="clone" data-arg="${sel.id}">${I.clone} Clone</button>
                   <button class="btn" data-act="roost-add" data-arg="${sel.id}">${I.roost} Roost</button>
-                  <button class="btn ghost" data-act="dismiss" data-arg="${sel.id}">Dismiss politely</button>`,
+                  <button class="btn ghost" data-act="dismiss" data-arg="${sel.id}">Dismiss<span class="opt"> politely</span></button>`,
         follow: sel.id, photo: `data-act="photo" data-arg="${sel.id}"` };
     } else if (this.roostSel != null && S.roost[this.roostSel]) {
       const i = this.roostSel, r = S.roost[i], ph = M.computePheno(r.genome, r.accessory);
@@ -234,7 +243,7 @@ export class UI {
       ${d.breeds.length ? `<div class="chips">${d.breeds.map(b => `<span class="chip chip-breed">★ ${esc(b.name)}</span>`).join('')}</div>` : ''}
       ${d.traits.length ? `<div class="chips">${d.traits.map(t => `<span class="chip ${chip(t.tier)}">${esc(t.label)}</span>`).join('')}</div>` : ''}
       ${d.carries.length ? `<div><div class="label">Hidden in the DNA</div><div class="chips">${d.carries.map(c => `<span class="chip chip-carry">½ ${esc(c.label)}</span>`).join('')}</div></div>` : ''}
-      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera} Photo</button>${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye} ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</button>` : ''}</div>`;
+      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera}<span class="opt"> Photo</span></button>${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye}<span class="opt"> ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</span></button>` : ''}</div>`;
   }
 
   // ---------- settings ----------
@@ -250,12 +259,16 @@ export class UI {
     const A = this.g.audio, vol = (act, v, on) => `<input type="range" min="0" max="100" value="${on ? Math.round(v * 100) : 0}" data-act="${act}" aria-label="${act}">`;
     const seg = (list, cur, act) => `<div class="seg">${list.map(o => `<button class="${cur(o) ? 'on' : ''}" data-act="${act}" data-arg="${act === 'speed' ? o.v : o.id}">${o.label}</button>`).join('')}</div>`;
     el.innerHTML = `
+      <div class="row phone"><button class="btn icon ${A.sfxOn ? '' : 'off'}" data-act="sfx" aria-label="Sound effects">${A.sfxOn ? I.sound : I.mute}</button>
+        <button class="btn icon ${A.musicOn ? '' : 'off'}" data-act="music" aria-label="Music">${A.musicOn ? I.music : I.musicOff}</button>
+        <span class="spacer"></span><button class="btn small" data-act="help">${I.help} Help</button></div>
       <div class="row"><div class="label">Music</div>${vol('musicvol', A.musicVol, A.musicOn)}</div>
       <div class="row"><div class="label">Sounds</div>${vol('sfxvol', A.sfxVol, A.sfxOn)}</div>
       <div class="row"><div class="label">Park speed</div>${seg(SPEEDS, o => Math.abs(S.speed - o.v) < .05, 'speed')}</div>
       <div class="row"><div class="label">Mutations</div>${seg(MUTATIONS, o => S.mut === o.id, 'mut')}</div>
       <div class="row"><div class="label">Weirdness</div>${seg(WHIMSY, o => S.whimsy === o.id, 'whimsy')}</div>
       <div class="stats">${stats}</div>
+      <form class="row code" data-code><input name="code" placeholder="Secret code" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" aria-label="Secret code"><button class="btn small" type="submit">Enter</button></form>
       <button class="btn ghost small" data-act="reset">${this.resetArmed && performance.now() - this.resetArmed < 5000 ? 'Really? Tap again to start over' : 'Start over with fresh ferals'}</button>`;
   }
 
@@ -351,7 +364,7 @@ export class UI {
           <li>Park speed goes from ${SPEEDS[0].label} to ${SPEEDS[SPEEDS.length - 1].label}. It's fine to just leave the park running.</li>
           <li>Tap <b>Photo</b> on any bird for a high-res picture card you can download or share.</li>
           <li>Music and sound effects have separate buttons in the top bar and volume sliders in settings.</li>
-          <li>Some words, typed while the park is open, do things.</li>
+          <li>Some words, typed while the park is open (or entered under <b>Secret code</b> in settings), do things.</li>
         </ul></section>
       </div>`;
   }
@@ -373,6 +386,8 @@ export class UI {
       this.renderInspector(); this.renderSettings(); this.renderRoost();
       this.$('intro').classList.toggle('hidden', this.introDone || S.selId != null || this.roostSel != null || !!this.dialog);
     }
+    const rc = this.g.cam.name === 'overview' || this.g.cam.name === 'hud-check';
+    if (rc !== this._rcHidden) { this._rcHidden = rc; this.$('recenter').classList.toggle('hidden', rc); }
     this.renderBubbles(cam);
   }
   renderBubbles(cam) {

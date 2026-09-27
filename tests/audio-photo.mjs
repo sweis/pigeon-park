@@ -20,8 +20,9 @@ check(onLvl > .002, `music is audible (rms ${onLvl?.toFixed(4)})`);
 const click = async (sel) => { const b = await page.locator(sel).boundingBox(); await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); };
 await click('#b-music'); await click('#b-sfx');
 a = await A();
-const offLvl = await level(1200);
-check(!a.musicOn && !a.sfxOn && offLvl < .0005, `music + sound buttons silence everything (rms ${offLvl?.toFixed(5)})`);
+await page.waitForTimeout(400);
+a = await A(); // (an analyser on a suspended engine just holds its last buffer, so check the engine itself; tests/audio-mute.mjs counts sources)
+check(!a.musicOn && !a.sfxOn && a.state === 'suspended', `music + sound buttons silence everything (engine ${a.state})`);
 await click('#b-music');
 const musicOnly = await level();
 check((await A()).musicOn && !(await A()).sfxOn && musicOnly > .002, `music toggles back on independently (rms ${musicOnly?.toFixed(4)})`);

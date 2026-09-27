@@ -302,16 +302,23 @@ export class World {
     // trees
     const r = mulberry(21);
     const greens = ['#7f9c5a', '#6c8a4b', '#93ad6a', '#86a15f'].map(col);
+    // Trees are separate meshes (not merged) so one standing between the camera and the park can fade out.
+    this.trees = [];
     const tree = (x, z, s) => {
+      const T = new Static();
       const b = trs(V(x, 0, z), [0, r() * 6, 0], [s, s, s]);
-      S.add(new THREE.CylinderGeometry(.13, .22, 2.2, 9), trunk, b.clone().multiply(trs(V(0, 1.1, 0), [(r() - .5) * .1, 0, (r() - .5) * .1])), .35);
+      T.add(new THREE.CylinderGeometry(.13, .22, 2.2, 9), trunk, b.clone().multiply(trs(V(0, 1.1, 0), [(r() - .5) * .1, 0, (r() - .5) * .1])), .35);
       const blobs = 5 + Math.floor(r() * 3);
       for (let i = 0; i < blobs; i++) {
         const a = i / blobs * Math.PI * 2 + r(), rr = i === 0 ? 0 : .55 + r() * .35;
         const g = lumpy(.75 + r() * .35, 2, .35, r() * 50);
         const cc = greens[Math.floor(r() * greens.length)];
-        S.add(g, (px, py) => cc.clone().multiplyScalar(.8 + .25 * Math.min(1, Math.max(0, (py - 2) / 2.4))), b.clone().multiply(trs(V(Math.cos(a) * rr, 2.6 + (i === 0 ? .7 : r() * .6), Math.sin(a) * rr))));
+        T.add(g, (px, py) => cc.clone().multiplyScalar(.8 + .25 * Math.min(1, Math.max(0, (py - 2) / 2.4))), b.clone().multiply(trs(V(Math.cos(a) * rr, 2.6 + (i === 0 ? .7 : r() * .6), Math.sin(a) * rr))));
       }
+      // always "transparent" (opacity 1 when solid) so fading never changes the shader program
+      const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .86, transparent: true, opacity: 1 });
+      const mesh = T.mesh(mat); this.scene.add(mesh);
+      this.trees.push({ mesh, mat, c: V(x, 3.1 * s, z), r: 1.75 * s, o: 1 });
     };
     const TREES = [[-9.2, -6.2, 1.25], [-4.8, -7.6, 1.05], [1.4, -8.3, 1.3], [6.2, -7.8, 1.1], [10.4, -5.4, 1.2], [-10.8, -1.2, 1.1], [11.4, 1.2, 1.05], [-9.6, 5.4, .95], [10.2, 6.8, 1.0], [-13, -9, 1.4], [14, -10, 1.5], [-2, -12, 1.6], [7, -13, 1.4]];
     for (const [x, z, s] of TREES) tree(x, z, s);
@@ -401,6 +408,34 @@ export class World {
     for (const L of this.lampLights) L.intensity = lamp * 5;
     this.winMat.opacity = lamp * .9;
   }
+
+  // Drizzle: dim and grey the light (called after setHour each frame).
+  setRain(r) {
+    if (r <= .001) return;
+    const grey = col('#9aa3aa');
+    this.sun.intensity *= 1 - .6 * r; this.hemi.intensity *= 1 - .2 * r;
+    this.skyU.top.value.lerp(grey, .7 * r); this.skyU.hor.value.lerp(col('#c3c7c6'), .6 * r); this.skyU.sunGlow.value *= 1 - r;
+    this.scene.fog.color.lerp(col('#c3c7c6'), .6 * r);
+  }
+
+  // Fade any tree whose canopy sits between the camera and what it's looking at (target + plaza corners).
+  updateOcclusion(camPos, target, dt) {
+    const ends = [target, V(-PARK.w / 2, .3, -PARK.d / 2), V(PARK.w / 2, .3, -PARK.d / 2), V(-PARK.w / 2, .3, PARK.d / 2), V(PARK.w / 2, .3, PARK.d / 2)];
+    const seg = new THREE.Line3(), q = new THREE.Vector3();
+    for (const T of this.trees) {
+      let block = camPos.distanceTo(T.c) < T.r * 1.3;
+      for (const e of ends) {
+        if (block) break;
+        seg.set(camPos, e); seg.closestPointToPoint(T.c, true, q);
+        block = q.distanceTo(T.c) < T.r && q.distanceTo(e) > .5;
+      }
+      const want = block ? .18 : 1;
+      T.o += (want - T.o) * Math.min(1, dt * 6 || 1);
+      T.mat.opacity = T.o; T.mat.depthWrite = T.o > .95;
+      T.mesh.castShadow = true;
+    }
+  }
+  treeOpacity() { return this.trees.map(t => +t.o.toFixed(2)); }
 
   update(dt) {
     this.t += dt;

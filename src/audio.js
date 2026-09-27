@@ -16,7 +16,7 @@ export class Audio {
   set muted(v) { this.sfxOn = !v; this.applyGains(); }
 
   unlock() {
-    if (this.ac) { if (this.ac.state === 'suspended') this.ac.resume(); return; }
+    if (this.ac) { if (this.ac.state === 'suspended' && this.anyOn()) this.ac.resume(); return; }
     try {
       const ac = this.ac = new (window.AudioContext || window.webkitAudioContext)();
       // master → gentle compressor → speakers, so stacked coos + music never clip
@@ -27,13 +27,21 @@ export class Audio {
       this.applyGains();
       this.music = new Music(this);
       if (this.musicOn) this.music.start();
+      if (!this.anyOn()) ac.suspend();
     } catch (e) { this.ac = null; }
   }
+  anyOn() { return (this.sfxOn && this.sfxVol > 0) || (this.musicOn && this.musicVol > 0); }
   applyGains() {
     if (!this.ac) return;
-    const t = this.ac.currentTime;
-    this.sfx.gain.setTargetAtTime(this.sfxOn ? this.sfxVol : 0, t, .05);
-    this.mus.gain.setTargetAtTime(this.musicOn ? this.musicVol * 1.0 * this.duck : 0, t, .25);
+    const t = this.ac.currentTime, sfx = this.sfxOn ? this.sfxVol : 0, mus = this.musicOn ? this.musicVol * this.duck : 0;
+    for (const [node, v, tc] of [[this.sfx, sfx, .05], [this.mus, mus, .25]]) {
+      node.gain.cancelScheduledValues(t);
+      if (v === 0) node.gain.setValueAtTime(0, t); // muting is immediate and exact, not a fade toward zero
+      else { node.gain.setValueAtTime(node.gain.value, t); node.gain.setTargetAtTime(v, t, tc); }
+    }
+    // Both off: suspend the whole audio engine, so nothing can play (or even be scheduled) at all.
+    if (!this.anyOn()) { if (this.ac.state === 'running') this.ac.suspend(); }
+    else if (this.ac.state === 'suspended') this.ac.resume();
   }
   setSfx(on, vol) { if (on != null) this.sfxOn = on; if (vol != null) this.sfxVol = vol; this.applyGains(); }
   setMusic(on, vol) {
@@ -42,6 +50,21 @@ export class Audio {
     if (this.music) { if (this.musicOn) this.music.start(); else this.music.stop(); }
   }
   setMood(mood) { this.mood = mood; }
+  // Rain: a looping filtered-noise bed on the sfx bus (so muting sounds silences it too).
+  setRain(on) {
+    if (!this.ac || !!this.rainSrc === on) return;
+    if (on) {
+      const len = this.ac.sampleRate * 2, buf = this.ac.createBuffer(1, len, this.ac.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = this.rainSrc = this.ac.createBufferSource(); src.buffer = buf; src.loop = true;
+      const f = this.ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1400;
+      const g = this.rainGain = this.ac.createGain(); g.gain.setValueAtTime(0, this.ac.currentTime); g.gain.linearRampToValueAtTime(.06, this.ac.currentTime + 1.5);
+      src.connect(f); f.connect(g); g.connect(this.sfx); src.start();
+    } else {
+      const src = this.rainSrc, g = this.rainGain, t = this.ac.currentTime; this.rainSrc = null;
+      g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + 1.2); src.stop(t + 1.3);
+    }
+  }
   setDuck(v) { if (this.duck !== v) { this.duck = v; this.applyGains(); } }
   ok() { return this.ac && this.sfxOn && this.ac.state === 'running'; }
 

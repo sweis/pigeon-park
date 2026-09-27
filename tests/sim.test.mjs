@@ -78,6 +78,7 @@ for (const kind of Object.keys(HAPPENINGS)) {
   const stuck = h.pigeons.filter(p => p.busy).length;
   ok(!err && started && !h.happening && stuck === 0, `happening "${kind}" runs and ends cleanly${err ? ' — ' + err.message : ''}${stuck ? ` (${stuck} birds still busy)` : ''}`);
   if (kind === 'goldenegg') ok(h.pigeons.some(p => M.LOCI.some(l => l.mutOnly && l.mutOnly[p.pheno.e[l.id]])), 'golden egg hatches a bird showing a mutation-only trait');
+  if (kind === 'ufo') ok(h.pigeons.some(p => p.rev > 0 && p.accessory), 'UFO returns its abductee wearing a hat');
   if (kind === 'visitor') ok(!h.pigeons.some(p => p.visitor && !p.flying), 'visitor leaves when its time is up');
 }
 { // happenings fire on their own at "some", never at "off"

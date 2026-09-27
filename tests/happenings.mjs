@@ -6,9 +6,9 @@ await page.evaluate(() => { for (let i = 0; i < 12; i++) window.pp.spawn('founde
 const kinds = await page.evaluate(() => window.pp.happenings());
 const out = [];
 for (const k of kinds) {
-  await page.evaluate((k) => { if (k === 'moonwalk' || k === 'dance') window.pp.setTimeOfDay(k === 'dance' ? 22 : 23); else window.pp.setTimeOfDay(16.5); window.pp.cam('overview'); }, k);
+  await page.evaluate((k) => { if (k === 'moonwalk' || k === 'dance') window.pp.setTimeOfDay(k === 'dance' ? 22 : 23); else window.pp.setTimeOfDay(16.5); const g = window.__game; g.sim.nextHappeningAt = Infinity; window.pp.cam('overview'); }, k);
   const ok = await page.evaluate((k) => window.pp.happen(k), k);
-  await page.waitForTimeout(k === 'gust' ? 700 : k === 'goldenegg' ? 500 : 3500);
+  await page.waitForTimeout(k === 'gust' ? 700 : k === 'goldenegg' ? 500 : k === 'ufo' ? 5000 : k === 'runway' ? 11000 : k === 'staring' ? 5000 : 3500);
   const s = await state(page);
   check(ok && (s.happening === k || k === 'gust'), `${k} starts in-game (${s.happening})`);
   out.push(await shot(page, `happen-${k}.png`));

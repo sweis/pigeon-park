@@ -49,11 +49,21 @@ export class CameraRig {
   }
   zoom(f) {
     this.want.dist = THREE.MathUtils.clamp(this.want.dist * f, 1.6, this.maxDist);
-    if (this.want.dist > this.home * .8 && !this.follow) {
+    if (f > 1 && this.want.dist > this.home * .8 && !this.follow) {
       // drift the focus back toward the park centre as we pull out
       this.want.target.lerp(new THREE.Vector3(0, 0, -.2), .25);
     }
     this.name = 'custom';
+  }
+  // Zoom keeping a ground point (under the cursor / between the fingers) where it is on screen.
+  zoomAt(f, gp) {
+    const d0 = this.want.dist;
+    this.zoom(f);
+    if (!gp || this.follow) return;
+    const k = 1 - this.want.dist / d0; // >0 zooming in: move focus toward the point; <0: away from it
+    const t = this.want.target;
+    t.x = THREE.MathUtils.clamp(t.x + (gp.x - t.x) * k, -PARK.w / 2, PARK.w / 2);
+    t.z = THREE.MathUtils.clamp(t.z + (gp.z - t.z) * k, -PARK.d / 2, PARK.d / 2);
   }
   pan(dx, dz) {
     const t = this.want.target;
@@ -61,6 +71,8 @@ export class CameraRig {
     t.z = THREE.MathUtils.clamp(t.z + dz, -PARK.d / 2, PARK.d / 2);
     this.follow = null; this.name = 'custom';
   }
+  // Pans driven by fingers should track 1:1, not lag behind the smoothing.
+  snapTarget() { this.cur.target.copy(this.want.target); this.cur.dist = this.want.dist; this.apply(); }
   update(dt, followPos) {
     if (this.follow != null && followPos) this.want.target.set(followPos.x, .3 + followPos.y * .5, followPos.z);
     const C = this.cur, W = this.want, k = 7;

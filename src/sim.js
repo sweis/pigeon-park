@@ -99,7 +99,7 @@ export class Sim {
     this.speed = 1; this.mut = 'normal'; this.poopEnabled = true;
     this.events = [];
     this.ready = false;      // autosave gate: never save before the flock has loaded
-    this.happening = null; this.nextHappeningAt = 55; this.whimsy = 'some'; this.bread = null;
+    this.happening = null; this.nextHappeningAt = 55; this.whimsy = 'some'; this.bread = null; this.ufo = null; this.rain = 0;
     this.replies = [];       // queued "reply" bubbles: { id, at, text }
     this.night = nightOf(this.phase());
   }
@@ -244,6 +244,7 @@ export class Sim {
         p.dir = p.fdx > 0 ? -0.35 : Math.PI + 0.35;
         continue;
       }
+      if (p.state === 'abducted') { p.y += ((p.ty || 0) - p.y) * Math.min(1, dt * 1.6); continue; } // beamed up (and back down)
       if (p.y > 0) p.y = Math.max(0, p.y - dt * 3);
       if (p.state === 'walk' || p.state === 'roll' || p.state === 'blown' || p.state === 'moonwalk') {
         const x0 = p.x, z0 = p.z;
@@ -376,6 +377,13 @@ export class Sim {
       }
     }
     this.poops = this.poops.filter(pp => now - pp.at < 30);
+  }
+
+  // Swap a bird's accessory (UFO gift): new phenotype, maybe new breeds; the view rebuilds on p.rev.
+  setAccessory(p, acc) {
+    p.accessory = acc; p.pheno = M.computePheno(p.genome, acc); p.breeds = M.matchBreeds(p.pheno);
+    p.rev = (p.rev || 0) + 1;
+    this.notice(p);
   }
 
   // ---------- player actions ----------
