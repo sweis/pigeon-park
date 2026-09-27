@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { PARK, FOUNTAIN } from './sim.js';
+import { pigeonGeometry } from './pigeon3d.js';
+import { computePheno, WILD, LOCI } from './genetics.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const col = (h) => new THREE.Color(h);
@@ -226,7 +228,15 @@ export class World {
     S.add(lathe([[0, 0], [F.r + .08, 0], [F.r + .1, .08], [F.r, .44], [F.r + .1, .5], [F.r + .06, .56], [F.r - .16, .56], [F.r - .18, .12], [0, .12]]), (x, y) => y > .5 ? stone : stone2, trs(V(F.x, 0, F.z)), .3);
     S.add(lathe([[0, 0], [.34, 0], [.28, .2], [.2, .35], [.18, .9], [.24, 1.02], [0, 1.02]], 20), stone2, trs(V(F.x, .1, F.z)), .3);
     S.add(lathe([[0, 0], [.2, 0], [.62, .12], [.72, .26], [.66, .3], [.2, .2], [0, .2]], 28), stone, trs(V(F.x, 1.0, F.z)), .2);
-    S.add(lathe([[0, 0], [.09, 0], [.08, .35], [.14, .42], [.05, .6], [0, .64]], 14), stone, trs(V(F.x, 1.18, F.z)), .2);
+    // crown of the fountain: a short column, a plinth, and a stone pigeon statue that spits into the upper bowl
+    S.add(lathe([[0, 0], [.1, 0], [.085, .12], [.085, .2], [.16, .24], [.17, .3], [0, .3]], 20), stone, trs(V(F.x, 1.18, F.z)), .2);
+    const genome = Object.fromEntries(LOCI.map(l => [l.id, [WILD[l.id], WILD[l.id]]]));
+    const statue = pigeonGeometry(computePheno(genome, null)).geometry.clone();
+    for (const a of ['skinIndex', 'skinWeight', 'color']) statue.deleteAttribute(a);
+    const SY = 1.48, SK = 1.25, yaw = .35; // stands on the plinth in three-quarter profile
+    this.statue = { x: F.x, y: SY, z: F.z, k: SK, yaw };
+    const statueStone = col('#cfc5b3'), statueDark = col('#b7ac98');
+    S.add(statue, (x, y) => (y - SY) / SK > .42 ? statueDark : statueStone, trs(V(F.x, SY, F.z), [0, -yaw, 0], [SK, SK, SK]), .15);
     const water = new THREE.MeshStandardMaterial({ color: '#86bfcf', roughness: .08, metalness: .05, transparent: true, opacity: .88 });
     this.waterMat = water;
     const w1 = new THREE.Mesh(new THREE.CircleGeometry(F.r - .15, 40), water); w1.rotation.x = -Math.PI / 2; w1.position.set(F.x, .44, F.z); w1.receiveShadow = true;
@@ -398,8 +408,12 @@ export class World {
     this.dropData.forEach((d, i) => {
       const k = (t * d.sp * .8 + d.ph) % 1;
       let x, y, z;
-      if (d.tier === 0) { // top spout
-        const rr = k * .55; x = F.x + Math.cos(d.a) * rr; z = F.z + Math.sin(d.a) * rr; y = 1.82 + k * .5 - k * k * 1.2;
+      if (d.tier === 0) { // a stream from the statue's beak arcing down into the upper bowl
+        const st = this.statue, ca = Math.cos(st.yaw), sa = Math.sin(st.yaw);
+        const bx = st.x + ca * .29 * st.k, bz = st.z + sa * .29 * st.k, by = st.y + .485 * st.k;
+        const j = (d.a - Math.PI) * .01, h = .03 + k * .26;
+        x = bx + ca * h - sa * j; z = bz + sa * h + ca * j; y = by + k * .28 - k * k * (by + .28 - 1.27);
+        m.compose(V(x, y, z), new THREE.Quaternion(), V(.6, .6, .6)); this.drops.setMatrixAt(i, m); return;
       } else {            // spill from upper bowl rim to lower pool
         const rr = .72 + k * .35; x = F.x + Math.cos(d.a) * rr; z = F.z + Math.sin(d.a) * rr; y = 1.28 - k * k * .84;
       }
