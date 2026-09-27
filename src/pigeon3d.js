@@ -22,6 +22,13 @@ const PARENT = { body: 'root', head: 'body', wingL: 'body', wingR: 'body', legL:
 const H = V(.19, .5, 0);                        // head centre
 export const LEG_LIFT = .09;                    // extra leg length for stilt-legged birds
 export const NOODLE = V(.05, .22, 0);           // how far a noodle neck raises the head
+// Where the head sits relative to the standard pose: noodle necks lift it, pouters perch it on the crop.
+export function headOffset(e) {
+  const o = V(0, 0, 0);
+  if (e.neck === 'noodle') o.add(NOODLE);
+  if (e.crop === 'globe') o.add(V(.03, .1, 0));
+  return o;
+}
 const EYE = [V(H.x + .046, H.y + .022, -.061), V(H.x + .046, H.y + .022, .061)];
 const PIVOT = {
   root: V(0, 0, 0), body: V(0, .14, 0), head: V(.11, .33, 0),
@@ -377,8 +384,8 @@ function buildGeometry(pheno, lod = 0) {
   // ---- breast / neck ornaments ----
   if (e.crop === 'globe') {
     b.blob('body', {
-      ws: 24, hs: 18, matrix: trs(V(.165, .4, 0)),
-      deform: (u) => u.set(u.x * .175, u.y * .18, u.z * .165),
+      ws: 24, hs: 18, matrix: trs(V(.17, .385, 0)),
+      deform: (u) => u.set(u.x * .17, u.y * .175, u.z * .16),
       paint: (u) => tint(u.y > .45 && u.x > .1 ? mix(C.body, C.white, .22) : C.body, u, 8),
     });
   }
@@ -509,9 +516,10 @@ function buildGeometry(pheno, lod = 0) {
   // ---- accessories ----
   if (pheno.accessory) accessory(b, pheno.accessory, C);
 
-  if (e.neck === 'noodle') { // raise the head and bridge the gap with a long neck
-    b.shift(['head', 'eyeL', 'eyeR', 'spin'], NOODLE);
-    const a = V(.13, .36, 0), z = V(H.x - .03, H.y - .03, 0).add(NOODLE), d = z.clone().sub(a);
+  const HO = headOffset(e);
+  if (HO.lengthSq()) b.shift(['head', 'eyeL', 'eyeR', 'spin'], HO); // noodle neck / pouter: head raised
+  if (e.neck === 'noodle') { // bridge the gap with a long neck
+    const a = V(.13, .36, 0), z = V(H.x - .03, H.y - .03, 0).add(HO), d = z.clone().sub(a);
     b.blob('body', { ws: 14, hs: 12, matrix: alongY(a.clone().addScaledVector(d, .5), d), deform: (u) => u.set(u.x * .058, u.y * d.length() * .62, u.z * .054),
       paint: (u) => tint(showSheen && u.y < .2 ? mix(C.head, col(sheen[0]), .4) : C.head, u, 9) });
   }
@@ -647,7 +655,7 @@ export class PigeonRig {
       const par = PARENT[name];
       bone.position.copy(PIVOT[name]).sub(par ? PIVOT[par] : V(0, 0, 0));
       if (par === 'root') bone.position.y += pheno.e.legs === 'long' ? LEG_LIFT : 0;
-      if (name === 'head' && pheno.e.neck === 'noodle') bone.position.add(NOODLE);
+      if (name === 'head') bone.position.add(headOffset(pheno.e));
       bones[name] = bone; list.push(bone);
       if (par) bones[par].add(bone);
     }

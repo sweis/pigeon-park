@@ -15,8 +15,10 @@ export class Audio {
   get muted() { return !this.sfxOn; }                  // legacy name (old saves / callers)
   set muted(v) { this.sfxOn = !v; this.applyGains(); }
 
+  // Create (or resume) the engine — only ever from a user gesture, and only if something is switched on.
   unlock() {
-    if (this.ac) { if (this.ac.state === 'suspended' && this.anyOn()) this.ac.resume(); return; }
+    if (!this.anyOn()) return;
+    if (this.ac) { if (this.ac.state !== 'running' && this.ac.state !== 'closed') this.ac.resume(); return; }
     try {
       const ac = this.ac = new (window.AudioContext || window.webkitAudioContext)();
       // master → gentle compressor → speakers, so stacked coos + music never clip
@@ -27,10 +29,22 @@ export class Audio {
       this.applyGains();
       this.music = new Music(this);
       if (this.musicOn) this.music.start();
-      if (!this.anyOn()) ac.suspend();
+      // phones can wake a suspended context on their own (iOS after an interruption): if everything is
+      // muted when that happens, shut it down again
+      ac.onstatechange = () => { if (ac.state === 'running' && !this.anyOn()) this.shutdown(); };
     } catch (e) { this.ac = null; }
   }
-  anyOn() { return (this.sfxOn && this.sfxVol > 0) || (this.musicOn && this.musicVol > 0); }
+  anyOn() { return (this.sfxOn && this.sfxVol > .02) || (this.musicOn && this.musicVol > .02); }
+  // Both muted: close the engine entirely (nothing left to play, schedule or be woken up). Unmuting
+  // builds a fresh one from that tap.
+  shutdown() {
+    if (!this.ac) return;
+    this.music?.stop();
+    const ac = this.ac; ac.onstatechange = null;
+    this.ac = this.music = this.an = this.rainSrc = null;
+    this.master?.disconnect();
+    ac.close().catch(() => {});
+  }
   applyGains() {
     if (!this.ac) return;
     const t = this.ac.currentTime, sfx = this.sfxOn ? this.sfxVol : 0, mus = this.musicOn ? this.musicVol * this.duck : 0;
@@ -39,20 +53,23 @@ export class Audio {
       if (v === 0) node.gain.setValueAtTime(0, t); // muting is immediate and exact, not a fade toward zero
       else { node.gain.setValueAtTime(node.gain.value, t); node.gain.setTargetAtTime(v, t, tc); }
     }
-    // Both off: suspend the whole audio engine, so nothing can play (or even be scheduled) at all.
-    if (!this.anyOn()) { if (this.ac.state === 'running') this.ac.suspend(); }
+    if (!this.anyOn()) this.shutdown();
     else if (this.ac.state === 'suspended') this.ac.resume();
   }
-  setSfx(on, vol) { if (on != null) this.sfxOn = on; if (vol != null) this.sfxVol = vol; this.applyGains(); }
+  setSfx(on, vol) {
+    if (on != null) this.sfxOn = on; if (vol != null) this.sfxVol = vol;
+    if (!this.ac) this.unlock(); else this.applyGains(); // turning something on after a full mute: fresh engine
+  }
   setMusic(on, vol) {
     if (on != null) this.musicOn = on; if (vol != null) this.musicVol = vol;
-    this.applyGains();
+    if (!this.ac) { this.unlock(); return; }
+    this.applyGains(); if (!this.ac) return;
     if (this.music) { if (this.musicOn) this.music.start(); else this.music.stop(); }
   }
   setMood(mood) { this.mood = mood; }
   // Rain: a looping filtered-noise bed on the sfx bus (so muting sounds silences it too).
   setRain(on) {
-    if (!this.ac || !!this.rainSrc === on) return;
+    if (!this.ac || !this.sfxOn || !!this.rainSrc === on) return;
     if (on) {
       const len = this.ac.sampleRate * 2, buf = this.ac.createBuffer(1, len, this.ac.sampleRate), d = buf.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;

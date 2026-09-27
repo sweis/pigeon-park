@@ -13,6 +13,9 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
 * { box-sizing: border-box; }
+/* no browser page-zoom: double-tap and pinch on controls must never zoom the page (the game has its own camera) */
+html, body, #hud, #hud * { touch-action: manipulation; }
+.grid, .ach-list, .help, #inspector, .photo-wrap { touch-action: pan-y; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font-family: var(--font-b); -webkit-tap-highlight-color: transparent; }
 #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
 button { font: inherit; color: inherit; }
@@ -174,7 +177,7 @@ kbd { font-family: var(--font-b); font-size: 12px; font-weight: 700; background:
 .bar { height: 5px; border-radius: 3px; background: var(--n300); margin-top: 5px; overflow: hidden; } .bar i { display: block; height: 100%; background: var(--accent-2); }
 .foot.version { text-align: right; margin-top: 4px; }
 @media (max-width: 760px) { .ach-body { grid-template-columns: 1fr; overflow-y: auto; } .ach-list { max-height: none; } }
-#settings .code input { flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 999px; border: 1.5px solid var(--n300); background: var(--n100); color: var(--ink); }
+#settings .code input { flex: 1; min-width: 0; font: inherit; font-size: 16px; /* ≥16px: iOS won't auto-zoom the page on focus */ padding: 7px 12px; border-radius: 999px; border: 1.5px solid var(--n300); background: var(--n100); color: var(--ink); }
 #settings .code input:focus { outline: none; border-color: var(--accent); }
 
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }

@@ -35,7 +35,7 @@ async function silentFor(page, ms) {
   check(before > 0, `sound is playing before muting (${before} sources)`);
   await click(page, '#b-sfx'); await click(page, '#b-music');
   const r = await silentFor(page, 4000);
-  check(r.started === 0 && r.state === 'suspended' && !r.music, `A · buttons: both muted → ${r.started} sources in 4 s, engine ${r.state}`);
+  check(r.started === 0 && r.state === 'none' && !r.music, `A · buttons: both muted → ${r.started} sources in 4 s, engine ${r.state === 'none' ? 'closed' : r.state}`);
   await click(page, '#b-sfx');
   const back = await silentFor(page, 2000);
   check(back.started > 0 && back.state === 'running' && !back.music, `A · unmuting sounds brings coos back, music stays off (${back.started} sources)`);
@@ -55,7 +55,7 @@ async function silentFor(page, ms) {
   for (const s of ['musicvol', 'sfxvol']) { const b = await page.locator(`#settings [data-act="${s}"]`).boundingBox(); await page.mouse.click(b.x + 1, b.y + b.height / 2); }
   await click(page, '#b-settings');
   const r = await silentFor(page, 4000);
-  check(r.started === 0 && r.state === 'suspended', `C · sliders at zero → ${r.started} sources, engine ${r.state}`);
+  check(r.started === 0 && r.state === 'none', `C · sliders at zero → ${r.started} sources, engine ${r.state === 'none' ? 'closed' : r.state}`);
   // D: reload with both saved off, then play normally
   await page.evaluate(() => window.__game.save());
   await page.reload({ waitUntil: 'commit' }); await page.waitForFunction(() => window.ppReady === true);
@@ -63,6 +63,17 @@ async function silentFor(page, ms) {
   await page.mouse.click(1100, 700);
   const d = await silentFor(page, 5000);
   check(d.started === 0 && d.state !== 'running', `D · after reload (saved muted) → ${d.started} sources, engine ${d.state}`);
+  await ctx.close();
+}
+{ // E: phone — mute both from the Settings panel's phone row, with real taps
+  const ctx = await br.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }), page = await open(ctx, true);
+  const tapSel = async (sel) => { const b = await page.locator(sel).first().boundingBox(); await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2); await page.waitForTimeout(200); };
+  await page.touchscreen.tap(200, 500); await page.waitForTimeout(800);
+  await tapSel('#b-settings'); await tapSel('#settings .row.phone [data-act="sfx"]'); await tapSel('#settings .row.phone [data-act="music"]');
+  const s0 = await page.evaluate(() => window.__starts);
+  for (let i = 0; i < 5; i++) { const p = await page.evaluate((i) => window.pp.screenOf(window.__game.sim.pigeons[i].id), i); await page.touchscreen.tap(p.x, p.y); await page.waitForTimeout(700); }
+  const r = await page.evaluate((s0) => ({ started: window.__starts - s0, ac: !!window.__game.audio.ac }), s0);
+  check(r.started === 0 && !r.ac, `E · phone Settings row: both muted → ${r.started} sources while tapping birds, engine closed`);
   await ctx.close();
 }
 await br.close(); await srv.close();

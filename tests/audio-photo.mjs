@@ -21,8 +21,8 @@ const click = async (sel) => { const b = await page.locator(sel).boundingBox(); 
 await click('#b-music'); await click('#b-sfx');
 a = await A();
 await page.waitForTimeout(400);
-a = await A(); // (an analyser on a suspended engine just holds its last buffer, so check the engine itself; tests/audio-mute.mjs counts sources)
-check(!a.musicOn && !a.sfxOn && a.state === 'suspended', `music + sound buttons silence everything (engine ${a.state})`);
+a = await A(); // tests/audio-mute.mjs counts sources; here: the engine is gone entirely
+check(!a.musicOn && !a.sfxOn && !a.unlocked, `music + sound buttons silence everything (engine closed)`);
 await click('#b-music');
 const musicOnly = await level();
 check((await A()).musicOn && !(await A()).sfxOn && musicOnly > .002, `music toggles back on independently (rms ${musicOnly?.toFixed(4)})`);
@@ -85,6 +85,12 @@ const dl = page.waitForEvent('download');
 await click('.photo-actions [data-act="download"]');
 const d = await dl; const path = 'captures/photo-park.png'; await d.saveAs(path);
 check(fs.statSync(path).size > 200000 && d.suggestedFilename().startsWith('pigeon-'), `Download PNG saves ${d.suggestedFilename()} (${(fs.statSync(path).size / 1e6).toFixed(1)} MB)`);
+// Copy image: the PNG itself lands on the clipboard
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: srv.url.replace(/\/$/, '') });
+await click('.photo-actions [data-act="copy-photo"]');
+await page.waitForTimeout(400);
+const clip = await page.evaluate(async () => { const items = await navigator.clipboard.read(); const it = items[0]; const b = await it.getType('image/png'); const img = await createImageBitmap(b); return { types: it.types, w: img.width, h: img.height }; });
+check(clip.types.includes('image/png') && clip.w >= 1600, `Copy image puts the PNG on the clipboard (${clip.w}×${clip.h})`);
 await shot(page, 'photo-dialog.png');
 await page.keyboard.press('Escape');
 

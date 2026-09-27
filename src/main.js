@@ -87,6 +87,9 @@ class Game {
     this.diag = new Diagnostics(this, flag('debug'));
     this.bindInput();
     addEventListener('resize', () => this.resize());
+    // iOS Safari ignores user-scalable=no for pinch; its non-standard gesture events can still be cancelled
+    for (const ev of ['gesturestart', 'gesturechange']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+    document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
     this.saveTimer = setInterval(() => this.save(), 6000);
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.save(); });
     addEventListener('pagehide', () => this.save());

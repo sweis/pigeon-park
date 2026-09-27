@@ -24,6 +24,7 @@ const I = {
   musicOff: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><line x1="3" y1="3" x2="21" y2="21"/>'),
   camera: svg('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>', 14),
   download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', 14),
+  copy: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>', 14),
   share: svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>', 14),
   target: svg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/>'),
   pause: svg('<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'),
@@ -108,9 +109,9 @@ export class UI {
     // volume sliders (live while dragging; the settings panel is not rebuilt underneath them)
     this.root.addEventListener('input', (e) => {
       const a = e.target.closest('[data-act]'); if (!a) return;
-      const v = +a.value / 100;
-      if (a.dataset.act === 'sfxvol') this.g.audio.setSfx(v > 0, v);
-      if (a.dataset.act === 'musicvol') this.g.audio.setMusic(v > 0, v);
+      const v = +a.value / 100, on = v > .02; // a finger rarely lands on exactly 0: the first few % count as off
+      if (a.dataset.act === 'sfxvol') this.g.audio.setSfx(on, v);
+      if (a.dataset.act === 'musicvol') this.g.audio.setMusic(on, v);
       this.renderSound();
     });
     this.root.addEventListener('submit', (e) => {
@@ -150,6 +151,7 @@ export class UI {
       case 'photo': this.openPhoto({ id: +arg }); break;
       case 'photo-roost': this.openPhoto({ roost: +arg }); break;
       case 'share': this.sharePhoto(); break;
+      case 'copy-photo': this.copyPhoto(a); break;
       case 'speed': S.speed = +arg; this.renderSettings(true); g.save(); break;
       case 'mut': S.mut = arg; this.renderSettings(true); g.save(); break;
       case 'reset': // two-tap confirm; the armed state lives here because the panel re-renders every 0.4 s
@@ -312,12 +314,24 @@ export class UI {
     if (!res) { this.closeDialog(); return; }
     if (this.photoRes) URL.revokeObjectURL(this.photoRes.url);
     this.photoRes = res;
+    const canCopy = !!(window.ClipboardItem && navigator.clipboard?.write);
     const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File([res.blob], res.file, { type: 'image/png' })] }));
     el.querySelector('.photo-wrap').innerHTML = `<img src="${res.url}" alt="${esc(res.name)}" class="photo-img">`;
     el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
         <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} Download PNG</a>
+        ${canCopy ? `<button class="btn" data-act="copy-photo">${I.copy} <span>Copy image</span></button>` : ''}
         ${canShare ? `<button class="btn" data-act="share">${I.share} Share</button>` : ''}
         <span class="foot">${res.w} × ${res.h} px</span></div>`);
+  }
+  // Put the picture itself on the clipboard (paste straight into chats, docs, email).
+  async copyPhoto(btn) {
+    const r = this.photoRes; if (!r) return;
+    const label = btn.querySelector('span');
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': r.blob })]);
+      label.textContent = 'Copied!'; this.toast('Photo copied to the clipboard.', 'note');
+    } catch (e) { label.textContent = 'Copy failed'; }
+    setTimeout(() => { if (label.isConnected) label.textContent = 'Copy image'; }, 1800);
   }
   async sharePhoto() {
     const r = this.photoRes; if (!r) return;

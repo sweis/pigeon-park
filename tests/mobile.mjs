@@ -97,6 +97,16 @@ check((await page.evaluate(() => window.__game.cam.name)) === 'overview', 'recen
   await page.evaluate(() => { const S = window.__game.sim; S.happening = null; S.bread = null; for (const p of S.pigeons) p.busy = null; });
 }
 
+// the page itself never zooms: viewport locked, controls use touch-action manipulation, and double-tapping
+// the top-bar buttons leaves the page at scale 1 with the controls still on screen
+{
+  const z = await page.evaluate(() => ({ meta: document.querySelector('meta[name=viewport]').content, ta: getComputedStyle(document.querySelector('#b-settings')).touchAction, input: getComputedStyle(document.querySelector('#settings .code input') || document.body).fontSize }));
+  check(/maximum-scale=1/.test(z.meta) && /user-scalable=no/.test(z.meta) && z.ta === 'manipulation', `page zoom locked (viewport + touch-action ${z.ta})`);
+  for (const sel of ['#b-pedia', '#b-pause', '#b-settings']) { const b = await page.locator(sel).boundingBox(); for (let i = 0; i < 2; i++) { await touch('touchStart', [[b.x + b.width / 2, b.y + b.height / 2]]); await touch('touchEnd', []); await wait(60); } await wait(250); await page.keyboard.press('Escape'); }
+  const vv = await page.evaluate(() => ({ scale: visualViewport.scale, top: document.querySelector('#b-settings').getBoundingClientRect().top }));
+  check(vv.scale === 1 && vv.top >= 0 && vv.top < 60, `double-tapping controls doesn't zoom the page (scale ${vv.scale}, controls at ${vv.top.toFixed(0)} px)`);
+  await page.evaluate(() => { document.querySelector('#settings').classList.add('hidden'); window.__game.ui.closeDialog(); if (window.__game.paused) window.__game.togglePause(false); });
+}
 // compact layout: one-row top bar, sheet ≤ 40% of the screen
 await page.evaluate((id) => { window.pp.select(id); window.pp.render(); }, targets['near-right corner']);
 await wait(500); await page.evaluate(() => window.pp.render());
