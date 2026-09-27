@@ -300,7 +300,8 @@ export class Sim {
           if (best) this.replies.push({ id: best.id, at: now + .9 + rand() * .6, text: pick(M.REPLIES) });
         }
       }
-      if (rand() < .012) this.sound('coo', { voice: p.pheno.e.voice, vol: .5, id: p.id });
+      // ambient cooing: about the same park-wide rate whether there are 8 birds or 45
+      if (rand() < .012 * Math.min(1, 9 / pop)) this.sound('coo', { voice: p.pheno.e.voice, vol: .5, id: p.id });
     }
     // courtship
     if (!this.court && pop >= 2 && pop < cap && rand() < (0.10 * (1 - pop / cap) + 0.02) * sp) {

@@ -349,7 +349,14 @@ class Game {
     const S = this.sim;
     for (const e of S.events) {
       if (e.type === 'toast') this.ui?.toast(e.msg, e.kind);
-      else if (e.type === 'sound') { const p = e.id != null && S.byId(e.id); this.audio.play(e.name, { ...e, pitch: p ? this.cooPitch(p) : 1 }); }
+      else if (e.type === 'sound') {
+        const p = e.id != null && S.byId(e.id), o = { ...e, pitch: p ? this.cooPitch(p) : 1 };
+        if (p) { // place the coo where the bird is: pan by screen side, quieter with distance
+          const v = new THREE.Vector3(p.x, .3, p.z), d = v.distanceTo(this.cam.cam.position);
+          o.pan = v.project(this.cam.cam).x * .8; o.vol = (o.vol ?? 1) * Math.min(1, Math.max(.25, 9 / d));
+        }
+        this.audio.play(e.name, o);
+      }
       else if (e.type === 'sparkle') this.fx.burst(e.x, .45, e.z, e.tier);
       else if (e.type === 'hatch') this.fx.ring(e.x, e.z, '#e8b64c');
       else if (e.type === 'roosted') { this.fx.burst(e.x, .4, e.z, 1); this.ui?.renderRoost(); }

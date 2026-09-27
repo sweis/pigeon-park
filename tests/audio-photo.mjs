@@ -26,6 +26,27 @@ await click('#b-music');
 const musicOnly = await level();
 check((await A()).musicOn && !(await A()).sfxOn && musicOnly > .002, `music toggles back on independently (rms ${musicOnly?.toFixed(4)})`);
 
+// with music muted and sounds on, no music notes are scheduled at all (only coos)
+{
+  const r = await page.evaluate(async () => {
+    const A = window.__game.audio, M = A.music; A.setMusic(false); A.setSfx(true);
+    let notes = 0; const f = M.cooLead.bind(M); M.cooLead = (...a) => { notes++; return f(...a); };
+    await new Promise(res => setTimeout(res, 2500)); M.cooLead = f;
+    return { notes, timer: !!M.timer };
+  });
+  check(r.notes === 0 && !r.timer, `muted music schedules nothing while sounds stay on (${r.notes} notes)`);
+}
+// a hidden (background) tab schedules music far enough ahead to survive 1 s timer throttling
+{
+  const ahead = await page.evaluate(async () => {
+    const A = window.__game.audio; A.setMusic(true);
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    await new Promise(res => setTimeout(res, 300));
+    const a = A.music.next - A.ac.currentTime;
+    delete document.hidden; return a;
+  });
+  check(ahead > 1.2, `background tab: music scheduled ${ahead.toFixed(2)} s ahead`);
+}
 // volume sliders in settings, by real clicks on the track
 await click('#b-settings');
 const mv = await page.locator('#settings [data-act="musicvol"]').boundingBox();

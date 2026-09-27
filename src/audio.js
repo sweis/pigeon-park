@@ -53,7 +53,7 @@ export class Audio {
   }
   play(name, o = {}) {
     if (!this.ok()) return;
-    if (name === 'coo') return this.coo(o.voice, o.vol, o.pitch);
+    if (name === 'coo') return this.coo(o.voice, o.vol, o.pitch, o.pan);
     if (name === 'chime') return this.chime();
     if (name === 'pop') return this.pop();
     if (name === 'whoosh') return this.whoosh();
@@ -61,50 +61,65 @@ export class Audio {
   }
 
   // ---------- coos ----------
-  // pitch: per-bird multiplier (big birds low, dinky birds high). Each call picks a coo shape.
-  coo(voice, vol = 1, pitch = 1) {
+  // A pigeon coo is a breathy, throaty "oo" that GLIDES — not a clean tone that steps between notes
+  // (clean stepped tones from many birds read as a slow melody). Source: sawtooth + sine through an
+  // "oo" vowel formant, a little breath noise, a slight rattle, and small random pitch wobble.
+  // pitch: per-bird multiplier (big birds low, dinky birds high). pan/dist: where the bird is.
+  coo(voice, vol = 1, pitch = 1, pan = 0) {
     const ac = this.ac, t = ac.currentTime;
-    if (t - this.lastCoo < .08) return; this.lastCoo = t;
-    if (voice === 'laugher') return this.laugh(t, vol, pitch);
-    if (voice === 'trumpet') return this.trumpet(t, vol, pitch);
-    const base = (380 + Math.random() * 70) * pitch;
-    const shapes = ['coo', 'coo', 'cooroo', 'hooOOoo', 'trill', 'grumble'];
-    const shape = shapes[Math.floor(Math.random() * shapes.length)];
-    const syll = (at, f0, f1, f2, dur, amp, wobble = 0) => { // one "oo": swell, dip, recover
-      const o = ac.createOscillator(), f = ac.createBiquadFilter(), g = this.env(dur, amp * vol, this.sfx, at, .04);
-      o.type = 'sine'; f.type = 'lowpass'; f.frequency.value = 850 + pitch * 150; f.Q.value = 3;
-      o.frequency.setValueAtTime(f0, at); o.frequency.exponentialRampToValueAtTime(f1, at + dur * .35); o.frequency.exponentialRampToValueAtTime(f2, at + dur * .8);
-      if (wobble) { // rolling "rrr": amplitude tremolo
-        const lfo = ac.createOscillator(), lg = ac.createGain(); lfo.frequency.value = wobble; lg.gain.value = .5;
-        const trem = ac.createGain(); trem.gain.value = .5; lfo.connect(lg); lg.connect(trem.gain);
-        o.connect(f); f.connect(trem); trem.connect(g); lfo.start(at); lfo.stop(at + dur + .02);
-      } else { o.connect(f); f.connect(g); }
-      // a quiet octave-down body so it sounds throaty rather than whistled
-      const sub = ac.createOscillator(), sg = this.env(dur, amp * vol * .35, this.sfx, at, .05);
-      sub.type = 'triangle'; sub.frequency.setValueAtTime(f0 / 2, at); sub.frequency.exponentialRampToValueAtTime(f2 / 2, at + dur * .8);
-      sub.connect(sg); sub.start(at); sub.stop(at + dur + .02);
-      o.start(at); o.stop(at + dur + .02);
+    if (t - this.lastCoo < .12) return; this.lastCoo = t;
+    const out = ac.createStereoPanner ? ac.createStereoPanner() : ac.createGain();
+    if (out.pan) out.pan.value = Math.max(-.85, Math.min(.85, pan));
+    out.connect(this.sfx);
+    if (voice === 'laugher') return this.laugh(t, vol, pitch, out);
+    if (voice === 'trumpet') return this.trumpet(t, vol, pitch, out);
+    const base = (255 + Math.random() * 70) * pitch;
+    const j = () => 1 + (Math.random() - .5) * .06; // a few percent of wobble, so nothing lands on a scale
+    // one syllable: glide up to a peak then sag, with a rattle
+    const syll = (at, dur, amp, rise, sag, rattle) => {
+      const f0 = base * j(), pk = f0 * rise * j(), f2 = f0 * sag * j();
+      const saw = ac.createOscillator(), sin = ac.createOscillator();
+      saw.type = 'sawtooth'; sin.type = 'sine';
+      for (const o of [saw, sin]) {
+        o.frequency.setValueAtTime(f0, at);
+        o.frequency.exponentialRampToValueAtTime(pk, at + dur * .3);
+        o.frequency.exponentialRampToValueAtTime(f2, at + dur * .95);
+      }
+      const vowel = ac.createBiquadFilter(); vowel.type = 'bandpass'; vowel.frequency.value = 480 * pitch; vowel.Q.value = 2.2;
+      const soft = ac.createBiquadFilter(); soft.type = 'lowpass'; soft.frequency.value = 900;
+      const sg = ac.createGain(); sg.gain.value = .35;
+      const g = this.env(dur, amp * vol, out, at, .05);
+      const am = ac.createGain(); am.gain.value = 1 - rattle * .5;
+      const lfo = ac.createOscillator(), lg = ac.createGain(); lfo.frequency.value = 22 + Math.random() * 14; lg.gain.value = rattle * .5;
+      lfo.connect(lg); lg.connect(am.gain);
+      saw.connect(vowel); vowel.connect(am); sin.connect(sg); sg.connect(soft); soft.connect(am); am.connect(g);
+      // breath: band-limited noise under the voice
+      const br = this.noise(dur), bf = ac.createBiquadFilter(); bf.type = 'bandpass'; bf.frequency.value = 420 * pitch; bf.Q.value = 1.2;
+      br.connect(bf); bf.connect(this.env(dur, amp * vol * .45, out, at, .06));
+      for (const o of [saw, sin, lfo]) { o.start(at); o.stop(at + dur + .03); } br.start(at);
     };
-    if (shape === 'coo') syll(t, base, base * .74, base * .92, .3, .12);
-    else if (shape === 'cooroo') { syll(t, base, base * .8, base * .86, .2, .11); syll(t + .2, base * .95, base * .7, base * .78, .32, .12, 26); }
-    else if (shape === 'hooOOoo') { syll(t, base * .85, base * .82, base * .9, .16, .08); syll(t + .15, base * 1.12, base * 1.02, base * .95, .24, .13); syll(t + .38, base * .9, base * .7, base * .74, .3, .09); }
-    else if (shape === 'trill') syll(t, base * 1.05, base * .78, base * .88, .42, .12, 32);
-    else syll(t, base * .7, base * .6, base * .66, .36, .1, 14); // grumble
+    const shapes = ['coo', 'coo', 'double', 'long', 'rattle', 'grumble'];
+    const shape = shapes[Math.floor(Math.random() * shapes.length)];
+    if (shape === 'coo') syll(t, .42, .16, 1.1, .82, .25);
+    else if (shape === 'double') { syll(t, .2, .12, 1.06, .9, .2); syll(t + .24, .45, .16, 1.12, .8, .3); }
+    else if (shape === 'long') syll(t, .75, .15, 1.14, .78, .35);
+    else if (shape === 'rattle') syll(t, .5, .15, 1.08, .85, .75);
+    else syll(t, .38, .13, 1.02, .88, .55); // low grumble
   }
-  trumpet(t, vol, pitch) {
+  trumpet(t, vol, pitch, out = this.sfx) {
     const ac = this.ac, o = ac.createOscillator(), f = ac.createBiquadFilter();
     o.type = 'sawtooth'; o.frequency.setValueAtTime(210 * pitch, t); o.frequency.linearRampToValueAtTime(160 * pitch, t + .4);
     const lfo = ac.createOscillator(), lg = ac.createGain(); lfo.frequency.value = 7; lg.gain.value = 6; lfo.connect(lg); lg.connect(o.frequency); // drumroll wobble
     f.type = 'lowpass'; f.frequency.value = 620;
-    o.connect(f); f.connect(this.env(.55, .07 * vol)); o.start(t); o.stop(t + .56); lfo.start(t); lfo.stop(t + .56);
+    o.connect(f); f.connect(this.env(.55, .07 * vol, out)); o.start(t); o.stop(t + .56); lfo.start(t); lfo.stop(t + .56);
   }
-  laugh(t, vol, pitch) { // a rapid descending "hoo-hoo-hoo-hoo"
+  laugh(t, vol, pitch, out = this.sfx) { // a rapid descending "hoo-hoo-hoo-hoo"
     const ac = this.ac;
     for (let i = 0; i < 5; i++) {
       const o = ac.createOscillator(), f = ac.createBiquadFilter(), t0 = t + i * .085;
       o.type = 'sine'; o.frequency.setValueAtTime((520 - i * 30) * pitch, t0); o.frequency.exponentialRampToValueAtTime((380 - i * 25) * pitch, t0 + .07);
       f.type = 'lowpass'; f.frequency.value = 1000;
-      o.connect(f); f.connect(this.env(.08, .09 * vol, this.sfx, t0, .015)); o.start(t0); o.stop(t0 + .09);
+      o.connect(f); f.connect(this.env(.08, .09 * vol, out, t0, .015)); o.start(t0); o.stop(t0 + .09);
     }
   }
   chime() { const t = this.ac.currentTime; [740, 1108].forEach((fr, i) => { const o = this.ac.createOscillator(); o.type = 'triangle'; o.frequency.value = fr; o.connect(this.env(.7 + i * .2, .1, this.sfx, t + i * .09)); o.start(t + i * .09); o.stop(t + 1); }); }
@@ -143,7 +158,9 @@ class Music {
   stop() { clearInterval(this.timer); this.timer = null; }
   schedule() {
     const ac = this.ac;
-    while (this.next < ac.currentTime + .15) {
+    // Background tabs throttle timers to ~1 s, so look further ahead there or the music stutters.
+    const ahead = document.hidden ? 1.6 : .15;
+    while (this.next < ac.currentTime + ahead) {
       const M = MOODS[this.a.mood] || MOODS.day, dur16 = 60 / M.bpm / 4;
       if (this.step % 16 === 0) this.newBar(M);
       this.play(this.step % 16, this.next, dur16, M);
