@@ -26,6 +26,26 @@ export function fountainClearance(p) {
   const qx = ax + ex * t, qz = az + ez * t, d = Math.hypot(qx - FOUNTAIN.x, qz - FOUNTAIN.z);
   return { gap: d - (FOUNTAIN.lip + BODY.half * k), qx, qz, d };
 }
+// Bird-to-bird collisions use the body's core (chest to rump, beak and tail-tip overlaps read fine):
+// a capsule along the heading, scaled by breed size and chick age.
+const CORE = { back: .3, front: .2, r: .13 };
+const chickK = (age) => age < 9 ? .58 : age < 18 ? .78 : 1; // same growth steps as the view
+export function coreOf(p, t, o = {}) {
+  const k = bodyScale(p) * chickK(t - p.born), cx = Math.cos(p.dir), cz = Math.sin(p.dir);
+  o.ax = p.x - cx * CORE.back * k; o.az = p.z - cz * CORE.back * k; o.bx = p.x + cx * CORE.front * k; o.bz = p.z + cz * CORE.front * k;
+  o.r = CORE.r * k; o.reach = (CORE.back + CORE.r) * k;
+  return o;
+}
+// Closest points between segments a0→a1 and b0→b1 (2D). Returns { d, nx, nz } with n pointing from b to a.
+export function segGap(A, B) {
+  const ux = A.bx - A.ax, uz = A.bz - A.az, vx = B.bx - B.ax, vz = B.bz - B.az, wx = A.ax - B.ax, wz = A.az - B.az;
+  const a = ux * ux + uz * uz, b = ux * vx + uz * vz, c = vx * vx + vz * vz, d = ux * wx + uz * wz, e = vx * wx + vz * wz;
+  const D = a * c - b * b;
+  let sN = D < 1e-9 ? 0 : clamp((b * e - c * d) / D, 0, 1), tN = c < 1e-9 ? 0 : (b * sN + e) / c;
+  if (tN < 0) { tN = 0; sN = a < 1e-9 ? 0 : clamp(-d / a, 0, 1); } else if (tN > 1) { tN = 1; sN = a < 1e-9 ? 0 : clamp((b - d) / a, 0, 1); }
+  const px = A.ax + ux * sN - (B.ax + vx * tN), pz = A.az + uz * sN - (B.az + vz * tN), dist = Math.hypot(px, pz);
+  return dist > 1e-6 ? { d: dist, nx: px / dist, nz: pz / dist } : { d: 0, nx: 1, nz: 0 };
+}
 export const ROOST_SIZE = 8;
 export const TREE_DEPTH = 3;      // family records kept per bird: parents, grandparents, great-grandparents
 // Park layout outside the plaza, in rings: benches/lamps → open lawn → monument ring → hedges, bushes, trees.
@@ -110,6 +130,7 @@ export class Sim {
     this.ready = false;      // autosave gate: never save before the flock has loaded
     this.happening = null; this.nextHappeningAt = 55; this.whimsy = 'some'; this.bread = null; this.ufo = null; this.rain = 0;
     this.replies = [];       // queued "reply" bubbles: { id, at, text }
+    this.said = new Map();   // recently said lines per pool (no quick repeats)
     this.night = nightOf(this.phase());
   }
 
@@ -244,6 +265,7 @@ export class Sim {
     while (this.thinkAcc >= THINK_DT) {
       this.thinkAcc -= THINK_DT; this.think();
       for (const p of this.pigeons) if (!p.flying && !p.held) this.keepOut(p); // think() may have turned birds
+      this.separate(); // ...or placed / turned them into a neighbour
     }
   }
 
@@ -273,7 +295,48 @@ export class Sim {
         }
       } else this.keepOut(p); // turning in place (courting, pecking) can swing a tail or beak into the rim
     }
+    this.separate();
   }
+
+  // Birds don't walk through each other: overlapping body capsules are pushed apart along the gap (half
+  // each), a couple of passes per step. A walker that stays blocked gives up and stands where it is.
+  separate() {
+    const list = this._solid || (this._solid = []), cores = this._cores || (this._cores = []);
+    list.length = 0;
+    for (const p of this.pigeons) if (!p.flying && !p.held && p.state !== 'abducted' && p.y < .3) list.push(p);
+    const n = list.length, C = this.court;
+    // a few relaxation passes; the fountain and park edge are applied inside each pass so a bird pinned
+    // against the rim doesn't get shoved back into its neighbour afterwards (the neighbour moves instead)
+    for (let pass = 0; pass < 6; pass++) {
+      for (let i = 0; i < n; i++) cores[i] = coreOf(list[i], this.t, cores[i]);
+      let moved = false;
+      for (let i = 0; i < n; i++) {
+        const p = list[i], A = cores[i];
+        for (let j = i + 1; j < n; j++) {
+          const q = list[j], B = cores[j];
+          const lim = A.reach + B.reach, dx = p.x - q.x, dz = p.z - q.z;
+          if (dx * dx + dz * dz > lim * lim) continue;
+          if (C && ((C.a === p.id && C.b === q.id) || (C.a === q.id && C.b === p.id))) continue; // a courting pair gets close on purpose
+          const g = segGap(A, B), over = A.r + B.r - g.d;
+          if (over <= 0) continue;
+          const h = over / 2 + 1e-4;
+          p.x += g.nx * h; p.z += g.nz * h; q.x -= g.nx * h; q.z -= g.nz * h;
+          p.bump = q.bump = true; moved = true;
+        }
+      }
+      if (!moved) break;
+      for (const p of list) if (p.bump) { p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2); this.keepOut(p); p.blockedNow = true; p.bump = false; }
+    }
+    for (const p of list) {
+      if (!p.blockedNow) { p.blocked = 0; continue; }
+      p.blockedNow = false;
+      if (p.state === 'walk' && !p.courting && !p.busy && (p.blocked = (p.blocked || 0) + 1) > 20) { // ~0.7 s stuck: stop (and say so)
+        p.tx = p.x; p.tz = p.z; p.state = 'idle'; p.blocked = 0;
+        if (!p.emote && rand() < .35) { p.emote = { kind: 'say', text: M.say(M.BUMP_LINES, this.said) }; p.emoteUntil = this.t + 1.8; }
+      }
+    }
+  }
+
 
   think() {
     const now = this.t, sp = SP, cap = this.cap;
@@ -307,11 +370,11 @@ export class Sim {
         else { p.state = 'idle'; p.stateUntil = now + .9 + rand() * 2.2; }
       }
       if (!p.emote && p.state !== 'sleep' && rand() < .004) {
-        p.emote = { kind: 'say', text: this.night > .5 && rand() < .4 ? M.pick(M.NIGHT_THOUGHTS) : M.pick(M.THOUGHTS) }; p.emoteUntil = now + 2.6;
+        p.emote = { kind: 'say', text: this.night > .5 && rand() < .4 ? M.say(M.NIGHT_THOUGHTS, this.said) : M.say(M.THOUGHTS, this.said) }; p.emoteUntil = now + 2.6;
         if (rand() < .3) { // someone nearby has opinions
           let best = null, bd = 1.6;
           for (const q of this.pigeons) { if (q === p || q.flying || q.held) continue; const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < bd) { bd = d; best = q; } }
-          if (best) this.replies.push({ id: best.id, at: now + .9 + rand() * .6, text: M.pick(M.REPLIES) });
+          if (best) this.replies.push({ id: best.id, at: now + .9 + rand() * .6, text: M.say(M.REPLIES, this.said) });
         }
       }
       // ambient cooing: about the same park-wide rate whether there are 8 birds or 45
@@ -330,7 +393,7 @@ export class Sim {
           this.court = { a: a.id, b: b.id, mx, mz, until: now + 12, eggAt: 0 };
           a.courting = b.courting = true;
           this.walkTo(a, mx - .24, mz, 56 * PX * sp);
-          if (rand() < .45) { a.emote = { kind: 'say', text: M.pick(M.COURT_LINES) }; a.emoteUntil = now + 2.4; }
+          if (rand() < .45) { a.emote = { kind: 'say', text: M.say(M.COURT_LINES, this.said) }; a.emoteUntil = now + 2.4; }
           this.walkTo(b, mx + .24, mz, 56 * PX * sp);
         }
       }
@@ -364,7 +427,7 @@ export class Sim {
         this.eggs = this.eggs.filter(x => x !== eg);
         const acc = M.rollAccessory(0.02);
         const baby = this.spawn({ genome: eg.genome, accessory: acc, name: M.randomName(), gen: eg.gen, x: eg.x, z: eg.z, dir: Math.PI / 2, how: eg.golden ? 'golden' : 'hatch', par: eg.parents || null });
-        if (rand() < .6) { baby.emote = { kind: 'say', text: M.pick(M.BABY_LINES) }; baby.emoteUntil = now + 2.6; }
+        if (rand() < .6) { baby.emote = { kind: 'say', text: M.say(M.BABY_LINES, this.said) }; baby.emoteUntil = now + 2.6; }
         if (eg.golden) { this.sparkle(eg.x, eg.z, 3); this.toast('The golden egg hatched… something: ' + baby.pheno.label + (baby.breeds.length ? ' (' + baby.breeds.map(b => b.name).join(', ') + ')' : '') + '.', 'breed'); }
         this.stats.births++;
         this.sound('pop');
@@ -489,7 +552,7 @@ export class Sim {
   grab(id) {
     const p = this.byId(id); if (!p || p.flying) return null;
     p.held = true; p.courting = false; p.state = 'held'; p.busy = null;
-    p.emote = { kind: 'say', text: M.pick(M.HELD_LINES) }; p.emoteUntil = this.t + 2.4;
+    p.emote = { kind: 'say', text: M.say(M.HELD_LINES, this.said) }; p.emoteUntil = this.t + 2.4;
     if (this.court && (this.court.a === id || this.court.b === id)) {
       const o = this.byId(this.court.a === id ? this.court.b : this.court.a);
       if (o) { o.courting = false; o.stateUntil = this.t; }

@@ -1,5 +1,5 @@
 // Headless sim assertions — no browser. Run: node tests/sim.test.mjs
-import { Sim, PARK, FOUNTAIN, FIXED_DT, TREE_DEPTH, fountainClearance } from '../src/sim.js';
+import { Sim, PARK, FOUNTAIN, FIXED_DT, TREE_DEPTH, fountainClearance, coreOf, segGap } from '../src/sim.js';
 import { setSeed } from '../src/rng.js';
 import * as M from '../src/genetics.js';
 import { HAPPENINGS, startHappening } from '../src/happenings.js';
@@ -86,6 +86,45 @@ for (const kind of Object.keys(HAPPENINGS)) {
   const run = (w) => { setSeed(9); const h = new Sim(); h.initFlock(null); h.whimsy = w; if (w === 'off') h.nextHappeningAt = Infinity; let n = 0; const orig = h.emit.bind(h); h.emit = (e) => { if (e.type === 'happening') n++; orig(e); }; for (let i = 0; i < 600 / FIXED_DT; i++) h.step(); return n; };
   const some = run('some'), off = run('off');
   ok(some >= 3 && off === 0, `happenings happen on their own (10 min: ${some} at "some", ${off} at "off")`);
+}
+// birds don't pass through each other: body capsules may touch for a frame or two (a push resolves within
+// ~2 steps) but no pair stays overlapped. Gusts (everyone blown into a pile on purpose) are exempt.
+{
+  const measure = (seed, secs, setup) => {
+    setSeed(seed); const S = new Sim(); S.initFlock(null); setup?.(S);
+    const run = new Map(); let longest = 0, worst = 0;
+    for (let i = 0; i < secs / FIXED_DT; i++) {
+      S.step(); const seen = new Set(), C = S.court;
+      const L = S.pigeons.filter(p => !p.flying && !p.held && p.state !== 'abducted' && p.y < .3);
+      for (let a = 0; a < L.length; a++) for (let b = a + 1; b < L.length; b++) {
+        const p = L[a], q = L[b];
+        if (C && [C.a, C.b].includes(p.id) && [C.a, C.b].includes(q.id)) continue;
+        if (p.state === 'blown' || q.state === 'blown') continue;
+        const A = coreOf(p, S.t), B = coreOf(q, S.t), o = A.r + B.r - segGap(A, B).d;
+        worst = Math.max(worst, o);
+        if (o > .03) { const k = p.id + ':' + q.id; seen.add(k); const n = (run.get(k) || 0) + 1; run.set(k, n); longest = Math.max(longest, n); }
+      }
+      for (const k of run.keys()) if (!seen.has(k)) run.delete(k);
+    }
+    return { longest, worst };
+  };
+  for (const seed of [42, 7]) {
+    const m = measure(seed, 600);
+    ok(m.longest <= 3, `seed ${seed}, 10 min: birds never stay inside each other (longest overlap ${m.longest} steps, worst single-frame ${(m.worst * 100).toFixed(1)} cm)`);
+  }
+  for (const kind of ['bread', 'parliament', 'conga', 'staring', 'runway']) {
+    const c = measure(5, 45, (S) => { for (let i = 0; i < 25; i++) S.spawn({ genome: M.founderGenome(), name: 'x', adult: true, quiet: true }); S.nextHappeningAt = Infinity; startHappening(S, kind); });
+    ok(c.longest <= 3, `${kind} crowd: no birds passing through each other (longest overlap ${c.longest} steps, worst ${(c.worst * 100).toFixed(1)} cm)`);
+  }
+}
+// speech: big pools, and no line comes back until much of its pool has been used
+{
+  setSeed(11); const S = new Sim(); S.initFlock(null);
+  const said = [];
+  for (let i = 0; i < 1200 / FIXED_DT; i++) { S.step(); for (const p of S.pigeons) if (p.emote?.text && p.emote.text !== p._last) { said.push(p.emote.text); p._last = p.emote.text; } }
+  const thoughts = said.filter(t => M.THOUGHTS.includes(t));
+  let quick = 0; for (let i = 0; i < thoughts.length; i++) if (thoughts.slice(Math.max(0, i - 40), i).includes(thoughts[i])) quick++;
+  ok(M.THOUGHTS.length >= 120 && thoughts.length > 40 && quick === 0, `birds don't repeat a thought within 40 lines (${thoughts.length} thoughts in 20 min, ${new Set(thoughts).size} different, ${quick} quick repeats)`);
 }
 // family tree: hatchlings record their parents, clones share them, records survive save/load and stay bounded
 {

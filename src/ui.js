@@ -34,6 +34,7 @@ const I = {
   search: svg('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16" y2="16"/>', 13),
 };
 
+const PHONE = matchMedia('(max-width: 760px)'); // same breakpoint as the compact CSS layout
 const TIER_NAME = { 1: 'uncommon', 2: 'rare', 3: 'impossible' };
 const traitLabel = (key) => M.ALLELE_META[key]?.label || M.ACCESSORIES[key.split(':')[1]]?.label || key;
 // A trait chip that starts the finder (highlights every bird that shows or carries it).
@@ -147,7 +148,20 @@ export class UI {
     el.className = 'toast t-' + kind; el.textContent = msg;
     box.appendChild(el);
     while (box.children.length > 3) box.firstChild.remove();
+    this.placeToasts();
     setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 4200);
+  }
+  // Toasts sit above the roost bar; on phones the bird card / intro are bottom sheets over that spot,
+  // so lift the toasts to just above whichever sheet is open (they never draw over the UI).
+  placeToasts() {
+    const box = this.$('toasts'); let bottom = '';
+    if (PHONE.matches) for (const id of ['inspector', 'intro']) {
+      const el = this.$(id); if (el.classList.contains('hidden')) continue;
+      // layout box (offsetTop/Height), not the on-screen rect: the card slides in with a transform
+      const H = this.root.clientHeight; // #hud fills the viewport; #toasts is positioned inside it
+      if (el.offsetTop + el.offsetHeight > H - 140) bottom = Math.max(parseFloat(bottom) || 0, H - el.offsetTop + 8) + 'px';
+    }
+    if (box.style.bottom !== bottom) box.style.bottom = bottom;
   }
   onClick(e) {
     if (this.suppressClick) { this.suppressClick = false; return; } // the click finishing a click-off press
@@ -539,6 +553,7 @@ export class UI {
       this.$('b-pedia').classList.toggle('new', nP > this.seen.pedia);
       this.renderInspector(); this.renderSettings(); this.renderRoost(); this.renderFind();
       this.$('intro').classList.toggle('hidden', this.introDone || S.selId != null || this.roostSel != null || !!this.dialog);
+      this.placeToasts();
     }
     const rc = this.g.cam.name === 'overview' || this.g.cam.name === 'hud-check';
     if (rc !== this._rcHidden) { this._rcHidden = rc; this.$('recenter').classList.toggle('hidden', rc); }
