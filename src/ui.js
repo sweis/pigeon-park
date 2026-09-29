@@ -1,7 +1,7 @@
 // Pigeon Park — DOM HUD over the 3D canvas. Plain DOM, event delegation via data-act attributes.
 
-import * as THREE from 'three';
 import * as M from './genetics.js';
+import { toScreen } from './util.js';
 import { SPEEDS, MUTATIONS, ROOST_SIZE, phaseToHour } from './sim.js';
 import { HAPPENINGS, WHIMSY, gapFor } from './happenings.js';
 import { ACHIEVEMENTS } from './achievements.js';
@@ -24,7 +24,6 @@ const I = {
   musicOff: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><line x1="3" y1="3" x2="21" y2="21"/>'),
   camera: svg('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>', 14),
   download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', 14),
-  copy: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>', 14),
   share: svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>', 14),
   target: svg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/>'),
   pause: svg('<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'),
@@ -244,27 +243,28 @@ export class UI {
   // ---------- inspector ----------
   renderInspector() {
     const S = this.sim, P = this.g.portraits, el = this.$('inspector');
-    let d = null;
-    const sel = S.selId != null ? S.byId(S.selId) : null;
-    if (sel && !sel.flying) {
-      const carries = M.carriersOf(sel.genome);
-      d = { img: P.get(sel.pheno), kicker: 'Specimen no. ' + String(sel.id).padStart(3, '0'), name: sel.name,
-        meta: 'Generation ' + sel.gen + ' · ' + fmtAge(S.age(sel)), color: sel.pheno.label, breeds: sel.breeds, traits: sel.pheno.traits, carries,
-        actions: `<button class="btn primary" data-act="clone" data-arg="${sel.id}">${I.clone} Clone</button>
-                  <button class="btn" data-act="roost-add" data-arg="${sel.id}">${I.roost} Roost</button>
-                  <button class="btn ghost" data-act="dismiss" data-arg="${sel.id}">Dismiss<span class="opt"> politely</span></button>`,
-        follow: sel.id, photo: `data-act="photo" data-arg="${sel.id}"`, lid: sel.lid, clip: sel.id };
-    } else if (this.roostSel != null && S.roost[this.roostSel]) {
-      const i = this.roostSel, r = S.roost[i], ph = M.computePheno(r.genome, r.accessory);
+    const sel = S.selId != null ? S.byId(S.selId) : null, live = sel && !sel.flying ? sel : null;
+    const ri = live ? null : this.roostSel, r = ri != null ? S.roost[ri] : null;
+    if (!live && !r) { if (this._insKey) { el.classList.add('hidden'); this._insKey = null; } return; }
+    // cheap key first: rebuild only when the bird, its look (rev), its age label or the follow state changes
+    const key = live ? `s|${live.id}|${live.rev || 0}|${fmtAge(S.age(live))}|${this.g.cam.follow}` : `r|${ri}|${r.name}|${r.lid}`;
+    if (key === this._insKey) return; this._insKey = key;
+    let d;
+    if (live) {
+      d = { img: P.get(live.pheno), kicker: 'Specimen no. ' + String(live.id).padStart(3, '0'), name: live.name,
+        meta: 'Generation ' + live.gen + ' · ' + fmtAge(S.age(live)), color: live.pheno.label, breeds: live.breeds, traits: live.pheno.traits, carries: M.carriersOf(live.genome),
+        actions: `<button class="btn primary" data-act="clone" data-arg="${live.id}">${I.clone} Clone</button>
+                  <button class="btn" data-act="roost-add" data-arg="${live.id}">${I.roost} Roost</button>
+                  <button class="btn ghost" data-act="dismiss" data-arg="${live.id}">Dismiss<span class="opt"> politely</span></button>`,
+        follow: live.id, photo: `data-act="photo" data-arg="${live.id}"`, lid: live.lid, clip: live.id };
+    } else {
+      const ph = M.computePheno(r.genome, r.accessory);
       d = { img: P.get(ph), kicker: 'Roost resident', name: r.name, meta: 'Generation ' + r.gen + ' · kept bird', color: ph.label,
         breeds: M.matchBreeds(ph), traits: ph.traits, carries: M.carriersOf(r.genome),
-        actions: `<button class="btn primary" data-act="clone-out" data-arg="${i}">${I.clone} Clone into park</button>
-                  <button class="btn" data-act="release" data-arg="${i}">Release to park</button>
-                  <button class="btn ghost" data-act="let-go" data-arg="${i}">Let go</button>`, photo: `data-act="photo-roost" data-arg="${i}"`, lid: r.lid };
+        actions: `<button class="btn primary" data-act="clone-out" data-arg="${ri}">${I.clone} Clone into park</button>
+                  <button class="btn" data-act="release" data-arg="${ri}">Release to park</button>
+                  <button class="btn ghost" data-act="let-go" data-arg="${ri}">Let go</button>`, photo: `data-act="photo-roost" data-arg="${ri}"`, lid: r.lid };
     }
-    if (!d) { el.classList.add('hidden'); this._insKey = null; return; }
-    const key = JSON.stringify([d.kicker, d.name, d.meta, this.g.cam.follow]);
-    if (key === this._insKey) return; this._insKey = key;
     el.classList.remove('hidden');
     el.innerHTML = `
       <button class="btn icon close" data-act="deselect" aria-label="Close">${I.x}</button>
@@ -354,7 +354,7 @@ export class UI {
     el.querySelector('.photo-wrap').innerHTML = `<img src="${res.url}" alt="${esc(res.name)}" class="photo-img">`;
     el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
         <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} Download PNG</a>
-        ${canCopy ? `<button class="btn" data-act="copy-photo">${I.copy} <span>Copy image</span></button>` : ''}
+        ${canCopy ? `<button class="btn" data-act="copy-photo">${I.clone} <span>Copy image</span></button>` : ''}
         ${canShare ? `<button class="btn" data-act="share">${I.share} Share</button>` : ''}
         <span class="foot">${res.w} × ${res.h} px</span></div>`);
   }
@@ -512,7 +512,9 @@ export class UI {
           <li>A registry card reveals its recipe once you've observed every trait it needs. Found breeds can be cloned straight into the park.</li>
           <li>Fantasy colours only appear through mutation — turn Mutations up to <b>${MUTATIONS[2].label}</b> to fish for them.</li>
           <li>Park speed goes from ${SPEEDS[0].label} to ${SPEEDS[SPEEDS.length - 1].label}. It's fine to just leave the park running.</li>
-          <li>Tap <b>Photo</b> on any bird for a high-res picture card you can download or share.</li>
+          <li>Hunting a breed? Tap a trait (in a bird's card, the Pigeonpedia or a registry recipe) to <b>find</b> it: birds that show it get a green marker, hidden carriers a yellow one. Clone those.</li>
+          <li><b>Family</b> on a bird's card shows its parents, grandparents and great-grandparents.</li>
+          <li>Tap <b>Photo</b> on any bird for a high-res picture card, or <b>Clip</b> for a 6-second vertical video (with captions and music) to post.</li>
           <li>Music and sound effects have separate buttons in the top bar and volume sliders in settings.</li>
           <li>Milestones build <b>monuments</b> on the lawn around the plaza. Tap one to see what it's for and how close you are to the rest.</li>
           <li>Some words, typed while the park is open (or entered under <b>Secret code</b> in settings), do things.</li>
@@ -529,8 +531,8 @@ export class UI {
       this.refreshT = .4;
       const alive = S.alive();
       this.$('pop').textContent = alive + ' / ' + S.cap + ' pigeons';
-      const h = phaseToHour(S.phase());
-      this.$('clock').innerHTML = (S.night > .5 ? I.moon : I.sun) + `<span>${fmtHour(h)}</span>`;
+      const clock = (S.night > .5 ? 'm' : 's') + fmtHour(phaseToHour(S.phase()));
+      if (clock !== this._clock) { this._clock = clock; this.$('clock').innerHTML = (S.night > .5 ? I.moon : I.sun) + `<span>${clock.slice(1)}</span>`; }
       const nB = Object.keys(S.breeds).length, nP = Object.keys(S.discovered).length;
       this.$('breedcount').textContent = nB + '/' + M.BREEDS.length;
       this.$('b-breeds').classList.toggle('new', nB > this.seen.breeds);
@@ -542,34 +544,35 @@ export class UI {
     if (rc !== this._rcHidden) { this._rcHidden = rc; this.$('recenter').classList.toggle('hidden', rc); }
     this.renderBubbles(cam);
   }
+  // Speech bubbles + the selected bird's name tag, pinned over the birds' heads (DOM, moved per frame).
   renderBubbles(cam) {
-    const S = this.sim, box = this.$('bubbles'), seen = new Set(), v = new THREE.Vector3();
-    const W = innerWidth, Hh = innerHeight;
+    const S = this.sim, box = this.box || (this.box = this.$('bubbles')), seen = this._seen || (this._seen = new Set());
+    let tagShown = false;
+    seen.clear();
     for (const p of S.pigeons) {
       const isSel = p.id === S.selId;
       if (!p.emote && !isSel) continue;
       const view = this.g.flock.view(p.id); if (!view) continue;
-      const s = view.size(p, S.t);
-      v.set(view.vis.x, view.vis.y + .72 * s, view.vis.z).project(cam);
-      if (v.z > 1) continue;
-      const x = (v.x * .5 + .5) * W, y = (-v.y * .5 + .5) * Hh;
+      const s = view.size(p, S.t), top = toScreen(view.vis.x, view.vis.y + .72 * s, view.vis.z, cam);
+      if (top.z > 1) continue; // behind the camera
       if (p.emote) {
         seen.add(p.id);
         let b = this.bubbles.get(p.id);
         const text = p.emote.kind === 'heart' ? '♥' : p.emote.kind === 'zzz' ? 'z z z' : p.emote.text || '!';
         if (!b) { b = document.createElement('div'); box.appendChild(b); this.bubbles.set(p.id, b); }
         if (b.textContent !== text) { b.textContent = text; b.className = 'bubble ' + (p.emote.kind === 'heart' ? 'heart' : p.emote.kind === 'zzz' ? 'zzz' : 'say'); }
-        b.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
+        b.style.transform = `translate(${top.x}px, ${top.y}px) translate(-50%, -100%)`;
       }
       if (isSel) {
         let n = this.nameTag;
         if (!n) { n = this.nameTag = document.createElement('div'); n.className = 'nametag'; box.appendChild(n); }
-        v.set(view.vis.x, view.vis.y, view.vis.z).project(cam);
-        n.textContent = p.name; n.style.display = '';
-        n.style.transform = `translate(${(v.x * .5 + .5) * W}px, ${(-v.y * .5 + .5) * Hh + 10}px) translate(-50%, 0)`;
+        const feet = toScreen(view.vis.x, view.vis.y, view.vis.z, cam);
+        if (n.textContent !== p.name) n.textContent = p.name;
+        n.style.transform = `translate(${feet.x}px, ${feet.y + 10}px) translate(-50%, 0)`;
+        tagShown = true;
       }
     }
-    if (this.nameTag && (S.selId == null || !S.byId(S.selId))) this.nameTag.style.display = 'none';
+    if (this.nameTag && this.nameTag.style.display !== (tagShown ? '' : 'none')) this.nameTag.style.display = tagShown ? '' : 'none';
     for (const [id, b] of this.bubbles) if (!seen.has(id)) { b.remove(); this.bubbles.delete(id); }
   }
 }

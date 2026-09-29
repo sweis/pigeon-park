@@ -38,17 +38,22 @@ export class Fx {
   }
   update(dt) {
     const m = this._m || (this._m = new THREE.Matrix4()), q = this._q || (this._q = new THREE.Quaternion()), s = this._s || (this._s = new THREE.Vector3());
-    if (!this.parts.length && !this.mesh.count && this.rings.every(r => !r.visible)) return; // idle: nothing to do
-    this.parts = this.parts.filter(p => (p.life += dt) < p.max);
-    this.parts.forEach((p, i) => {
+    let ringsOn = false;
+    for (const r of this.rings) if (r.visible) { ringsOn = true; break; }
+    if (!this.parts.length && !this.mesh.count && !ringsOn) return; // idle: nothing to do
+    let n = 0; // compact live particles in place (no per-frame arrays)
+    for (const p of this.parts) {
+      if ((p.life += dt) >= p.max) continue;
       p.v.y -= 2.8 * dt; p.v.multiplyScalar(1 - 1.8 * dt);
       p.p.addScaledVector(p.v, dt); p.rot += dt * 6;
       const k = 1 - p.life / p.max;
       q.setFromAxisAngle(UP, p.rot);
       m.compose(p.p, q, s.setScalar(p.s * (.3 + k)));
-      this.mesh.setMatrixAt(i, m); this.mesh.setColorAt(i, p.c);
-    });
-    this.mesh.count = this.parts.length;
+      this.mesh.setMatrixAt(n, m); this.mesh.setColorAt(n, p.c);
+      this.parts[n++] = p;
+    }
+    this.parts.length = n;
+    this.mesh.count = n;
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
     for (const r of this.rings) {

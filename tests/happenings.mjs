@@ -12,8 +12,10 @@ for (const k of kinds) {
   const s = await state(page);
   check(ok && (s.happening === k || k === 'gust'), `${k} starts in-game (${s.happening})`);
   out.push(await shot(page, `happen-${k}.png`));
-  await page.evaluate(() => { const g = window.__game; if (g.sim.happening) { g.sim.nextHappeningAt = Infinity; } });
-  await page.waitForFunction(() => !window.__game.sim.happening, null, { timeout: 90000, polling: 250 }).catch(() => {});
+  // let it run out on its own, at Frantic speed so long ones (visitor: 50 sim-s) finish on slow machines too
+  await page.evaluate(() => { const g = window.__game; if (g.sim.happening) { g.sim.nextHappeningAt = Infinity; g.sim.speed = 2.5; } });
+  await page.waitForFunction(() => !window.__game.sim.happening, null, { timeout: 120000, polling: 250 }).catch(() => {});
+  await page.evaluate(() => { window.__game.sim.speed = 1; });
   check(!(await state(page)).happening, `${k} ends`);
 }
 // pause: real button, sim time stops, resumes
@@ -23,7 +25,7 @@ const t0 = (await state(page)).t; await page.waitForTimeout(1500); const t1 = (a
 check((await state(page)).paused && t1 === t0, `pause button stops the park (t ${t0} → ${t1})`);
 out.push(await shot(page, 'paused.png'));
 await page.keyboard.press('p');
-await page.waitForTimeout(800);
+await page.waitForFunction((t1) => window.pp.getState().t > t1, t1, { timeout: 15000, polling: 100 }).catch(() => {});
 check(!(await state(page)).paused && (await state(page)).t > t1, 'P resumes the park');
 const s = await state(page);
 check(s.render.programs === s.render.programsAfterBoot, `no shader recompiles across all happenings (${s.render.programs})`);

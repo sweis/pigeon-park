@@ -6,6 +6,9 @@ let seeded = false;
 
 export function setSeed(n) { state = (n >>> 0) || 1; seeded = true; }
 export function isSeeded() { return seeded; }
+// Snapshot / restore the stream (so boot-time warm-up work never shifts a seeded run).
+export const rngState = () => state;
+export function restoreRng(s) { state = s; }
 
 export function rand() {
   state = (state + 0x6d2b79f5) >>> 0;

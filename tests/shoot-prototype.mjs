@@ -1,6 +1,8 @@
-import { chromium } from 'playwright';
+import { launch } from './lib.mjs';
 import path from 'node:path';
-const b = await chromium.launch();
+import fs from 'node:fs';
+fs.mkdirSync('captures', { recursive: true });
+const b = await launch();
 const p = await b.newPage({ viewport: { width: 1280, height: 800 } });
 await p.goto('file://' + path.resolve('prototype/pigeon-park-prototype.html'));
 await p.waitForTimeout(9000);

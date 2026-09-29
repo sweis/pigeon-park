@@ -2,10 +2,8 @@
 import { startServer, launch, boot, frames, shot } from './lib.mjs';
 const srv = await startServer(); const br = await launch();
 const { page, errors } = await boot(br, srv.url, 'nosave&seed=5&hour=16.3');
-const ids = await page.evaluate(() => window.__game.sim.constructor && (async () => 0)());
 const breeds = await page.evaluate(async () => { const M = await import('/src/genetics.js'); return M.BREEDS.map(b => b.id); });
 const groups = []; for (let i = 0; i < breeds.length; i += 8) groups.push(breeds.slice(i, i + 8));
-const accsA = ['tophat', 'beret', 'cowboy', 'crown', 'monocle', 'sunglasses', 'bowtie', 'scarf'];
 const accs = ['tophat', 'beret', 'cowboy', 'crown', 'monocle', 'sunglasses', 'propeller', 'scarf'];
 let n = 0;
 for (const g of [...groups, 'acc']) {

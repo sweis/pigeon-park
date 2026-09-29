@@ -3,7 +3,7 @@
 // doesn't depend on how fast the device is: each frame steps the real park one tick, renders it from a
 // slow orbiting close-up camera, draws the captions over it on a 2D canvas and hands that to WebCodecs.
 // The soundtrack is rendered offline too (the park's current song + the coos that happened while filming).
-// Muxing uses mediabunny, loaded only when a clip is made. Output: MP4 (H.264 + AAC, or Opus where the
+// Muxing uses mediabunny; this whole module (and it) loads only when a clip is made. Output: MP4 (H.264 + AAC, or Opus where the
 // browser has no AAC encoder); browsers without H.264 encoding fall back to WebM (VP9 + Opus).
 
 import * as THREE from 'three';
@@ -11,17 +11,18 @@ import * as M from './genetics.js';
 import { birdHeight } from './pigeon3d.js';
 import { renderMusic } from './audio.js';
 import { FOUNTAIN } from './sim.js';
+// named imports so only the MP4/WebM writers + encoders are bundled (this module itself is loaded lazily)
+import { Output, Mp4OutputFormat, WebMOutputFormat, BufferTarget, CanvasSource, AudioBufferSource, getFirstEncodableVideoCodec, getFirstEncodableAudioCodec } from 'mediabunny';
 
 export const CLIP = { w: 1080, h: 1920, fps: 30, secs: 6 };
 
 // Which container/codecs this browser can make, best first. null: no WebCodecs video encoder at all.
 export async function clipSupport(w = CLIP.w, h = CLIP.h) {
   if (typeof VideoEncoder === 'undefined') return null;
-  const mb = await import('mediabunny');
-  const video = await mb.getFirstEncodableVideoCodec(['avc', 'vp9', 'av1', 'vp8'], { width: w, height: h });
+  const video = await getFirstEncodableVideoCodec(['avc', 'vp9', 'av1', 'vp8'], { width: w, height: h });
   if (!video) return null;
   const mp4 = video === 'avc';
-  const audio = typeof AudioEncoder === 'undefined' ? null : await mb.getFirstEncodableAudioCodec(mp4 ? ['aac', 'opus'] : ['opus'], { numberOfChannels: 2, sampleRate: 48000 });
+  const audio = typeof AudioEncoder === 'undefined' ? null : await getFirstEncodableAudioCodec(mp4 ? ['aac', 'opus'] : ['opus'], { numberOfChannels: 2, sampleRate: 48000 });
   return { video, audio, container: mp4 ? 'mp4' : 'webm' };
 }
 
@@ -176,18 +177,17 @@ export async function recordClip(game, id, { w = CLIP.w, h = CLIP.h, fps = CLIP.
   if (!p0 || p0.flying) throw new Error('That pigeon has left the park.');
   const sup = await clipSupport(w, h);
   if (!sup) throw new Error('This browser can’t make videos (no WebCodecs video encoder). Try a recent Chrome, Edge or Safari.');
-  const mb = await import('mediabunny');
   try { await Promise.all([document.fonts.load(`${88 * w / 1080}px Caprasimo`), document.fonts.load(`800 ${40 * w / 1080}px Figtree`)]); } catch (e) { /* fall back to system fonts */ }
   const sc = clipScript(p0), N = Math.round(secs * fps);
-  const output = new mb.Output({
-    format: sup.container === 'mp4' ? new mb.Mp4OutputFormat({ fastStart: 'in-memory' }) : new mb.WebMOutputFormat(),
-    target: new mb.BufferTarget(),
+  const output = new Output({
+    format: sup.container === 'mp4' ? new Mp4OutputFormat({ fastStart: 'in-memory' }) : new WebMOutputFormat(),
+    target: new BufferTarget(),
   });
   const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
   const c2 = canvas.getContext('2d');
-  const video = new mb.CanvasSource(canvas, { codec: sup.video, bitrate: 8e6, keyFrameInterval: 2 });
+  const video = new CanvasSource(canvas, { codec: sup.video, bitrate: 8e6, keyFrameInterval: 2 });
   output.addVideoTrack(video, { frameRate: fps });
-  const audio = sup.audio ? new mb.AudioBufferSource({ codec: sup.audio, bitrate: 160e3 }) : null;
+  const audio = sup.audio ? new AudioBufferSource({ codec: sup.audio, bitrate: 160e3 }) : null;
   if (audio) output.addAudioTrack(audio);
   await output.start();
 

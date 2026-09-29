@@ -2,10 +2,10 @@
 
 import * as THREE from 'three';
 import { PARK, FOUNTAIN, DOVECOTE } from './sim.js';
+import { damp } from './util.js';
 // how far the camera may pan: out to the monument ring
 const REACH = { x: PARK.w / 2 + 4.6, z: PARK.d / 2 + 4.6 }; // a little past the monument ring, so edge pieces can be centred
 
-const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
 const TAU = Math.PI * 2;
 
 export class CameraRig {

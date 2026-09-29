@@ -4,7 +4,8 @@ const srv = await startServer({ dist: process.argv.includes('--dist') }); const 
 const { page, errors } = await boot(br, srv.url, 'nosave&seed=6&hour=16.5');
 const p0 = (await state(page)).render.programs;
 await page.keyboard.type('rizz');
-await page.waitForTimeout(2500);
+// achievements are awarded on the next sim think tick; poll (software-GPU frames can take > 1 s each)
+await page.waitForFunction(() => window.pp.achievements().built.includes('legend'), null, { timeout: 30000, polling: 200 }).catch(() => {});
 let a = await page.evaluate(() => window.pp.achievements());
 check(a.built.includes('legend') && a.built.includes('firstbreed') && a.built.length === a.earned.length, `rizz earns achievements and builds their monuments (${a.built.join(', ')})`);
 // the monument ring sits beyond the default framing: zoom out with the real wheel, like a player would

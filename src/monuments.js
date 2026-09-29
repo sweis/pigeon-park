@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { Static, trs, lumpy, wildPheno } from './world.js';
 import { statueGeometry } from './pigeon3d.js';
 import { ACHIEVEMENTS, MONUMENT_SLOTS } from './achievements.js';
+import { raySphere } from './util.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const col = (h) => new THREE.Color(h);
@@ -140,12 +141,10 @@ export class Monuments {
   }
   // Ray pick against a capsule-ish bounding sphere per monument → achievement id
   pick(ray) {
-    let best = null, bt = Infinity; const c = new THREE.Vector3();
+    let best = null, bt = Infinity; const c = this._c || (this._c = new THREE.Vector3());
     for (const [id, m] of this.built) {
-      c.set(m.x, m.cy, m.z); const r = Math.max(.6, m.top * .55);
-      const oc = ray.origin.clone().sub(c), b = oc.dot(ray.direction), d = b * b - (oc.lengthSq() - r * r);
-      if (d < 0) continue; const t = -b - Math.sqrt(d);
-      if (t > 0 && t < bt) { bt = t; best = id; }
+      const t = raySphere(ray, c.set(m.x, m.cy, m.z), Math.max(.6, m.top * .55));
+      if (t < bt) { bt = t; best = id; }
     }
     return best;
   }

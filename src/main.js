@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import * as M from './genetics.js';
-import { setSeed, isSeeded } from './rng.js';
+import { setSeed, isSeeded, rngState, restoreRng } from './rng.js';
 import { Sim, FIXED_DT, PARK, pureGenome, migrateLegacy } from './sim.js';
 import { World } from './world.js';
 import { FlockView } from './view.js';
@@ -16,6 +16,7 @@ import { Diagnostics } from './debug.js';
 import { startHappening, HAPPENINGS } from './happenings.js';
 import { Monuments } from './monuments.js';
 import { ACHIEVEMENTS, checkAchievements } from './achievements.js';
+import { toScreen } from './util.js';
 
 const BUILD = typeof __BUILD__ !== 'undefined' ? __BUILD__ : { version: 'dev', hash: 'local', date: '' };
 const SAVE_KEY = 'pigeon-park-3d-v1', LEGACY_KEY = 'pigeon-park-save-v1', GFX_KEY = 'pigeon-park-gfx';
@@ -119,7 +120,9 @@ class Game {
     this.sim.bread = { x: 0, z: 2.5, hp: .5, a: 0 }; // bread happening props
     this.sim.ufo = { x: 0, z: 0, y: 4, beam: 1 }; this.sim.rain = 1; this.flock.rainAmt = 1;
     this.fx.burst(0, .5, 2, 3);
-    this.sim.spawn({ genome: pureGenome({}), name: 'warm-up', adult: true, quiet: true, x: 0, z: 1 }); // a finder marker target
+    const rs = rngState(); // the warm-up bird must not advance the seeded stream
+    this.sim.spawn({ genome: pureGenome({}), name: 'warm-up', adult: true, quiet: true, x: 0, z: 1, dir: 0 }); // a finder marker target
+    restoreRng(rs);
     this.flock.update(this.sim, 0, 0, null, 'pattern:bar');
     this.sim.family = {}; this.sim.lids = 1; this.sim.ids = 1;
     this.sim.pigeons.length = 0;
@@ -199,12 +202,12 @@ class Game {
     this.pickAt = (x, y, touch = false) => {
       const hit = this.flock.pick(toRay(x, y), this.sim);
       if (hit != null) return hit;
-      let best = null, bd = touch ? 34 : 14; const v = new THREE.Vector3();
+      let best = null, bd = touch ? 34 : 14;
       for (const p of this.sim.pigeons) {
         const fv = this.flock.view(p.id); if (!fv || p.flying) continue;
-        v.set(fv.vis.x, fv.vis.y + .25 * fv.size(p, this.sim.t), fv.vis.z).project(this.cam.cam);
+        const v = toScreen(fv.vis.x, fv.vis.y + .25 * fv.size(p, this.sim.t), fv.vis.z, this.cam.cam);
         if (v.z > 1) continue;
-        const d = Math.hypot((v.x * .5 + .5) * innerWidth - x, (-v.y * .5 + .5) * innerHeight - y);
+        const d = Math.hypot(v.x - x, v.y - y);
         if (d < bd) { bd = d; best = p.id; }
       }
       return best;
@@ -244,7 +247,7 @@ class Game {
         const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
         const g0 = ground(pinch.cx, pinch.cy), g1 = ground(cx, cy);
         if (g0 && g1) this.cam.pan(g0.x - g1.x, g0.z - g1.z);
-        this.cam.zoomAt(pinch.d / Math.max(20, d), ground(cx, cy));
+        this.cam.zoomAt(pinch.d / Math.max(20, d), g1);
         this.cam.snapTarget();
         pinch.d = d; pinch.cx = cx; pinch.cy = cy;
         return;
@@ -454,8 +457,8 @@ class Game {
         const p = e.id != null && S.byId(e.id), o = { ...e, pitch: p ? this.cooPitch(p) : 1 };
         if (this.clipSfx) { this.clipSfx(o, this.clipTime); continue; } // filming: sounds go into the clip's soundtrack
         if (p) { // place the coo where the bird is: pan by screen side, quieter with distance
-          const v = new THREE.Vector3(p.x, .3, p.z), d = v.distanceTo(this.cam.cam.position);
-          o.pan = v.project(this.cam.cam).x * .8; o.vol = (o.vol ?? 1) * Math.min(1, Math.max(.25, 9 / d));
+          const d = this.cam.cam.position.distanceTo({ x: p.x, y: .3, z: p.z });
+          o.pan = toScreen(p.x, .3, p.z, this.cam.cam).ndcX * .8; o.vol = (o.vol ?? 1) * Math.min(1, Math.max(.25, 9 / d));
         }
         this.audio.play(e.name, o);
       }
@@ -551,7 +554,7 @@ function makeDebugApi(g) {
     happen(kind) { const ok = startHappening(S, kind); g.render(0); return ok; },
     happenings: () => Object.keys(HAPPENINGS),
     achievements: () => ({ earned: Object.keys(S.achievements), built: [...g.monuments.built.keys()], total: ACHIEVEMENTS.length }),
-    monumentScreen(id) { const m = g.monuments.get(id); if (!m) return null; const w = new THREE.Vector3(m.x, m.cy, m.z).project(g.cam.cam); return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight }; },
+    monumentScreen(id) { const m = g.monuments.get(id); if (!m) return null; const w = toScreen(m.x, m.cy, m.z, g.cam.cam); return { x: w.x, y: w.y }; },
     version: () => BUILD,
     code: (c) => g.enterCode(c),
     trees: () => g.world.treeOpacity(),
@@ -573,10 +576,10 @@ function makeDebugApi(g) {
     cam(name, opts) { g.cam.shot(name, opts); g.render(0); return g.cam.name; },
     screenOf(id) { // screen position of a bird's body centre, for real-input tests
       const v = g.flock.view(id), p = S.byId(id); if (!v || !p) return null;
-      const s = v.size(p, S.t), w = new THREE.Vector3(v.vis.x + .03 * s, v.vis.y + .3 * s, v.vis.z).project(g.cam.cam);
-      return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight, onScreen: Math.abs(w.x) < 1 && Math.abs(w.y) < 1 && w.z < 1 };
+      const s = v.size(p, S.t), w = toScreen(v.vis.x + .03 * s, v.vis.y + .3 * s, v.vis.z, g.cam.cam);
+      return { x: w.x, y: w.y, onScreen: Math.abs(w.ndcX) < 1 && Math.abs(w.ndcY) < 1 && w.z < 1 };
     },
-    screenOfWorld(x, y, z) { const w = new THREE.Vector3(x, y, z).project(g.cam.cam); return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight }; },
+    screenOfWorld(x, y, z) { const w = toScreen(x, y, z, g.cam.cam); return { x: w.x, y: w.y }; },
     pickAt(x, y) { return g.pickAt(x, y); },
     find(key) { g.findTrait(key); g.render(0); return g.flock.findGems.count; },
     family(id) { const p = S.byId(id); return p ? S.familyTree(p.lid) : null; },

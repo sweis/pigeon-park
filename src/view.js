@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { PigeonRig, sizeOf, birdHeight, pruneGeometryCache } from './pigeon3d.js';
 import { traitStatus } from './genetics.js';
+import { damp, raySphere } from './util.js';
 
 // Trait finder: 2 = shows the trait (green), 1 = carries it hidden (yellow).
 export const FIND_COLORS = { 2: '#3fbf5f', 1: '#f2c230' };
@@ -12,7 +13,6 @@ const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const POSE_BONES = ['body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR'];
 const _tgt = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
 const TAU = Math.PI * 2;
-const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
 function angDamp(a, b, k, dt) { let d = ((b - a + Math.PI) % TAU + TAU) % TAU - Math.PI; return a + d * (1 - Math.exp(-k * dt)); }
 
 function radialTexture(inner, outer) {
@@ -241,8 +241,9 @@ export class FlockView {
 
   // find: trait key being searched for (or null). Returns nothing; markers are drawn per frame.
   update(sim, dt, t, camPos, find = null) {
-    const seen = new Set(), m = _m, q = _q.identity();
+    const seen = this._seen || (this._seen = new Set()), m = _m, q = _q.identity(), maxShadows = this.shadows.instanceMatrix.count;
     let si = 0, hi = 0;
+    seen.clear();
     for (const p of sim.pigeons) {
       seen.add(p.id);
       let v = this.views.get(p.id);
@@ -253,7 +254,7 @@ export class FlockView {
       // contact shadow shrinks + fades with height
       const h = v.vis.y, ss = s * .62 * Math.max(.3, 1 - h * .5);
       m.compose(_p.set(v.vis.x + .02 * s, .004, v.vis.z), q, _s.set(ss * 1.2, 1, ss));
-      if (!p.flying || h < 3) this.shadows.setMatrixAt(si++, m);
+      if ((!p.flying || h < 3) && si < maxShadows) this.shadows.setMatrixAt(si++, m);
       if (v.glow && hi < this.halos.length) {
         const hs = this.halos[hi++]; hs.visible = true;
         hs.position.set(v.vis.x, v.vis.y + .3 * s, v.vis.z);
@@ -274,7 +275,7 @@ export class FlockView {
     this.mats.voidglow.emissiveIntensity = .15 + sim.night * .6;
 
     // eggs
-    const eseen = new Set();
+    const eseen = seen; eseen.clear();
     for (const eg of sim.eggs) {
       eseen.add(eg.id);
       let ev = this.eggViews.get(eg.id);
@@ -380,16 +381,11 @@ export class FlockView {
   // Ray pick against a bounding sphere per bird. Returns sim pigeon id or null.
   pick(ray, sim) {
     let best = null, bt = Infinity;
-    const c = new THREE.Vector3();
+    const c = _p;
     for (const p of sim.pigeons) {
       const v = this.views.get(p.id); if (!v || p.flying) continue;
-      const s = v.size(p, sim.t);
-      c.set(v.vis.x + .03 * s, v.vis.y + .3 * s, v.vis.z);
-      const r = .3 * s + .06;
-      const oc = ray.origin.clone().sub(c), bq = oc.dot(ray.direction), cq = oc.lengthSq() - r * r, d = bq * bq - cq;
-      if (d < 0) continue;
-      const tt = -bq - Math.sqrt(d);
-      if (tt > 0 && tt < bt) { bt = tt; best = p.id; }
+      const s = v.size(p, sim.t), tt = raySphere(ray, c.set(v.vis.x + .03 * s, v.vis.y + .3 * s, v.vis.z), .3 * s + .06);
+      if (tt < bt) { bt = tt; best = p.id; }
     }
     return best;
   }
