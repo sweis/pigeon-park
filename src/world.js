@@ -86,13 +86,19 @@ const KEYS = [
   [19.6, 32, '#8ea8ee', .6, '#34406e', '#15151c', .5, '#1d2550', '#454c80', .1],
   [24, 40, '#8ea8ee', .8, '#27345f', '#0f1118', .45, '#0d1330', '#27305a', .06],
 ];
+const KEY_COLS = KEYS.map(k => k.map(v => typeof v === 'string' ? col(v) : v)); // parsed once
+const KS = { el: 0, sun: new THREE.Color(), sunI: 0, hs: new THREE.Color(), hg: new THREE.Color(), hI: 0, top: new THREE.Color(), hor: new THREE.Color(), env: 0 };
+// Blend the two keyframes around hour h into KS (reused; no allocation).
 function sampleKeys(h) {
   h = ((h % 24) + 24) % 24;
   let i = 1; while (i < KEYS.length - 1 && KEYS[i][0] < h) i++;
-  const a = KEYS[i - 1], b = KEYS[i], t = (h - a[0]) / Math.max(1e-6, b[0] - a[0]);
-  const L = (x, y) => x + (y - x) * t, C = (x, y) => col(x).lerp(col(y), t);
-  return { el: L(a[1], b[1]), sun: C(a[2], b[2]), sunI: L(a[3], b[3]), hs: C(a[4], b[4]), hg: C(a[5], b[5]), hI: L(a[6], b[6]), top: C(a[7], b[7]), hor: C(a[8], b[8]), env: L(a[9], b[9]) };
+  const a = KEY_COLS[i - 1], b = KEY_COLS[i], t = (h - a[0]) / Math.max(1e-6, b[0] - a[0]);
+  const L = (j) => a[j] + (b[j] - a[j]) * t;
+  KS.el = L(1); KS.sun.lerpColors(a[2], b[2], t); KS.sunI = L(3); KS.hs.lerpColors(a[4], b[4], t); KS.hg.lerpColors(a[5], b[5], t);
+  KS.hI = L(6); KS.top.lerpColors(a[7], b[7], t); KS.hor.lerpColors(a[8], b[8], t); KS.env = L(9);
+  return KS;
 }
+const GRASS = col('#8c9a6c'), RAIN_GREY = col('#9aa3aa'), RAIN_HAZE = col('#c3c7c6');
 function isMoon(h) { h = ((h % 24) + 24) % 24; return h >= 19.3 || h < 5.2; }
 
 export class World {
@@ -216,7 +222,6 @@ export class World {
     });
     inst.receiveShadow = true; inst.castShadow = false;
     this.scene.add(inst);
-    this.plaza = inst;
     // curb
     this.static = new Static();
     const curbC = col('#bfb29c');
@@ -239,7 +244,6 @@ export class World {
     const statueStone = col('#cfc5b3'), statueDark = col('#b7ac98');
     S.add(statue, (x, y) => (y - SY) / SK > .42 ? statueDark : statueStone, trs(V(F.x, SY, F.z), [0, -yaw, 0], [SK, SK, SK]), .15);
     const water = new THREE.MeshStandardMaterial({ color: '#86bfcf', roughness: .08, metalness: .05, transparent: true, opacity: .88 });
-    this.waterMat = water;
     const w1 = new THREE.Mesh(new THREE.CircleGeometry(F.r - .15, 40), water); w1.rotation.x = -Math.PI / 2; w1.position.set(F.x, .44, F.z); w1.receiveShadow = true;
     const w2 = new THREE.Mesh(new THREE.CircleGeometry(.62, 28), water); w2.rotation.x = -Math.PI / 2; w2.position.set(F.x, 1.27, F.z);
     this.scene.add(w1, w2);
@@ -287,7 +291,7 @@ export class World {
     this.lampSpots.forEach((p, i) => globes.setMatrixAt(i, trs(V(p.x, 2.38, p.z))));
     this.scene.add(globes);
     // dovecote (the Roost) — back-right corner
-    const dv = this.dovecote = V(DOVECOTE.x, 0, DOVECOTE.z);
+    const dv = V(DOVECOTE.x, 0, DOVECOTE.z);
     const db = trs(dv, [0, -.6, 0]);
     const white = col('#efe7d8'), roof = col('#b7593f'), hole = col('#3a302a');
     S.add(new THREE.CylinderGeometry(.08, .1, 2.2, 10), col('#8a6a4a'), db.clone().multiply(trs(V(0, 1.1, 0))));
@@ -299,7 +303,6 @@ export class World {
       S.add(new THREE.BoxGeometry(.2, .03, .12), col('#8a6a4a'), db.clone().multiply(trs(V(hx, 2.46, .46))));
     }
     S.add(new THREE.BoxGeometry(1.3, .04, .34), col('#8a6a4a'), db.clone().multiply(trs(V(0, 2.13, .5))));
-    this.dovecoteMatrix = db;
     // trees
     const r = mulberry(21);
     const greens = ['#7f9c5a', '#6c8a4b', '#93ad6a', '#86a15f'].map(col);
@@ -395,15 +398,14 @@ export class World {
     // sun sweeps east→west across the camera-facing half of the sky; moon parks high front-left
     const az = moon ? 2.1 : THREE.MathUtils.degToRad(30 + (THREE.MathUtils.clamp(h, 5, 19.5) - 8) / 8.5 * 120);
     const el = THREE.MathUtils.degToRad(Math.max(2, k.el));
-    const dir = V(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)).normalize();
-    this.sunDir = dir;
+    const dir = (this._dir || (this._dir = V(0, 1, 0))).set(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)).normalize();
     this.sun.position.copy(dir).multiplyScalar(30);
     this.sun.target.position.set(0, 0, 0);
     this.sun.color.copy(k.sun); this.sun.intensity = k.sunI;
     this.hemi.color.copy(k.hs); this.hemi.groundColor.copy(k.hg); this.hemi.intensity = k.hI;
     this.scene.environmentIntensity = k.env;
     this.skyU.top.value.copy(k.top); this.skyU.hor.value.copy(k.hor);
-    this.skyU.bot.value.copy(k.hor).lerp(col('#8c9a6c'), .5);
+    this.skyU.bot.value.copy(k.hor).lerp(GRASS, .5);
     this.skyU.sunDir.value.copy(dir); this.skyU.sunCol.value.copy(k.sun); this.skyU.sunGlow.value = moon ? .25 : 1;
     this.scene.fog.color.copy(k.hor);
     this.starMat.opacity = night * .9;
@@ -417,10 +419,9 @@ export class World {
   setRain(r) {
     if (r <= .001) return;
     this.dirtyLight = true; // rain edits the lights in place; recompute the clean values next frame
-    const grey = col('#9aa3aa');
     this.sun.intensity *= 1 - .6 * r; this.hemi.intensity *= 1 - .2 * r;
-    this.skyU.top.value.lerp(grey, .7 * r); this.skyU.hor.value.lerp(col('#c3c7c6'), .6 * r); this.skyU.sunGlow.value *= 1 - r;
-    this.scene.fog.color.lerp(col('#c3c7c6'), .6 * r);
+    this.skyU.top.value.lerp(RAIN_GREY, .7 * r); this.skyU.hor.value.lerp(RAIN_HAZE, .6 * r); this.skyU.sunGlow.value *= 1 - r;
+    this.scene.fog.color.lerp(RAIN_HAZE, .6 * r);
   }
 
   // Fade any tree whose canopy sits between the camera and what it's looking at (target + plaza corners).

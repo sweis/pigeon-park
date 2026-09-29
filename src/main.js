@@ -2,20 +2,21 @@
 
 import * as THREE from 'three';
 import * as M from './genetics.js';
-import { setSeed, isSeeded } from './rng.js';
+import { setSeed, isSeeded, rngState, restoreRng } from './rng.js';
 import { Sim, FIXED_DT, PARK, pureGenome, migrateLegacy } from './sim.js';
 import { World } from './world.js';
 import { FlockView } from './view.js';
 import { makeMaterials, PigeonRig, geometryCacheSize, birdHeight } from './pigeon3d.js';
 import { CameraRig } from './camera.js';
 import { Fx } from './fx.js';
-import { Audio } from './audio.js';
+import { Audio, SONGS, renderMusic } from './audio.js';
 import { Portraits } from './portraits.js';
 import { UI } from './ui.js';
 import { Diagnostics } from './debug.js';
 import { startHappening, HAPPENINGS } from './happenings.js';
 import { Monuments } from './monuments.js';
 import { ACHIEVEMENTS, checkAchievements } from './achievements.js';
+import { toScreen } from './util.js';
 
 const BUILD = typeof __BUILD__ !== 'undefined' ? __BUILD__ : { version: 'dev', hash: 'local', date: '' };
 const SAVE_KEY = 'pigeon-park-3d-v1', LEGACY_KEY = 'pigeon-park-save-v1', GFX_KEY = 'pigeon-park-gfx';
@@ -43,8 +44,11 @@ class Game {
     this.sim = new Sim();
     this.frozen = false; this.paused = false; this.stepQueue = 0; this.acc = 0; this.time = 0;
     this.simdt = params.has('simdt') ? +params.get('simdt') : null;
-    this.frameMs = []; this.lastShaderError = null; this.contextLost = false;
+    this.frameMs = []; this.frameI = 0; this.lastShaderError = null; this.contextLost = false;
+    this.frameCb = (t) => this.frame(t);
     this.nosave = flag('nosave');
+    this.find = null;          // trait finder: { key, until } — birds showing (green) / carrying (yellow) it get marked
+    this.keys = new Set();     // held camera keys (desktop WASD / arrows / Q E)
   }
 
   async boot() {
@@ -99,7 +103,7 @@ class Game {
     this.programsAfterBoot = r.info.programs.length;
     document.getElementById('loading').classList.add('done');
     setTimeout(() => document.getElementById('loading').remove(), 700);
-    requestAnimationFrame((t) => this.frame(t));
+    requestAnimationFrame(this.frameCb);
   }
 
   // Compile every material/effect behind the loading screen so nothing compiles mid-game.
@@ -116,7 +120,11 @@ class Game {
     this.sim.bread = { x: 0, z: 2.5, hp: .5, a: 0 }; // bread happening props
     this.sim.ufo = { x: 0, z: 0, y: 4, beam: 1 }; this.sim.rain = 1; this.flock.rainAmt = 1;
     this.fx.burst(0, .5, 2, 3);
-    this.flock.update(this.sim, 0, 0);
+    const rs = rngState(); // the warm-up bird must not advance the seeded stream
+    this.sim.spawn({ genome: pureGenome({}), name: 'warm-up', adult: true, quiet: true, x: 0, z: 1, dir: 0 }); // a finder marker target
+    restoreRng(rs);
+    this.flock.update(this.sim, 0, 0, null, 'pattern:bar');
+    this.sim.family = {}; this.sim.lids = 1; this.sim.ids = 1;
     this.sim.pigeons.length = 0;
     this.flock.halos[0].visible = true;
     this.world.setHour(22, 1);
@@ -151,10 +159,10 @@ class Game {
   }
   resetAll() {
     try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
-    const keep = { speed: this.sim.speed, mut: this.sim.mut, ph: this.sim.phase() }, nextId = this.sim.ids;
+    const keep = { speed: this.sim.speed, mut: this.sim.mut, whimsy: this.sim.whimsy, ph: this.sim.phase() }, nextId = this.sim.ids;
     this.sim.reset(); this.sim.restore(keep);
     this.sim.ids = nextId; // ids keep counting so no new bird inherits an old bird's 3D view
-    this.cam.follow = null;
+    this.cam.follow = null; this.findTrait(null);
     this.sim.initFlock(null);
     this.monuments.clear();
     this.ui.roostSel = null; this.ui.seen = { pedia: 0, breeds: 0 };
@@ -176,6 +184,12 @@ class Game {
     this.ui.refreshT = 0;
   }
 
+  // Trait finder: mark every bird that shows (green) or hides (yellow) a trait for a while. null clears it.
+  findTrait(key) {
+    this.find = key ? { key, until: performance.now() + FIND_MS } : null;
+    this.ui.renderFind();
+  }
+
   // ---------- input ----------
   bindInput() {
     const c = this.renderer.domElement;
@@ -188,12 +202,12 @@ class Game {
     this.pickAt = (x, y, touch = false) => {
       const hit = this.flock.pick(toRay(x, y), this.sim);
       if (hit != null) return hit;
-      let best = null, bd = touch ? 34 : 14; const v = new THREE.Vector3();
+      let best = null, bd = touch ? 34 : 14;
       for (const p of this.sim.pigeons) {
         const fv = this.flock.view(p.id); if (!fv || p.flying) continue;
-        v.set(fv.vis.x, fv.vis.y + .25 * fv.size(p, this.sim.t), fv.vis.z).project(this.cam.cam);
+        const v = toScreen(fv.vis.x, fv.vis.y + .25 * fv.size(p, this.sim.t), fv.vis.z, this.cam.cam);
         if (v.z > 1) continue;
-        const d = Math.hypot((v.x * .5 + .5) * innerWidth - x, (-v.y * .5 + .5) * innerHeight - y);
+        const d = Math.hypot(v.x - x, v.y - y);
         if (d < bd) { bd = d; best = p.id; }
       }
       return best;
@@ -233,7 +247,7 @@ class Game {
         const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
         const g0 = ground(pinch.cx, pinch.cy), g1 = ground(cx, cy);
         if (g0 && g1) this.cam.pan(g0.x - g1.x, g0.z - g1.z);
-        this.cam.zoomAt(pinch.d / Math.max(20, d), ground(cx, cy));
+        this.cam.zoomAt(pinch.d / Math.max(20, d), g1);
         this.cam.snapTarget();
         pinch.d = d; pinch.cx = cx; pinch.cy = cy;
         return;
@@ -279,9 +293,12 @@ class Game {
     c.addEventListener('wheel', (e) => { e.preventDefault(); this.cam.zoomAt(Math.exp(e.deltaY * .0012), ground(e.clientX, e.clientY)); }, { passive: false });
 
     let cheat = '';
+    addEventListener('keyup', (e) => this.keys.delete(e.code));
+    addEventListener('blur', () => this.keys.clear());
     addEventListener('keydown', (e) => {
       if (!e.key || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
-      if (e.key === 'Escape') { if (this.ui.dialog) this.ui.closeDialog(); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
+      if (CAM_KEYS[e.code] && !this.ui.dialog && !e.ctrlKey && !e.metaKey && !e.altKey) { this.keys.add(e.code); if (e.code.startsWith('Arrow')) e.preventDefault(); }
+      if (e.key === 'Escape') { if (this.ui.dialog) this.ui.closeDialog(); else if (this.find) this.findTrait(null); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
       if ((e.key === 'p' || e.key === ' ') && !e.repeat) { if (e.key === ' ') e.preventDefault(); this.togglePause(); if (e.key === 'p') cheat = ''; return; }
       if (e.key === '?') { this.ui.dialog === 'help' ? this.ui.closeDialog() : this.ui.openDialog('help'); return; }
       if (e.key.length !== 1) return;
@@ -321,14 +338,13 @@ class Game {
 
   // ---------- loop ----------
   frame(now) {
-    requestAnimationFrame((t) => this.frame(t));
-    if (this.contextLost) return;
-    let dt = Math.min(.25, Math.max(0, (now - this.last) / 1000));
-    this.frameMs.push(now - this.last); if (this.frameMs.length > 240) this.frameMs.shift();
+    requestAnimationFrame(this.frameCb);
+    if (this.contextLost || this.recording) return; // a clip being recorded drives the world itself
+    const raw = Math.max(0, (now - this.last) / 1000);
+    this.frameMs[this.frameI++ % 240] = now - this.last; // ring buffer for the p50/p99 readout
     this.last = now;
-    if (this.simdt != null) dt = this.simdt;
-    this.camDt = Math.min(.1, (performance.now() - (this.camLast || now)) / 1000) || 1 / 60; this.camLast = performance.now();
-    this.render(dt);
+    this.camDt = Math.min(.1, raw) || 1 / 60;         // the camera always moves in wall time, even with ?simdt
+    this.render(this.simdt ?? Math.min(.25, raw));
   }
   render(dt) {
     const S = this.sim;
@@ -341,17 +357,16 @@ class Game {
       while (this.stepQueue > 0) { S.step(); this.stepQueue--; }
       dt = 0;
     }
-    this.time += dt;
-    this.drainEvents();
-    this.world.setHour(S.hour(), S.night);
-    this.world.setRain(this.flock.rainAmt || 0);
     this.audio.setRain(!!S.rain);
-    this.audio.setMood(S.happening?.kind === 'dance' ? 'dance' : S.night > .55 ? 'night' : 'day');
+    this.audio.setMood(this.musicMood());
     this.audio.setDuck(this.paused ? .35 : 1);
-    this.world.update(dt);
-    this.flock.update(S, dt, this.time, this.cam.cam.position);
-    this.fx.update(dt);
-    this.monuments.update();
+    if (this.find && performance.now() > this.find.until) this.findTrait(null);
+    this.animate(dt, this.cam.cam.position);
+    if (this.keys.size) { // held keys → camera intent (fwd, right, rotate) for this frame
+      let f = 0, r = 0, rot = 0;
+      for (const k of this.keys) { const [a, b, c] = CAM_KEYS[k]; f += a; r += b; rot += c; }
+      this.cam.keyMove(Math.sign(f), Math.sign(r), Math.sign(rot), this.camDt || 1 / 60);
+    }
     let fp = null;
     if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.cam.shot('overview', { snap: false }); }
     this.cam.update(this.camDt || 1 / 60, fp);
@@ -360,6 +375,20 @@ class Game {
     this.ui?.frame(dt, this.cam.cam);
     this.diag?.frame();
   }
+  // Everything that moves with world time (after the sim has stepped): events, sky, water, birds, effects.
+  // Shared by the live loop and the clip recorder.
+  animate(dt, camPos) {
+    const S = this.sim;
+    this.time += dt;
+    this.drainEvents();
+    this.world.setHour(S.hour(), S.night);
+    this.world.setRain(this.flock.rainAmt || 0);
+    this.world.update(dt);
+    this.flock.update(S, dt, this.time, camPos, this.find?.key);
+    this.fx.update(dt);
+    this.monuments.update();
+  }
+  musicMood() { return EVENT_MUSIC[this.sim.happening?.kind] || (this.sim.night > .55 ? 'night' : 'day'); }
   // Each bird has its own voice: big birds low, small birds high, plus a fixed per-genome offset.
   cooPitch(p) { return ({ king: .78, dinky: 1.32, chonk: .84 }[p.pheno.e.size] || 1) / Math.pow(p.jit || 1, 2.5); }
 
@@ -386,6 +415,14 @@ class Game {
     const card = await composeCard(shot, { name, gen, pheno, studio: id == null });
     const blob = await new Promise(res => card.toBlob(res, 'image/png'));
     return { blob, url: URL.createObjectURL(blob), name, file: 'pigeon-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.png', w: card.width, h: card.height };
+  }
+
+  // ---------- video clips ----------
+  // 6 s vertical clip of a park bird (see clip.js; loaded on first use with its muxer).
+  async clip(id, onProgress, opts = {}) {
+    const { recordClip } = await import('./clip.js');
+    this.audio.play('shutter');
+    return recordClip(this, id, { ...opts, onProgress });
   }
 
   // One-off render of the real scene from any camera at any size → canvas (photos, monument pictures).
@@ -418,9 +455,10 @@ class Game {
       if (e.type === 'toast') this.ui?.toast(e.msg, e.kind);
       else if (e.type === 'sound') {
         const p = e.id != null && S.byId(e.id), o = { ...e, pitch: p ? this.cooPitch(p) : 1 };
+        if (this.clipSfx) { this.clipSfx(o, this.clipTime); continue; } // filming: sounds go into the clip's soundtrack
         if (p) { // place the coo where the bird is: pan by screen side, quieter with distance
-          const v = new THREE.Vector3(p.x, .3, p.z), d = v.distanceTo(this.cam.cam.position);
-          o.pan = v.project(this.cam.cam).x * .8; o.vol = (o.vol ?? 1) * Math.min(1, Math.max(.25, 9 / d));
+          const d = this.cam.cam.position.distanceTo({ x: p.x, y: .3, z: p.z });
+          o.pan = toScreen(p.x, .3, p.z, this.cam.cam).ndcX * .8; o.vol = (o.vol ?? 1) * Math.min(1, Math.max(.25, 9 / d));
         }
         this.audio.play(e.name, o);
       }
@@ -435,6 +473,14 @@ class Game {
 }
 
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
+const FIND_MS = 30000;
+const EVENT_MUSIC = { dance: 'dance', conga: 'conga', ufo: 'ufo' }; // happenings with their own song
+// Desktop camera keys by physical position (works on AZERTY too): [forward, right, rotate].
+const CAM_KEYS = {
+  KeyW: [1, 0, 0], ArrowUp: [1, 0, 0], KeyS: [-1, 0, 0], ArrowDown: [-1, 0, 0],
+  KeyA: [0, -1, 0], ArrowLeft: [0, -1, 0], KeyD: [0, 1, 0], ArrowRight: [0, 1, 0],
+  KeyQ: [0, 0, 1], KeyE: [0, 0, -1],
+};
 const CODES = {
   rizz: (S) => S.summonLegends(),
   ore: (S) => S.summonOres(),
@@ -488,9 +534,10 @@ function makeDebugApi(g) {
         t: +S.t.toFixed(3), wall: +S.wall.toFixed(3), hour: +S.hour().toFixed(2), night: S.night, frozen: g.frozen, seeded: isSeeded(),
         speed: S.speed, mut: S.mut, whimsy: S.whimsy, paused: g.paused, happening: S.happening?.kind || null, bread: S.bread ? +S.bread.hp.toFixed(2) : null, cap: S.cap, selId: S.selId, follow: g.cam.follow, cam: g.cam.name,
         pop: S.alive(), eggs: S.eggs.length, poops: S.poops.length, court: !!S.court,
+        find: g.find?.key || null, findMarks: g.flock.findGems.count, camAz: +g.cam.cur.az.toFixed(3), camTarget: g.cam.cur.target.toArray().map(v => +v.toFixed(2)), dialog: g.ui.dialog, familySize: Object.keys(S.family).length,
         roost: S.roost.map(r => r.name), stats: { ...S.stats },
         breedsFound: Object.keys(S.breeds), breedsTotal: M.BREEDS.length, traitsFound: Object.keys(S.discovered).length, traitsTotal: Object.keys(M.PEDIA).length,
-        pigeons: S.pigeons.map(p => ({ id: p.id, name: p.name, x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), dir: +p.dir.toFixed(2), state: p.state, flying: p.flying, held: p.held, gen: p.gen, label: p.pheno.label, breeds: p.breeds.map(b => b.id) })),
+        pigeons: S.pigeons.map(p => ({ id: p.id, lid: p.lid, name: p.name, x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), dir: +p.dir.toFixed(2), state: p.state, flying: p.flying, held: p.held, gen: p.gen, label: p.pheno.label, breeds: p.breeds.map(b => b.id) })),
         render: {
           frameMsP50: pct(g.frameMs, .5), frameMsP99: pct(g.frameMs, .99), drawCalls: info.render.calls, triangles: info.render.triangles,
           programs: info.programs.length, programsAfterBoot: g.programsAfterBoot, geometries: info.memory.geometries, textures: info.memory.textures,
@@ -507,7 +554,7 @@ function makeDebugApi(g) {
     happen(kind) { const ok = startHappening(S, kind); g.render(0); return ok; },
     happenings: () => Object.keys(HAPPENINGS),
     achievements: () => ({ earned: Object.keys(S.achievements), built: [...g.monuments.built.keys()], total: ACHIEVEMENTS.length }),
-    monumentScreen(id) { const m = g.monuments.get(id); if (!m) return null; const w = new THREE.Vector3(m.x, m.cy, m.z).project(g.cam.cam); return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight }; },
+    monumentScreen(id) { const m = g.monuments.get(id); if (!m) return null; const w = toScreen(m.x, m.cy, m.z, g.cam.cam); return { x: w.x, y: w.y }; },
     version: () => BUILD,
     code: (c) => g.enterCode(c),
     trees: () => g.world.treeOpacity(),
@@ -519,7 +566,7 @@ function makeDebugApi(g) {
       if (kind === 'ores') return S.summonOres();
       const b = M.BREEDS.find(x => x.id === kind);
       let genome;
-      if (b) { const sm = M.breedSample(b); genome = {}; for (const l of M.LOCI) genome[l.id] = [sm.e[l.id], sm.e[l.id]]; return S.spawn({ genome, accessory: sm.accessory, name: b.name, adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id; }
+      if (b) { const bg = M.breedGenome(b); return S.spawn({ ...bg, name: b.name, adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id; }
       genome = typeof kind === 'object' ? pureGenome(kind) : M.founderGenome();
       return S.spawn({ genome, accessory: pos.accessory || null, name: M.randomName(), adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id;
     },
@@ -529,16 +576,25 @@ function makeDebugApi(g) {
     cam(name, opts) { g.cam.shot(name, opts); g.render(0); return g.cam.name; },
     screenOf(id) { // screen position of a bird's body centre, for real-input tests
       const v = g.flock.view(id), p = S.byId(id); if (!v || !p) return null;
-      const s = v.size(p, S.t), w = new THREE.Vector3(v.vis.x + .03 * s, v.vis.y + .3 * s, v.vis.z).project(g.cam.cam);
-      return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight, onScreen: Math.abs(w.x) < 1 && Math.abs(w.y) < 1 && w.z < 1 };
+      const s = v.size(p, S.t), w = toScreen(v.vis.x + .03 * s, v.vis.y + .3 * s, v.vis.z, g.cam.cam);
+      return { x: w.x, y: w.y, onScreen: Math.abs(w.ndcX) < 1 && Math.abs(w.ndcY) < 1 && w.z < 1 };
     },
-    screenOfWorld(x, y, z) { const w = new THREE.Vector3(x, y, z).project(g.cam.cam); return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight }; },
+    screenOfWorld(x, y, z) { const w = toScreen(x, y, z, g.cam.cam); return { x: w.x, y: w.y }; },
     pickAt(x, y) { return g.pickAt(x, y); },
+    find(key) { g.findTrait(key); g.render(0); return g.flock.findGems.count; },
+    family(id) { const p = S.byId(id); return p ? S.familyTree(p.lid) : null; },
     win() { for (const b of M.BREEDS) S.breeds[b.id] ||= { by: 'debug', at: Date.now() }; for (const k of Object.keys(M.PEDIA)) S.discovered[k] = 1; },
     lose() { api.clearAll(); S.roost.length = 0; },
     render() { g.render(0); },
     async photo(id) { const r = await g.photo({ id }); return r && { w: r.w, h: r.h, size: r.blob.size, file: r.file }; },
-    audio: () => ({ unlocked: !!g.audio.ac, sfxOn: g.audio.sfxOn, musicOn: g.audio.musicOn, sfxVol: g.audio.sfxVol, musicVol: g.audio.musicVol, mood: g.audio.mood, musicRunning: !!g.audio.music?.timer, state: g.audio.ac?.state }),
+    async clipSupport() { return (await import('./clip.js')).clipSupport(); },
+    async clip(id, opts = {}) { // small/short clips for headless tests; returns metadata + sampled frames + the file as base64
+      const r = await g.clip(id, null, opts);
+      const b64 = opts.bytes ? await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result.split(',')[1]); fr.readAsDataURL(r.blob); }) : null;
+      return { w: r.w, h: r.h, size: r.blob.size, mime: r.mime, file: r.file, codec: r.codec, audioCodec: r.audioCodec, frames: r.frames, peeks: r.peeks, b64 };
+    },
+    async clipScript(id) { const p = S.byId(id); return p && (await import('./clip.js')).clipScript(p); },
+    audio: () => ({ unlocked: !!g.audio.ac, sfxOn: g.audio.sfxOn, musicOn: g.audio.musicOn, sfxVol: g.audio.sfxVol, musicVol: g.audio.musicVol, mood: g.audio.mood, song: g.audio.music?.songId || null, songTitle: g.audio.songTitle, notes: g.audio.music?.notes || 0, musicRunning: !!g.audio.music?.timer, state: g.audio.ac?.state }),
     audioLevel() { // RMS of the master output right now (verifies sound is actually produced)
       const A = g.audio; if (!A.ac) return null;
       if (!A.an) { A.an = A.ac.createAnalyser(); A.an.fftSize = 2048; A.master.connect(A.an); }
@@ -546,6 +602,12 @@ function makeDebugApi(g) {
       let s2 = 0; for (const x of d) s2 += x * x; return Math.sqrt(s2 / d.length);
     },
     cooPitches() { return S.pigeons.map(p => +g.cooPitch(p).toFixed(3)); },
+    songs: () => Object.keys(SONGS),
+    async songLevel(id, secs = 8) { // offline render → RMS / peak, so every song can be checked without speakers
+      const { buffer, notes } = await renderMusic(id, secs); const d = buffer.getChannelData(0);
+      let s2 = 0, pk = 0; for (const x of d) { s2 += x * x; pk = Math.max(pk, Math.abs(x)); }
+      return { id, title: SONGS[id].title, rms: +Math.sqrt(s2 / d.length).toFixed(4), peak: +pk.toFixed(3), notes };
+    },
     hideHud(v = true) { document.getElementById('hud').style.display = v ? 'none' : ''; },
   };
   return api;

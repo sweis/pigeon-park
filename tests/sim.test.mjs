@@ -1,5 +1,5 @@
 // Headless sim assertions — no browser. Run: node tests/sim.test.mjs
-import { Sim, PARK, FOUNTAIN, FIXED_DT, fountainClearance } from '../src/sim.js';
+import { Sim, PARK, FOUNTAIN, FIXED_DT, TREE_DEPTH, fountainClearance } from '../src/sim.js';
 import { setSeed } from '../src/rng.js';
 import * as M from '../src/genetics.js';
 import { HAPPENINGS, startHappening } from '../src/happenings.js';
@@ -86,6 +86,29 @@ for (const kind of Object.keys(HAPPENINGS)) {
   const run = (w) => { setSeed(9); const h = new Sim(); h.initFlock(null); h.whimsy = w; if (w === 'off') h.nextHappeningAt = Infinity; let n = 0; const orig = h.emit.bind(h); h.emit = (e) => { if (e.type === 'happening') n++; orig(e); }; for (let i = 0; i < 600 / FIXED_DT; i++) h.step(); return n; };
   const some = run('some'), off = run('off');
   ok(some >= 3 && off === 0, `happenings happen on their own (10 min: ${some} at "some", ${off} at "off")`);
+}
+// family tree: hatchlings record their parents, clones share them, records survive save/load and stay bounded
+{
+  const s = run(42, 1200).s;
+  const hatched = s.pigeons.filter(p => s.family[p.lid]?.how === 'hatch');
+  ok(hatched.length > 0 && hatched.every(p => s.family[p.lid].par.length === 2), `hatchlings record both parents (${hatched.length} in park)`);
+  const deep = hatched.find(p => { const t = s.familyTree(p.lid).root; return t.par.some(q => q && q.par && q.par.some(Boolean)); });
+  ok(!!deep, 'some bird has a known grandparent after 20 sim-minutes');
+  const g = M.decodeGenome(M.encodeGenome(hatched[0].genome));
+  ok(JSON.stringify(g) === JSON.stringify(hatched[0].genome), 'ancestor genome codec round-trips');
+  const src = hatched[0], q = s.clonePigeon(src.id);
+  ok(q && s.family[q.lid].how === 'clone' && JSON.stringify(s.family[q.lid].par) === JSON.stringify(s.family[src.lid].par), 'a clone records the original as its source and shares its parents');
+  const n0 = Object.keys(s.family).length;
+  const saved = JSON.parse(JSON.stringify(s.serialize()));
+  const n1 = Object.keys(saved.family).length;
+  ok(n1 <= n0 && n1 <= (s.pigeons.length + s.roost.length) * 15, `ancestry is pruned to ${TREE_DEPTH} generations (${n0} → ${n1} records, ${JSON.stringify(saved.family).length} bytes)`);
+  const b = new Sim(); b.restore(saved); b.initFlock(saved);
+  const bb = b.pigeons.find(p => p.name === deep.name && p.gen === deep.gen);
+  ok(bb && JSON.stringify(b.familyTree(bb.lid).root) === JSON.stringify(s.familyTree(deep.lid).root), 'family tree survives save/load');
+  const nb = b.spawn({ genome: M.founderGenome(), name: 'New' });
+  ok(!s.pigeons.some(p => p.lid === nb.lid) && !b.pigeons.some(p => p !== nb && p.lid === nb.lid), 'new lineage ids never collide with loaded ones');
+  s.roostAdd(src.id); const back = s.releaseRoost(s.roost.length - 1, false);
+  ok(back && back.lid === src.lid, 'a bird released from the roost keeps its lineage');
 }
 // achievements: earned from play, saved, and caught up quietly for older saves
 {

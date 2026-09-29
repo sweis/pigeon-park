@@ -1,7 +1,7 @@
 // Pigeon Park — DOM HUD over the 3D canvas. Plain DOM, event delegation via data-act attributes.
 
-import * as THREE from 'three';
 import * as M from './genetics.js';
+import { toScreen } from './util.js';
 import { SPEEDS, MUTATIONS, ROOST_SIZE, phaseToHour } from './sim.js';
 import { HAPPENINGS, WHIMSY, gapFor } from './happenings.js';
 import { ACHIEVEMENTS } from './achievements.js';
@@ -24,15 +24,30 @@ const I = {
   musicOff: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><line x1="3" y1="3" x2="21" y2="21"/>'),
   camera: svg('<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>', 14),
   download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', 14),
-  copy: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>', 14),
   share: svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>', 14),
   target: svg('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/>'),
   pause: svg('<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>'),
   play: svg('<polygon points="6 4 20 12 6 20 6 4"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', 14),
+  tree: svg('<circle cx="6" cy="5" r="2.5"/><circle cx="18" cy="5" r="2.5"/><circle cx="12" cy="19" r="2.5"/><path d="M6 7.5v1.5a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7.5M12 12v4.5"/>', 14),
+  film: svg('<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 8h5M2 16h5M17 8h5M17 16h5"/>', 14),
+  search: svg('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16" y2="16"/>', 13),
 };
 
 const TIER_NAME = { 1: 'uncommon', 2: 'rare', 3: 'impossible' };
+const traitLabel = (key) => M.ALLELE_META[key]?.label || M.ACCESSORIES[key.split(':')[1]]?.label || key;
+// A trait chip that starts the finder (highlights every bird that shows or carries it).
+const findChip = (key, cls, text) => `<button class="chip ${cls} findable" data-act="find" data-arg="${esc(key)}" title="Find birds with this in the park">${text}</button>`;
+// How a bird came to be, for the family tree.
+const ORIGIN = {
+  founder: 'A founding feral — it came with the original flock.',
+  clone: (r) => `A clone of ${esc(r.of || 'another bird')}, so it shares its parents.`,
+  registry: (r) => `Made to order from the Breed Registry${r.of ? ' (' + esc(r.of) + ')' : ''}.`,
+  summoned: 'Summoned by a secret word. Its parents are not available for comment.',
+  golden: 'Hatched from the golden egg. Nobody laid it.',
+  visitor: 'Visiting from out of town. Its family stayed home.',
+  unknown: 'It arrived before the park kept family records.',
+};
 function chip(tier) { return tier >= 3 ? 'chip-t3' : tier === 2 ? 'chip-t2' : 'chip-t1'; }
 function fmtAge(s) { if (s < 20) return 'freshly hatched'; if (s < 60) return 'a chick'; const m = Math.floor(s / 60); return m < 60 ? m + 'm in the park' : Math.floor(m / 60) + 'h in the park'; }
 function fmtHour(h) { const hh = Math.floor(h), mm = Math.floor((h - hh) * 60 / 15) * 15; const ap = hh >= 12 ? 'pm' : 'am'; return ((hh + 11) % 12 + 1) + ':' + String(mm).padStart(2, '0') + ' ' + ap; }
@@ -41,10 +56,12 @@ const CONTROLS = [
   ['Tap / click a pigeon', 'Inspect it: colours, traits, hidden DNA'],
   ['Drag a pigeon', 'Carry it somewhere. Drop it on the Roost to keep it'],
   ['Drag the park', 'Orbit the camera'],
+  ['W A S D · arrow keys', 'Pan around the park'],
+  ['Q · E', 'Rotate the camera'],
   ['Scroll / pinch', 'Zoom in and out'],
   ['Double-click a pigeon · F', 'Follow it around with the camera'],
   ['P · Space', 'Pause / resume the park'],
-  ['Esc', 'Close a panel, stop following, deselect'],
+  ['Esc', 'Close a panel, stop searching or following, deselect'],
   ['?', 'This help sheet'],
 ];
 
@@ -91,6 +108,7 @@ export class UI {
       <div id="bubbles"></div>
       <button id="recenter" class="btn icon panel hidden" data-act="recenter" aria-label="Recenter camera" title="Recenter camera (double-tap the ground)">${I.target}</button>
       <button id="paused" class="pill panel hidden" data-act="pause">${I.play}<span>Paused — tap to resume</span></button>
+      <div id="finder" class="pill panel hidden"></div>
       <aside id="inspector" class="card panel hidden"></aside>
       <div id="settings" class="card panel pop hidden"></div>
       <div id="intro" class="card panel hidden">
@@ -150,6 +168,8 @@ export class UI {
       case 'settings': this.$('settings').classList.toggle('hidden'); this.renderSettings(true); break;
       case 'photo': this.openPhoto({ id: +arg }); break;
       case 'photo-roost': this.openPhoto({ roost: +arg }); break;
+      case 'clip': this.openClip(+arg); break;
+      case 'share-clip': this.shareClip(); break;
       case 'share': this.sharePhoto(); break;
       case 'copy-photo': this.copyPhoto(a); break;
       case 'speed': S.speed = +arg; this.renderSettings(true); g.save(); break;
@@ -169,6 +189,15 @@ export class UI {
       case 'clone-out': { const p = S.releaseRoost(+arg, true); if (p) g.select(p.id); break; }
       case 'let-go': S.removeRoost(+arg); this.roostSel = null; break;
       case 'clone-breed': { const p = S.cloneBreed(arg); if (p) { this.closeDialog(); g.select(p.id); } break; }
+      case 'find': this.closeDialog(); g.findTrait(arg); break;
+      case 'find-off': g.findTrait(null); break;
+      case 'family': this.openFamily(+arg); break;
+      case 'ft-go': { // jump to a relative who is still around
+        const w = S.whereIs(+arg); if (!w) break;
+        this.closeDialog();
+        if (w.park != null) g.select(w.park); else { this.roostSel = w.roost; g.select(null, true); }
+        break;
+      }
     }
     this.renderRoost();
     this.refreshT = 0;
@@ -214,27 +243,28 @@ export class UI {
   // ---------- inspector ----------
   renderInspector() {
     const S = this.sim, P = this.g.portraits, el = this.$('inspector');
-    let d = null;
-    const sel = S.selId != null ? S.byId(S.selId) : null;
-    if (sel && !sel.flying) {
-      const carries = M.carriersOf(sel.genome);
-      d = { img: P.get(sel.pheno), kicker: 'Specimen no. ' + String(sel.id).padStart(3, '0'), name: sel.name,
-        meta: 'Generation ' + sel.gen + ' · ' + fmtAge(S.age(sel)), color: sel.pheno.label, breeds: sel.breeds, traits: sel.pheno.traits, carries,
-        actions: `<button class="btn primary" data-act="clone" data-arg="${sel.id}">${I.clone} Clone</button>
-                  <button class="btn" data-act="roost-add" data-arg="${sel.id}">${I.roost} Roost</button>
-                  <button class="btn ghost" data-act="dismiss" data-arg="${sel.id}">Dismiss<span class="opt"> politely</span></button>`,
-        follow: sel.id, photo: `data-act="photo" data-arg="${sel.id}"` };
-    } else if (this.roostSel != null && S.roost[this.roostSel]) {
-      const i = this.roostSel, r = S.roost[i], ph = M.computePheno(r.genome, r.accessory);
+    const sel = S.selId != null ? S.byId(S.selId) : null, live = sel && !sel.flying ? sel : null;
+    const ri = live ? null : this.roostSel, r = ri != null ? S.roost[ri] : null;
+    if (!live && !r) { if (this._insKey) { el.classList.add('hidden'); this._insKey = null; } return; }
+    // cheap key first: rebuild only when the bird, its look (rev), its age label or the follow state changes
+    const key = live ? `s|${live.id}|${live.rev || 0}|${fmtAge(S.age(live))}|${this.g.cam.follow}` : `r|${ri}|${r.name}|${r.lid}`;
+    if (key === this._insKey) return; this._insKey = key;
+    let d;
+    if (live) {
+      d = { img: P.get(live.pheno), kicker: 'Specimen no. ' + String(live.id).padStart(3, '0'), name: live.name,
+        meta: 'Generation ' + live.gen + ' · ' + fmtAge(S.age(live)), color: live.pheno.label, breeds: live.breeds, traits: live.pheno.traits, carries: M.carriersOf(live.genome),
+        actions: `<button class="btn primary" data-act="clone" data-arg="${live.id}">${I.clone} Clone</button>
+                  <button class="btn" data-act="roost-add" data-arg="${live.id}">${I.roost} Roost</button>
+                  <button class="btn ghost" data-act="dismiss" data-arg="${live.id}">Dismiss<span class="opt"> politely</span></button>`,
+        follow: live.id, photo: `data-act="photo" data-arg="${live.id}"`, lid: live.lid, clip: live.id };
+    } else {
+      const ph = M.computePheno(r.genome, r.accessory);
       d = { img: P.get(ph), kicker: 'Roost resident', name: r.name, meta: 'Generation ' + r.gen + ' · kept bird', color: ph.label,
         breeds: M.matchBreeds(ph), traits: ph.traits, carries: M.carriersOf(r.genome),
-        actions: `<button class="btn primary" data-act="clone-out" data-arg="${i}">${I.clone} Clone into park</button>
-                  <button class="btn" data-act="release" data-arg="${i}">Release to park</button>
-                  <button class="btn ghost" data-act="let-go" data-arg="${i}">Let go</button>`, photo: `data-act="photo-roost" data-arg="${i}"` };
+        actions: `<button class="btn primary" data-act="clone-out" data-arg="${ri}">${I.clone} Clone into park</button>
+                  <button class="btn" data-act="release" data-arg="${ri}">Release to park</button>
+                  <button class="btn ghost" data-act="let-go" data-arg="${ri}">Let go</button>`, photo: `data-act="photo-roost" data-arg="${ri}"`, lid: r.lid };
     }
-    if (!d) { el.classList.add('hidden'); this._insKey = null; return; }
-    const key = JSON.stringify([d.kicker, d.name, d.meta, this.g.cam.follow]);
-    if (key === this._insKey) return; this._insKey = key;
     el.classList.remove('hidden');
     el.innerHTML = `
       <button class="btn icon close" data-act="deselect" aria-label="Close">${I.x}</button>
@@ -244,9 +274,9 @@ export class UI {
       </div>
       <div class="colorlabel">${esc(d.color)}</div>
       ${d.breeds.length ? `<div class="chips">${d.breeds.map(b => `<span class="chip chip-breed">★ ${esc(b.name)}</span>`).join('')}</div>` : ''}
-      ${d.traits.length ? `<div class="chips">${d.traits.map(t => `<span class="chip ${chip(t.tier)}">${esc(t.label)}</span>`).join('')}</div>` : ''}
-      ${d.carries.length ? `<div><div class="label">Hidden in the DNA</div><div class="chips">${d.carries.map(c => `<span class="chip chip-carry">½ ${esc(c.label)}</span>`).join('')}</div></div>` : ''}
-      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera}<span class="opt"> Photo</span></button>${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye}<span class="opt"> ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</span></button>` : ''}</div>`;
+      ${d.traits.length ? `<div class="chips">${d.traits.map(t => findChip(t.key, chip(t.tier), esc(t.label))).join('')}</div>` : ''}
+      ${d.carries.length ? `<div><div class="label">Hidden in the DNA</div><div class="chips">${d.carries.map(c => findChip(c.key, 'chip-carry', '½ ' + esc(c.label))).join('')}</div></div>` : ''}
+      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera}<span class="opt"> Photo</span></button>${d.clip != null ? `<button class="btn ghost" data-act="clip" data-arg="${d.clip}" title="Make a 6-second vertical video">${I.film}<span class="opt"> Clip</span></button>` : ''}${d.lid != null && this.sim.family[d.lid] ? `<button class="btn ghost" data-act="family" data-arg="${d.lid}" title="Family tree">${I.tree}<span class="opt"> Family</span></button>` : ''}${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye}<span class="opt"> ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</span></button>` : ''}</div>`;
   }
 
   // ---------- settings ----------
@@ -258,7 +288,12 @@ export class UI {
     const alive = S.alive();
     const stats = `<div><b>${alive}</b><span>residents</span></div><div><b>${S.stats.births}</b><span>hatched</span></div>
         <div><b>${S.stats.flown}</b><span>departed</span></div><div><b>gen ${S.stats.maxGen}</b><span>deepest line</span></div>`;
-    if (!full && el.querySelector('.stats')) { const st = el.querySelector('.stats'); if (st.innerHTML !== stats) st.innerHTML = stats; return; }
+    const song = this.g.audio.songTitle, playing = song ? `♪ ${esc(song)}` : '';
+    if (!full && el.querySelector('.stats')) {
+      const st = el.querySelector('.stats'); if (st.innerHTML !== stats) st.innerHTML = stats;
+      const np = el.querySelector('.nowplaying'); if (np && np.innerHTML !== playing) np.innerHTML = playing;
+      return;
+    }
     const A = this.g.audio, vol = (act, v, on) => `<input type="range" min="0" max="100" value="${on ? Math.round(v * 100) : 0}" data-act="${act}" aria-label="${act}">`;
     const seg = (list, cur, act) => `<div class="seg">${list.map(o => `<button class="${cur(o) ? 'on' : ''}" data-act="${act}" data-arg="${act === 'speed' ? o.v : o.id}">${o.label}</button>`).join('')}</div>`;
     el.innerHTML = `
@@ -266,6 +301,7 @@ export class UI {
         <button class="btn icon ${A.musicOn ? '' : 'off'}" data-act="music" aria-label="Music">${A.musicOn ? I.music : I.musicOff}</button>
         <span class="spacer"></span><button class="btn small" data-act="help">${I.help} Help</button></div>
       <div class="row"><div class="label">Music</div>${vol('musicvol', A.musicVol, A.musicOn)}</div>
+      <div class="nowplaying">${playing}</div>
       <div class="row"><div class="label">Sounds</div>${vol('sfxvol', A.sfxVol, A.sfxOn)}</div>
       <div class="row"><div class="label">Park speed</div>${seg(SPEEDS, o => Math.abs(S.speed - o.v) < .05, 'speed')}</div>
       <div class="row"><div class="label">Mutations</div>${seg(MUTATIONS, o => S.mut === o.id, 'mut')}</div>
@@ -318,9 +354,41 @@ export class UI {
     el.querySelector('.photo-wrap').innerHTML = `<img src="${res.url}" alt="${esc(res.name)}" class="photo-img">`;
     el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
         <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} Download PNG</a>
-        ${canCopy ? `<button class="btn" data-act="copy-photo">${I.copy} <span>Copy image</span></button>` : ''}
+        ${canCopy ? `<button class="btn" data-act="copy-photo">${I.clone} <span>Copy image</span></button>` : ''}
         ${canShare ? `<button class="btn" data-act="share">${I.share} Share</button>` : ''}
         <span class="foot">${res.w} × ${res.h} px</span></div>`);
+  }
+  // Video clip: film 6 s of this bird with captions (see clip.js), then preview / download / share.
+  async openClip(id) {
+    if (this.g.recording) return;
+    this.dialog = 'clip';
+    const el = this.$('dialog'); el.classList.remove('hidden');
+    el.innerHTML = `<div class="dialog card photo-dlg clip-dlg" role="dialog">${this.dlgHead('Video clip', '<span class="chip chip-t1">6 s · vertical</span>')}
+      <div class="photo-wrap"><div class="filming"><div class="developing">Filming…</div><div class="bar clipbar"><i style="width:0%"></i></div>
+      <div class="foot">Rendering every frame at 1080 × 1920 — the park keeps living while the camera rolls.</div></div></div></div>`;
+    await new Promise(r => requestAnimationFrame(r));
+    const bar = el.querySelector('.clipbar i');
+    let res;
+    try { res = await this.g.clip(id, (k) => { if (bar) bar.style.width = Math.round(k * 100) + '%'; }); }
+    catch (e) {
+      if (this.dialog === 'clip') el.querySelector('.photo-wrap').innerHTML = `<p class="clip-err">${esc(e.message || String(e))}</p>`;
+      return;
+    }
+    if (this.dialog !== 'clip') { URL.revokeObjectURL(res.url); return; }
+    if (this.clipRes) URL.revokeObjectURL(this.clipRes.url);
+    this.clipRes = res;
+    const file = new File([res.blob], res.file, { type: res.mime });
+    const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+    const kind = `${res.mime.includes('mp4') ? 'MP4' : 'WebM'} (${{ avc: 'H.264', vp9: 'VP9', av1: 'AV1', vp8: 'VP8' }[res.codec] || res.codec}${res.audioCodec ? ' + ' + res.audioCodec.toUpperCase() : ', silent'})`;
+    el.querySelector('.photo-wrap').innerHTML = `<video class="photo-img clip-video" src="${res.url}" autoplay loop muted playsinline controls></video>`;
+    el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
+        <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} Download</a>
+        ${canShare ? `<button class="btn" data-act="share-clip">${I.share} Share</button>` : ''}
+        <span class="foot">${res.w} × ${res.h} · ${kind} · ${(res.blob.size / 1e6).toFixed(1)} MB${res.mime.includes('mp4') ? '' : ' · for Instagram, convert to MP4 first'}</span></div>`);
+  }
+  async shareClip() {
+    const r = this.clipRes; if (!r) return;
+    try { await navigator.share({ files: [new File([r.blob], r.file, { type: r.mime })], title: r.name, text: `${r.name} — Pigeon Park 🐦 pigeonpark.live` }); } catch (e) { /* cancelled */ }
   }
   // Put the picture itself on the clipboard (paste straight into chats, docs, email).
   async copyPhoto(btn) {
@@ -336,6 +404,44 @@ export class UI {
     const r = this.photoRes; if (!r) return;
     try { await navigator.share({ files: [new File([r.blob], r.file, { type: 'image/png' })], title: r.name, text: r.name + ' — Pigeon Park' }); } catch (e) { /* cancelled */ }
   }
+  openFamily(lid) {
+    const S = this.sim, P = this.g.portraits, T = S.familyTree(lid), me = T.root; if (!me) return;
+    this.dialog = 'family';
+    const cells = [];
+    const where = (id) => { const w = S.whereIs(id); return w ? (w.park != null ? 'in the park' : 'in the roost') : 'flown off'; };
+    const cell = (node, d, i) => {
+      const span = 8 >> d, pos = d ? (i % 2 ? 'down' : 'up') : '', area = `grid-column:${d + 1};grid-row:${i * span + 1} / span ${span}`;
+      if (!node) { cells.push(`<div class="ft-cell ${pos}" style="${area}"><div class="ft-node unknown"><span class="ft-q">?</span><span class="ft-txt"><b>Unknown</b><small>records lost</small></span></div></div>`); return; }
+      const r = node.rec, alive = !!S.whereIs(node.lid), kids = node.par && node.par.length;
+      const ph = M.computePheno(M.decodeGenome(r.g), r.a), breed = M.matchBreeds(ph)[0];
+      cells.push(`<div class="ft-cell ${pos} ${kids ? 'kids' : ''}" style="${area}">
+        <button class="ft-node ${d ? '' : 'self'} ${alive ? 'live' : ''}" ${alive && d ? `data-act="ft-go" data-arg="${node.lid}"` : ''} title="${esc(r.n)} — ${esc(ph.label)}${breed ? ' · ' + esc(breed.name) : ''}">
+          <img src="${P.get(ph)}" alt=""><span class="ft-txt"><b>${esc(r.n)}</b><small>${breed ? '★ ' + esc(breed.name) + ' · ' : ''}gen ${r.ge} · ${where(node.lid)}</small></span></button></div>`);
+      if (kids) node.par.forEach((q, j) => cell(q, d + 1, i * 2 + j));
+    };
+    cell(me, 0, 0);
+    const r = me.rec, [pa, pb] = me.par || [];
+    const origin = r.how === 'hatch' ? `Hatched in the park to ${esc(pa?.rec.n || 'a bird lost to history')} and ${esc(pb?.rec.n || 'a bird lost to history')}.` : typeof ORIGIN[r.how] === 'function' ? ORIGIN[r.how](r) : ORIGIN[r.how] || ORIGIN.unknown;
+    const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const kin = T.chicks || T.grandchicks ? ` In the park now: ${[T.chicks && plural(T.chicks, 'chick'), T.grandchicks && plural(T.grandchicks, 'grandchick')].filter(Boolean).join(', ')}.` : '';
+    const el = this.$('dialog'); el.classList.remove('hidden');
+    el.innerHTML = `<div class="dialog card fam-dlg" role="dialog">${this.dlgHead('Family of ' + esc(r.n), `<span class="chip chip-t1">generation ${r.ge}</span>`)}
+      <p class="fam-sum">${origin}${kin}</p>
+      <div class="ftree-wrap"><div class="ftree ${me.par ? '' : 'solo'}">${cells.join('')}</div></div>
+      <div class="foot">Parents, grandparents and great-grandparents. Tap a relative who's still around to go to them.</div></div>`;
+  }
+  // Banner for the trait finder: what's being searched for, how many show / carry it, and a way out.
+  renderFind() {
+    const el = this.$('finder'), f = this.g.find;
+    if (!f) { if (!el.classList.contains('hidden')) { el.classList.add('hidden'); this._findKey = null; } return; }
+    let show = 0, carry = 0;
+    for (const p of this.sim.pigeons) { if (p.flying) continue; const st = M.traitStatus(p.genome, p.pheno, f.key); if (st === 2) show++; else if (st === 1) carry++; }
+    const key = [f.key, show, carry].join('|'); if (key === this._findKey) return; this._findKey = key;
+    el.classList.remove('hidden');
+    el.innerHTML = `${I.search}<b>${esc(traitLabel(f.key))}</b>` + (show + carry
+      ? `<span class="fk"><i class="fdot show"></i>${show} show${show === 1 ? 's' : ''} it</span>${f.key.startsWith('acc:') ? '' : `<span class="fk"><i class="fdot carry"></i>${carry} carr${carry === 1 ? 'ies' : 'y'} it</span>`}`
+      : `<span class="fk">nobody in the park has it</span>`) + `<button class="btn icon" data-act="find-off" aria-label="Stop finding">${I.x}</button>`;
+  }
   closeDialog() { this.dialog = null; this.$('dialog').classList.add('hidden'); this.$('dialog').innerHTML = ''; }
   dlgHead(title, tag) { return `<div class="dlg-head"><div class="dlg-title">${title}</div>${tag}<span class="spacer"></span><button class="btn icon" data-act="close" aria-label="Close">${I.x}</button></div>`; }
   dlg_pedia() {
@@ -346,8 +452,8 @@ export class UI {
     }).sort((a, b) => (b.got - a.got) || (a.tier - b.tier) || (a.title > b.title ? 1 : -1));
     const n = keys.filter(k => S.discovered[k]).length;
     return this.dlgHead('The Pigeonpedia', `<span class="chip chip-t1">${n} / ${keys.length} observed</span>`) +
-      `<div class="grid pedia">${items.map(i => `<div class="entry ${i.got ? '' : 'dim'}"><div class="entry-top"><b>${esc(i.title)}</b><span class="chip ${chip(i.tier)} tiny">${TIER_NAME[i.tier] || 'odd'}</span></div><div class="note">${esc(i.note)}</div></div>`).join('')}</div>
-       <div class="foot">Field notes are written the first time a trait hatches in your park.</div>`;
+      `<div class="grid pedia">${items.map(i => `<div class="entry ${i.got ? '' : 'dim'}"><div class="entry-top"><b>${esc(i.title)}</b><span class="chip ${chip(i.tier)} tiny">${TIER_NAME[i.tier] || 'odd'}</span></div><div class="note">${esc(i.note)}</div>${i.got ? `<button class="btn small ghost find" data-act="find" data-arg="${esc(i.k)}">${I.search} Find in park</button>` : ''}</div>`).join('')}</div>
+       <div class="foot">Field notes are written the first time a trait hatches in your park. <b>Find in park</b> marks birds that show a trait in green and hidden carriers in yellow.</div>`;
   }
   // Trait groups a breed needs that the player hasn't observed yet (each group: any one allele counts).
   missingTraits(b) {
@@ -361,6 +467,17 @@ export class UI {
     }
     return groups.filter(g => !g.some(key => S.discovered[key]));
   }
+  // The recipe's trait keys (each alternative listed), for the registry's find chips.
+  recipeTraits(b) {
+    const keys = [];
+    for (const [k, v] of Object.entries(b.req)) {
+      const vals = Array.isArray(v) ? v : [v];
+      if (k === 'colorKey') keys.push(...M.colorTraits(vals[0]));
+      else if (k === 'accessory') keys.push(...vals.map(x => 'acc:' + x));
+      else keys.push(...vals.map(x => k + ':' + x).filter(key => M.ALLELE_META[key]));
+    }
+    return keys;
+  }
   dlg_breeds() {
     const S = this.sim, P = this.g.portraits;
     const list = M.BREEDS.map(b => ({ b, got: S.breeds[b.id] })).sort((x, y) => (!!y.got - !!x.got));
@@ -372,9 +489,10 @@ export class UI {
           <b>${got ? esc(b.name) : '???'}</b>
           <span class="chip tiny ${b.legend ? 'chip-breed' : b.real ? 'chip-t1' : 'chip-t3'}">${b.legend ? 'legendary' : b.real ? (b.exotic ? 'exotic' : 'real breed') : 'cryptid'}</span>
           <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : (() => { const n = this.missingTraits(b).length; return n ? `Recipe unknown — needs ${n} trait${n > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'; })()}</div>
+          ${(got || (!b.legend && !this.missingTraits(b).length)) && this.recipeTraits(b).length ? `<div class="chips recipe">${this.recipeTraits(b).map(k => findChip(k, 'chip-t1', I.search + ' ' + esc(traitLabel(k)))).join('')}</div>` : ''}
           ${got ? `<div class="by">first bred by ${esc(got.by)}</div><button class="btn small" data-act="clone-breed" data-arg="${b.id}">${I.clone} Clone into park</button>` : ''}
         </div>`).join('')}</div>
-       <div class="foot">Match a real fancy-pigeon breed to register it. The cryptids are your problem.</div>`;
+       <div class="foot">Match a real fancy-pigeon breed to register it. The cryptids are your problem. Tap a recipe trait to find birds that show or carry it.</div>`;
   }
   dlg_help() {
     const S = this.sim;
@@ -394,7 +512,9 @@ export class UI {
           <li>A registry card reveals its recipe once you've observed every trait it needs. Found breeds can be cloned straight into the park.</li>
           <li>Fantasy colours only appear through mutation — turn Mutations up to <b>${MUTATIONS[2].label}</b> to fish for them.</li>
           <li>Park speed goes from ${SPEEDS[0].label} to ${SPEEDS[SPEEDS.length - 1].label}. It's fine to just leave the park running.</li>
-          <li>Tap <b>Photo</b> on any bird for a high-res picture card you can download or share.</li>
+          <li>Hunting a breed? Tap a trait (in a bird's card, the Pigeonpedia or a registry recipe) to <b>find</b> it: birds that show it get a green marker, hidden carriers a yellow one. Clone those.</li>
+          <li><b>Family</b> on a bird's card shows its parents, grandparents and great-grandparents.</li>
+          <li>Tap <b>Photo</b> on any bird for a high-res picture card, or <b>Clip</b> for a 6-second vertical video (with captions and music) to post.</li>
           <li>Music and sound effects have separate buttons in the top bar and volume sliders in settings.</li>
           <li>Milestones build <b>monuments</b> on the lawn around the plaza. Tap one to see what it's for and how close you are to the rest.</li>
           <li>Some words, typed while the park is open (or entered under <b>Secret code</b> in settings), do things.</li>
@@ -411,47 +531,48 @@ export class UI {
       this.refreshT = .4;
       const alive = S.alive();
       this.$('pop').textContent = alive + ' / ' + S.cap + ' pigeons';
-      const h = phaseToHour(S.phase());
-      this.$('clock').innerHTML = (S.night > .5 ? I.moon : I.sun) + `<span>${fmtHour(h)}</span>`;
+      const clock = (S.night > .5 ? 'm' : 's') + fmtHour(phaseToHour(S.phase()));
+      if (clock !== this._clock) { this._clock = clock; this.$('clock').innerHTML = (S.night > .5 ? I.moon : I.sun) + `<span>${clock.slice(1)}</span>`; }
       const nB = Object.keys(S.breeds).length, nP = Object.keys(S.discovered).length;
       this.$('breedcount').textContent = nB + '/' + M.BREEDS.length;
       this.$('b-breeds').classList.toggle('new', nB > this.seen.breeds);
       this.$('b-pedia').classList.toggle('new', nP > this.seen.pedia);
-      this.renderInspector(); this.renderSettings(); this.renderRoost();
+      this.renderInspector(); this.renderSettings(); this.renderRoost(); this.renderFind();
       this.$('intro').classList.toggle('hidden', this.introDone || S.selId != null || this.roostSel != null || !!this.dialog);
     }
     const rc = this.g.cam.name === 'overview' || this.g.cam.name === 'hud-check';
     if (rc !== this._rcHidden) { this._rcHidden = rc; this.$('recenter').classList.toggle('hidden', rc); }
     this.renderBubbles(cam);
   }
+  // Speech bubbles + the selected bird's name tag, pinned over the birds' heads (DOM, moved per frame).
   renderBubbles(cam) {
-    const S = this.sim, box = this.$('bubbles'), seen = new Set(), v = new THREE.Vector3();
-    const W = innerWidth, Hh = innerHeight;
+    const S = this.sim, box = this.box || (this.box = this.$('bubbles')), seen = this._seen || (this._seen = new Set());
+    let tagShown = false;
+    seen.clear();
     for (const p of S.pigeons) {
       const isSel = p.id === S.selId;
       if (!p.emote && !isSel) continue;
       const view = this.g.flock.view(p.id); if (!view) continue;
-      const s = view.size(p, S.t);
-      v.set(view.vis.x, view.vis.y + .72 * s, view.vis.z).project(cam);
-      if (v.z > 1) continue;
-      const x = (v.x * .5 + .5) * W, y = (-v.y * .5 + .5) * Hh;
+      const s = view.size(p, S.t), top = toScreen(view.vis.x, view.vis.y + .72 * s, view.vis.z, cam);
+      if (top.z > 1) continue; // behind the camera
       if (p.emote) {
         seen.add(p.id);
         let b = this.bubbles.get(p.id);
         const text = p.emote.kind === 'heart' ? '♥' : p.emote.kind === 'zzz' ? 'z z z' : p.emote.text || '!';
         if (!b) { b = document.createElement('div'); box.appendChild(b); this.bubbles.set(p.id, b); }
         if (b.textContent !== text) { b.textContent = text; b.className = 'bubble ' + (p.emote.kind === 'heart' ? 'heart' : p.emote.kind === 'zzz' ? 'zzz' : 'say'); }
-        b.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
+        b.style.transform = `translate(${top.x}px, ${top.y}px) translate(-50%, -100%)`;
       }
       if (isSel) {
         let n = this.nameTag;
         if (!n) { n = this.nameTag = document.createElement('div'); n.className = 'nametag'; box.appendChild(n); }
-        v.set(view.vis.x, view.vis.y, view.vis.z).project(cam);
-        n.textContent = p.name; n.style.display = '';
-        n.style.transform = `translate(${(v.x * .5 + .5) * W}px, ${(-v.y * .5 + .5) * Hh + 10}px) translate(-50%, 0)`;
+        const feet = toScreen(view.vis.x, view.vis.y, view.vis.z, cam);
+        if (n.textContent !== p.name) n.textContent = p.name;
+        n.style.transform = `translate(${feet.x}px, ${feet.y + 10}px) translate(-50%, 0)`;
+        tagShown = true;
       }
     }
-    if (this.nameTag && (S.selId == null || !S.byId(S.selId))) this.nameTag.style.display = 'none';
+    if (this.nameTag && this.nameTag.style.display !== (tagShown ? '' : 'none')) this.nameTag.style.display = tagShown ? '' : 'none';
     for (const [id, b] of this.bubbles) if (!seen.has(id)) { b.remove(); this.bubbles.delete(id); }
   }
 }

@@ -27,6 +27,7 @@ export function fountainClearance(p) {
   return { gap: d - (FOUNTAIN.lip + BODY.half * k), qx, qz, d };
 }
 export const ROOST_SIZE = 8;
+export const TREE_DEPTH = 3;      // family records kept per bird: parents, grandparents, great-grandparents
 // Park layout outside the plaza, in rings: benches/lamps → open lawn → monument ring → hedges, bushes, trees.
 export const DOVECOTE = { x: 8.9, z: -6.5 };
 const ADULT_AGE = 13;
@@ -76,10 +77,11 @@ function genomeHash(genome) {
   return jh >>> 0;
 }
 
+// Wild-type genome with some loci overridden: an allele (homozygous) or an explicit [a, b] pair.
 export function pureGenome(over) {
   const g = {};
   for (const l of M.LOCI) g[l.id] = [M.WILD[l.id], M.WILD[l.id]];
-  for (const [k, v] of Object.entries(over)) g[k] = [v, v];
+  for (const [k, v] of Object.entries(over)) g[k] = Array.isArray(v) ? [...v] : [v, v];
   return g;
 }
 
@@ -94,6 +96,10 @@ export class Sim {
     this.ids = 1;
     this.pigeons = []; this.eggs = []; this.poops = [];
     this.roost = []; this.discovered = {}; this.breeds = {};
+    // Ancestry: lineage id → { n: name, g: encoded genome, a: accessory, ge: generation, par: [lid, lid] | null,
+    // how: 'hatch'|'founder'|'clone'|'registry'|'summoned'|'golden'|'visitor'|'unknown', of: cloned bird's name }.
+    // Lineage ids survive save/load (sim ids don't); records outside TREE_DEPTH of anyone alive are pruned.
+    this.family = {}; this.lids = 1;
     this.stats = { births: 0, flown: 0, maxGen: 1, happenings: 0 };
     this.achievements = {};  // id → { at }
     this.court = null;
@@ -148,7 +154,7 @@ export class Sim {
   }
 
   // ---------- flock ----------
-  spawn({ genome, accessory = null, name, gen = 1, adult = false, x, z, quiet = false, dir }) {
+  spawn({ genome, accessory = null, name, gen = 1, adult = false, x, z, quiet = false, dir, lid, how = 'founder', par = null, of }) {
     M.normalizeGenome(genome); // older saves predate some genes
     const pheno = M.computePheno(genome, accessory);
     if (x === undefined || z === undefined) [x, z] = this.randomSpot(); else [x, z] = this.clampToPark(x, z);
@@ -161,7 +167,9 @@ export class Sim {
       state: 'idle', stateUntil: this.t + .4 + rand() * 1.5, stateAt: this.t,
       emote: null, emoteUntil: 0, courting: false, flying: false, flyAt: 0, held: false,
       breeds: M.matchBreeds(pheno),
+      lid: lid ?? this.lids++,
     };
+    if (!this.family[p.lid]) this.family[p.lid] = { n: name, g: M.encodeGenome(genome), a: accessory, ge: gen, par, how, ...(of ? { of } : {}) };
     this.keepOut(p);
     this.pigeons.push(p);
     this.stats.maxGen = Math.max(this.stats.maxGen, p.gen);
@@ -191,7 +199,7 @@ export class Sim {
     this.ready = true;
     if (saved && saved.pigeons && saved.pigeons.length) {
       saved.pigeons.slice(0, this.cap).forEach(sp => {
-        const q = this.spawn({ genome: sp.g, accessory: sp.a, name: sp.n, gen: sp.ge || 1, adult: true, quiet: true, x: sp.x, z: sp.z });
+        const q = this.spawn({ genome: sp.g, accessory: sp.a, name: sp.n, gen: sp.ge || 1, adult: true, quiet: true, x: sp.x, z: sp.z, lid: sp.l, how: 'unknown' });
         if (sp.d != null) q.dir = sp.d;
       });
       return;
@@ -343,7 +351,7 @@ export class Sim {
         }
         if (C.eggAt && now >= C.eggAt) {
           const off = M.offspring(a.genome, b.genome, this.mutF());
-          this.eggs.push({ id: this.ids++, x: C.mx, z: C.mz + .12, genome: off.genome, gen: Math.max(a.gen, b.gen) + 1, laidAt: now, hatchAt: now + 6 + rand() * 3.5, parents: [a.id, b.id] });
+          this.eggs.push({ id: this.ids++, x: C.mx, z: C.mz + .12, genome: off.genome, gen: Math.max(a.gen, b.gen) + 1, laidAt: now, hatchAt: now + 6 + rand() * 3.5, parents: [a.lid, b.lid] });
           this.sound('pop');
           a.courting = b.courting = false; a.stateUntil = b.stateUntil = now; a.state = b.state = 'idle';
           this.court = null;
@@ -355,7 +363,7 @@ export class Sim {
       if (now >= eg.hatchAt) {
         this.eggs = this.eggs.filter(x => x !== eg);
         const acc = M.rollAccessory(0.02);
-        const baby = this.spawn({ genome: eg.genome, accessory: acc, name: M.randomName(), gen: eg.gen, x: eg.x, z: eg.z, dir: Math.PI / 2 });
+        const baby = this.spawn({ genome: eg.genome, accessory: acc, name: M.randomName(), gen: eg.gen, x: eg.x, z: eg.z, dir: Math.PI / 2, how: eg.golden ? 'golden' : 'hatch', par: eg.parents || null });
         if (rand() < .6) { baby.emote = { kind: 'say', text: M.pick(M.BABY_LINES) }; baby.emoteUntil = now + 2.6; }
         if (eg.golden) { this.sparkle(eg.x, eg.z, 3); this.toast('The golden egg hatched… something: ' + baby.pheno.label + (baby.breeds.length ? ' (' + baby.breeds.map(b => b.name).join(', ') + ')' : '') + '.', 'breed'); }
         this.stats.births++;
@@ -388,6 +396,7 @@ export class Sim {
   // Swap a bird's accessory (UFO gift): new phenotype, maybe new breeds; the view rebuilds on p.rev.
   setAccessory(p, acc) {
     p.accessory = acc; p.pheno = M.computePheno(p.genome, acc); p.breeds = M.matchBreeds(p.pheno);
+    if (this.family[p.lid]) this.family[p.lid].a = acc;
     p.rev = (p.rev || 0) + 1;
     this.notice(p);
   }
@@ -399,7 +408,7 @@ export class Sim {
   clonePigeon(id) {
     const p = this.byId(id); if (!p || p.flying || this.full()) return null;
     let nm = 'Also ' + p.name; if (nm.length > 30) nm = M.randomName();
-    const q = this.spawn({ genome: structuredClone(p.genome), accessory: p.accessory, name: nm, gen: p.gen, adult: true, x: p.x + .45, z: p.z + .15, dir: p.dir });
+    const q = this.spawn({ genome: structuredClone(p.genome), accessory: p.accessory, name: nm, gen: p.gen, adult: true, x: p.x + .45, z: p.z + .15, dir: p.dir, how: 'clone', of: p.name, par: this.family[p.lid]?.par || null });
     this.stats.births++;
     this.sparkle(q.x, q.z, 1);
     this.sound('pop');
@@ -414,7 +423,7 @@ export class Sim {
   roostAdd(id) {
     const p = this.byId(id); if (!p || p.flying) return false;
     if (this.roost.length >= ROOST_SIZE) { this.toast(M.pick(M.COPY.roostFull)); return false; }
-    this.roost.push({ name: p.name, genome: p.genome, accessory: p.accessory, gen: p.gen });
+    this.roost.push({ name: p.name, genome: p.genome, accessory: p.accessory, gen: p.gen, lid: p.lid });
     this.pigeons = this.pigeons.filter(x => x.id !== id);
     if (this.court && (this.court.a === id || this.court.b === id)) this.court = null;
     if (this.selId === id) this.selId = null;
@@ -425,7 +434,8 @@ export class Sim {
   }
   releaseRoost(i, keep) {
     const r = this.roost[i]; if (!r || this.full()) return null;
-    const p = this.spawn({ genome: structuredClone(r.genome), accessory: r.accessory, name: keep ? 'Also ' + r.name : r.name, gen: r.gen, adult: true });
+    const p = this.spawn({ genome: structuredClone(r.genome), accessory: r.accessory, name: keep ? 'Also ' + r.name : r.name, gen: r.gen, adult: true,
+      ...(keep ? { how: 'clone', of: r.name, par: this.family[r.lid]?.par || null } : { lid: r.lid, how: 'unknown' }) });
     if (keep) this.stats.births++;
     this.sparkle(p.x, p.z, 1);
     this.sound('pop');
@@ -440,10 +450,8 @@ export class Sim {
   cloneBreed(id) {
     const b = M.BREEDS.find(x => x.id === id);
     if (!b || !this.breeds[id] || this.full()) return null;
-    const sample = M.breedSample(b);
-    const genome = {};
-    for (const l of M.LOCI) genome[l.id] = [sample.e[l.id], sample.e[l.id]];
-    const p = this.spawn({ genome, accessory: sample.accessory, name: M.randomName(), gen: this.stats.maxGen, adult: true });
+    const { genome, accessory } = M.breedGenome(b);
+    const p = this.spawn({ genome, accessory, name: M.randomName(), gen: this.stats.maxGen, adult: true, how: 'registry', of: b.name });
     this.stats.births++;
     this.sparkle(p.x, p.z, 2);
     this.sound('pop');
@@ -456,7 +464,7 @@ export class Sim {
       { name: 'THE GALAXY PIGEON', g: pureGenome({ sheen: 'galaxy', fpattern: 'stars', tail: 'fantail' }) },
     ];
     for (const L of legends) {
-      const p = this.spawn({ genome: L.g, name: L.name, gen: this.stats.maxGen, adult: true, x: (rand() - .5) * 2, z: 1 + rand() });
+      const p = this.spawn({ genome: L.g, name: L.name, gen: this.stats.maxGen, adult: true, x: (rand() - .5) * 2, z: 1 + rand(), how: 'summoned' });
       this.sparkle(p.x, p.z, 3);
     }
     this.sound('chime');
@@ -470,7 +478,7 @@ export class Sim {
       ['THE MIXED GEMSTONE PIGEON', 'gemore'], ['THE COAL ORE PIGEON', 'coalore'],
     ];
     for (const [name, f] of ores) {
-      const p = this.spawn({ genome: pureGenome({ fantasy: f }), name, gen: this.stats.maxGen, adult: true, x: (rand() - .5) * PARK.w * .7, z: (rand() - .5) * PARK.d * .5 });
+      const p = this.spawn({ genome: pureGenome({ fantasy: f }), name, gen: this.stats.maxGen, adult: true, x: (rand() - .5) * PARK.w * .7, z: (rand() - .5) * PARK.d * .5, how: 'summoned' });
       this.sparkle(p.x, p.z, 3);
     }
     this.sound('chime');
@@ -497,12 +505,50 @@ export class Sim {
     p.y = .55; p.state = 'idle'; p.stateUntil = this.t + .7;
   }
 
+  // ---------- family tree ----------
+  // Drop ancestry records nobody alive (park, roost, eggs) can reach within TREE_DEPTH generations.
+  pruneFamily() {
+    const F = this.family, keep = new Set();
+    const walk = (lid, depth) => {
+      if (lid == null || !F[lid] || depth > TREE_DEPTH) return;
+      keep.add(String(lid));
+      if (F[lid].par) for (const q of F[lid].par) walk(q, depth + 1);
+    };
+    for (const p of this.pigeons) walk(p.lid, 0);
+    for (const r of this.roost) walk(r.lid, 0);
+    for (const e of this.eggs) for (const q of e.parents || []) walk(q, 1);
+    for (const k of Object.keys(F)) if (!keep.has(k)) delete F[k];
+    return F;
+  }
+  // Where a lineage id is now: a bird in the park, a roost perch, or gone.
+  whereIs(lid) {
+    const p = this.pigeons.find(q => q.lid === lid && !q.flying);
+    if (p) return { park: p.id };
+    const i = this.roost.findIndex(r => r.lid === lid);
+    return i >= 0 ? { roost: i } : null;
+  }
+  // Ancestor tree to TREE_DEPTH for a lineage id: { lid, rec, par: [node|null, node|null] } — plus
+  // how many of its chicks / grandchicks are in the park right now.
+  familyTree(lid) {
+    const F = this.family;
+    const node = (id, d) => {
+      const rec = F[id]; if (!rec) return null;
+      return { lid: id, rec, par: d < TREE_DEPTH && rec.par ? rec.par.map(q => node(q, d + 1)) : null };
+    };
+    const kids = new Set(), grand = new Set();
+    for (const [k, r] of Object.entries(F)) if (r.par && r.par.includes(lid) && r.how === 'hatch') kids.add(+k);
+    for (const [k, r] of Object.entries(F)) if (r.par && r.par.some(q => kids.has(q))) grand.add(+k);
+    const inPark = (set) => this.pigeons.filter(p => !p.flying && set.has(p.lid)).length;
+    return { root: node(lid, 0), chicks: inPark(kids), grandchicks: inPark(grand) };
+  }
+
   // ---------- persistence ----------
   serialize(extra) {
     return {
       v: 1,
-      pigeons: this.pigeons.filter(p => !p.flying && !p.visitor).map(p => ({ n: p.name, g: p.genome, a: p.accessory, ge: p.gen, x: +p.x.toFixed(3), z: +p.z.toFixed(3), d: +p.dir.toFixed(3) })),
+      pigeons: this.pigeons.filter(p => !p.flying && !p.visitor).map(p => ({ n: p.name, g: p.genome, a: p.accessory, ge: p.gen, x: +p.x.toFixed(3), z: +p.z.toFixed(3), d: +p.dir.toFixed(3), l: p.lid })),
       roost: this.roost, disc: this.discovered, breeds: this.breeds, stats: this.stats, ach: this.achievements,
+      family: this.pruneFamily(), lids: this.lids,
       speed: this.speed, mut: this.mut, whimsy: this.whimsy, ph: this.phase(), ...extra,
     };
   }
@@ -511,6 +557,8 @@ export class Sim {
     this.roost = (d.roost || []).map(r => ({ ...r, genome: M.normalizeGenome(r.genome) })); this.discovered = d.disc || {}; this.breeds = d.breeds || {};
     this.stats = { ...this.stats, ...(d.stats || {}) };
     this.achievements = d.ach || {};
+    this.family = d.family || {};
+    if (d.lids) this.lids = Math.max(this.lids, d.lids);
     if (d.speed != null) this.speed = d.speed;
     if (d.mut) this.mut = d.mut;
     if (d.whimsy) this.whimsy = d.whimsy;

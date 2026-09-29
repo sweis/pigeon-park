@@ -668,7 +668,6 @@ const BIRD_BOUNDS = new THREE.Sphere(V(0, .4, 0), 1.0);
 export class PigeonRig {
   constructor(pheno, materials, castShadow = true) {
     const { geometry, kind } = pigeonGeometry(pheno);
-    this.kind = kind;
     const bones = {}, list = [];
     for (const name of BONES) {
       const bone = new THREE.Bone(); bone.name = name;

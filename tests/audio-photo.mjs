@@ -27,13 +27,29 @@ await click('#b-music');
 const musicOnly = await level();
 check((await A()).musicOn && !(await A()).sfxOn && musicOnly > .002, `music toggles back on independently (rms ${musicOnly?.toFixed(4)})`);
 
+// happenings cut into their own songs (UFO / disco / conga), then hand back to the park's playlist
+{
+  const songOf = () => page.evaluate(() => window.pp.audio().song);
+  const day = await songOf();
+  check(['strut', 'waltz', 'shuffle'].includes(day), `daytime plays a park song (${day})`);
+  for (const [kind, want] of [['ufo', 'ufo'], ['dance', 'disco'], ['conga', 'conga']]) {
+    await page.evaluate((k) => window.pp.happen(k), kind);
+    const ok = await page.waitForFunction((w) => window.pp.audio().song === w, want, { timeout: 8000, polling: 50 }).then(() => true, () => false);
+    check(ok, `${kind} happening cuts to its song (${await songOf()})`);
+  }
+  await page.evaluate(() => { const S = window.__game.sim; S.happening.until = 0; S.t += 1; window.pp.step(20); window.pp.resume(); });
+  const back = await page.waitForFunction(() => ['strut', 'waltz', 'shuffle'].includes(window.pp.audio().song), null, { timeout: 8000, polling: 50 }).then(() => true, () => false);
+  check(back, `after the happening the park song returns (${await songOf()})`);
+  const lv = await page.evaluate(async () => { const r = {}; for (const id of window.pp.songs()) r[id] = (await window.pp.songLevel(id, 6)).rms; return r; });
+  check(Object.values(lv).every(v => v > .008 && v < .08), `every song renders at a sane level offline (${Object.entries(lv).map(([k, v]) => k + ' ' + v).join(', ')})`);
+}
 // with music muted and sounds on, no music notes are scheduled at all (only coos)
 {
   const r = await page.evaluate(async () => {
     const A = window.__game.audio, M = A.music; A.setMusic(false); A.setSfx(true);
-    let notes = 0; const f = M.cooLead.bind(M); M.cooLead = (...a) => { notes++; return f(...a); };
-    await new Promise(res => setTimeout(res, 2500)); M.cooLead = f;
-    return { notes, timer: !!M.timer };
+    const n0 = M.notes;
+    await new Promise(res => setTimeout(res, 2500));
+    return { notes: M.notes - n0, timer: !!M.timer };
   });
   check(r.notes === 0 && !r.timer, `muted music schedules nothing while sounds stay on (${r.notes} notes)`);
 }

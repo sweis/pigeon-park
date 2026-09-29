@@ -2,10 +2,11 @@
 
 import * as THREE from 'three';
 import { PARK, FOUNTAIN, DOVECOTE } from './sim.js';
+import { damp } from './util.js';
 // how far the camera may pan: out to the monument ring
 const REACH = { x: PARK.w / 2 + 4.6, z: PARK.d / 2 + 4.6 }; // a little past the monument ring, so edge pieces can be centred
 
-const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
+const TAU = Math.PI * 2;
 
 export class CameraRig {
   constructor(aspect) {
@@ -33,6 +34,9 @@ export class CameraRig {
     if (this.name === 'overview') this.want.dist = this.home;
   }
   snap() { this.cur = { ...this.want, target: this.want.target.clone() }; this.apply(); }
+  // The equivalent of azimuth `a` nearest to where the camera is now, so a shot after spinning the
+  // camera round a few times doesn't unwind every turn.
+  nearAz(a) { return a + Math.round((this.cur.az - a) / TAU) * TAU; }
   shot(name, opts = {}) {
     this.name = name; this.follow = null;
     const W = this.want;
@@ -41,12 +45,22 @@ export class CameraRig {
     else if (name === 'dovecote') Object.assign(W, { az: -.55, pol: 1.15, dist: 6, target: new THREE.Vector3(DOVECOTE.x, 1.8, DOVECOTE.z) });
     else if (name === 'hero-close') Object.assign(W, { az: opts.az ?? .5, pol: 1.3, dist: opts.dist ?? 2.1, target: new THREE.Vector3(opts.x ?? 0, opts.y ?? .28, opts.z ?? 0) });
     else if (name === 'follow') { Object.assign(W, { pol: 1.12, dist: opts.dist ?? 3.6 }); this.follow = opts.id; }
+    W.az = this.nearAz(W.az);
     if (opts.snap !== false) this.snap();
   }
   orbit(dx, dy) {
-    this.want.az = THREE.MathUtils.clamp(this.want.az - dx * .005, this.overviewAz - 1.25, this.overviewAz + 1.25);
+    this.want.az -= dx * .005; // all the way round: the park is dressed on every side
     this.want.pol = THREE.MathUtils.clamp(this.want.pol - dy * .004, .45, 1.38);
     this.name = 'custom';
+  }
+  // Keyboard (desktop): fwd/right in -1..1 pan relative to where the camera faces, rot turns it (Q/E).
+  // Pan speed scales with zoom so it feels the same close up and from the overview.
+  keyMove(fwd, right, rot, dt) {
+    if (fwd || right) {
+      const az = this.want.az, s = this.want.dist * .75 * dt;
+      this.pan((-Math.sin(az) * fwd + Math.cos(az) * right) * s, (-Math.cos(az) * fwd - Math.sin(az) * right) * s);
+    }
+    if (rot) { this.want.az += rot * 1.7 * dt; if (this.follow == null) this.name = 'custom'; }
   }
   zoom(f) {
     // (zoom stays anchored where the user points — see zoomAt — with no pull back toward the centre:
