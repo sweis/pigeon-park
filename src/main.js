@@ -9,7 +9,7 @@ import { FlockView } from './view.js';
 import { makeMaterials, PigeonRig, geometryCacheSize, birdHeight } from './pigeon3d.js';
 import { CameraRig } from './camera.js';
 import { Fx } from './fx.js';
-import { Audio } from './audio.js';
+import { Audio, SONGS, renderMusic } from './audio.js';
 import { Portraits } from './portraits.js';
 import { UI } from './ui.js';
 import { Diagnostics } from './debug.js';
@@ -359,7 +359,7 @@ class Game {
     this.world.setHour(S.hour(), S.night);
     this.world.setRain(this.flock.rainAmt || 0);
     this.audio.setRain(!!S.rain);
-    this.audio.setMood(S.happening?.kind === 'dance' ? 'dance' : S.night > .55 ? 'night' : 'day');
+    this.audio.setMood(EVENT_MUSIC[S.happening?.kind] || (S.night > .55 ? 'night' : 'day'));
     this.audio.setDuck(this.paused ? .35 : 1);
     this.world.update(dt);
     if (this.find && performance.now() > this.find.until) this.findTrait(null);
@@ -455,6 +455,7 @@ class Game {
 
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
 const FIND_MS = 30000;
+const EVENT_MUSIC = { dance: 'dance', conga: 'conga', ufo: 'ufo' }; // happenings with their own song
 // Desktop camera keys by physical position (works on AZERTY too): [forward, right, rotate].
 const CAM_KEYS = {
   KeyW: [1, 0, 0], ArrowUp: [1, 0, 0], KeyS: [-1, 0, 0], ArrowDown: [-1, 0, 0],
@@ -567,7 +568,7 @@ function makeDebugApi(g) {
     lose() { api.clearAll(); S.roost.length = 0; },
     render() { g.render(0); },
     async photo(id) { const r = await g.photo({ id }); return r && { w: r.w, h: r.h, size: r.blob.size, file: r.file }; },
-    audio: () => ({ unlocked: !!g.audio.ac, sfxOn: g.audio.sfxOn, musicOn: g.audio.musicOn, sfxVol: g.audio.sfxVol, musicVol: g.audio.musicVol, mood: g.audio.mood, musicRunning: !!g.audio.music?.timer, state: g.audio.ac?.state }),
+    audio: () => ({ unlocked: !!g.audio.ac, sfxOn: g.audio.sfxOn, musicOn: g.audio.musicOn, sfxVol: g.audio.sfxVol, musicVol: g.audio.musicVol, mood: g.audio.mood, song: g.audio.music?.songId || null, songTitle: g.audio.songTitle, notes: g.audio.music?.notes || 0, musicRunning: !!g.audio.music?.timer, state: g.audio.ac?.state }),
     audioLevel() { // RMS of the master output right now (verifies sound is actually produced)
       const A = g.audio; if (!A.ac) return null;
       if (!A.an) { A.an = A.ac.createAnalyser(); A.an.fftSize = 2048; A.master.connect(A.an); }
@@ -575,6 +576,12 @@ function makeDebugApi(g) {
       let s2 = 0; for (const x of d) s2 += x * x; return Math.sqrt(s2 / d.length);
     },
     cooPitches() { return S.pigeons.map(p => +g.cooPitch(p).toFixed(3)); },
+    songs: () => Object.keys(SONGS),
+    async songLevel(id, secs = 8) { // offline render → RMS / peak, so every song can be checked without speakers
+      const { buffer, notes } = await renderMusic(id, secs); const d = buffer.getChannelData(0);
+      let s2 = 0, pk = 0; for (const x of d) { s2 += x * x; pk = Math.max(pk, Math.abs(x)); }
+      return { id, title: SONGS[id].title, rms: +Math.sqrt(s2 / d.length).toFixed(4), peak: +pk.toFixed(3), notes };
+    },
     hideHud(v = true) { document.getElementById('hud').style.display = v ? 'none' : ''; },
   };
   return api;

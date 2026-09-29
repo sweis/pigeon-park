@@ -285,7 +285,12 @@ export class UI {
     const alive = S.alive();
     const stats = `<div><b>${alive}</b><span>residents</span></div><div><b>${S.stats.births}</b><span>hatched</span></div>
         <div><b>${S.stats.flown}</b><span>departed</span></div><div><b>gen ${S.stats.maxGen}</b><span>deepest line</span></div>`;
-    if (!full && el.querySelector('.stats')) { const st = el.querySelector('.stats'); if (st.innerHTML !== stats) st.innerHTML = stats; return; }
+    const song = this.g.audio.songTitle, playing = song ? `♪ ${esc(song)}` : '';
+    if (!full && el.querySelector('.stats')) {
+      const st = el.querySelector('.stats'); if (st.innerHTML !== stats) st.innerHTML = stats;
+      const np = el.querySelector('.nowplaying'); if (np && np.innerHTML !== playing) np.innerHTML = playing;
+      return;
+    }
     const A = this.g.audio, vol = (act, v, on) => `<input type="range" min="0" max="100" value="${on ? Math.round(v * 100) : 0}" data-act="${act}" aria-label="${act}">`;
     const seg = (list, cur, act) => `<div class="seg">${list.map(o => `<button class="${cur(o) ? 'on' : ''}" data-act="${act}" data-arg="${act === 'speed' ? o.v : o.id}">${o.label}</button>`).join('')}</div>`;
     el.innerHTML = `
@@ -293,6 +298,7 @@ export class UI {
         <button class="btn icon ${A.musicOn ? '' : 'off'}" data-act="music" aria-label="Music">${A.musicOn ? I.music : I.musicOff}</button>
         <span class="spacer"></span><button class="btn small" data-act="help">${I.help} Help</button></div>
       <div class="row"><div class="label">Music</div>${vol('musicvol', A.musicVol, A.musicOn)}</div>
+      <div class="nowplaying">${playing}</div>
       <div class="row"><div class="label">Sounds</div>${vol('sfxvol', A.sfxVol, A.sfxOn)}</div>
       <div class="row"><div class="label">Park speed</div>${seg(SPEEDS, o => Math.abs(S.speed - o.v) < .05, 'speed')}</div>
       <div class="row"><div class="label">Mutations</div>${seg(MUTATIONS, o => S.mut === o.id, 'mut')}</div>
