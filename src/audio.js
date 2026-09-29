@@ -412,7 +412,7 @@ class Music {
     else if (id === 'conga') { const o = this.osc('sine', 2600, t, t + .5), v = this.osc('square', 28, t, t + .5), vg = this.ac.createGain(); vg.gain.value = 220; v.connect(vg); vg.connect(o.frequency); o.connect(this.out(.45, .05, t, .01)); } // whistle
   }
 }
-export { SONGS, PLAYLISTS, Music };
+export { SONGS };
 
 // Render music offline (no speakers, faster than real time) — the soundtrack for video clips, and a way to
 // measure each song's level in tests. `song` forces a song id; `extras(audio)` can schedule coos etc.

@@ -105,6 +105,25 @@ const clickSel = async (page, sel) => { const b = await page.locator(sel).first(
   await ph.ctx.close();
 }
 
+// ---------- phone: toasts never cover the bird card ----------
+{
+  const { page, errors, ctx } = await boot(br, srv.url, 'nosave&seed=4&hour=15', { viewport: { width: 390, height: 844 }, mobile: true });
+  const id = await page.evaluate(() => { const p = window.__game.sim.pigeons[0]; window.pp.teleport(p.id, 0, 0); return p.id; });
+  const p = await page.evaluate((id) => window.pp.screenOf(id), id);
+  await page.touchscreen.tap(p.x, p.y);
+  await poll(page, () => !document.getElementById('inspector').classList.contains('hidden'));
+  await page.evaluate(() => window.__game.ui.toast('A test toast that should float above the card.'));
+  await page.waitForTimeout(700); await frames(page, 2); // let the slide-in animation finish
+  const r = await page.evaluate(() => { const i = document.getElementById('inspector').getBoundingClientRect(), t = document.querySelector('#toasts .toast').getBoundingClientRect(); return { insTop: Math.round(i.top), toastBottom: Math.round(t.bottom) }; });
+  check(r.toastBottom <= r.insTop, `phone: toast sits above the bird card (toast bottom ${r.toastBottom} ≤ card top ${r.insTop})`);
+  await shot(page, 'feat-phone-toast.png');
+  await page.evaluate(() => window.pp.select(null)); await page.evaluate(() => { window.__game.ui.introDone = true; window.__game.ui.refreshT = 0; }); await frames(page, 3);
+  const b = await page.evaluate(() => document.getElementById('toasts').style.bottom);
+  check(b === '', `toasts drop back to their usual spot when the card closes (${b || 'default'})`);
+  check(errors.length === 0, `no console errors (phone toasts) ${errors.join(' | ')}`);
+  await ctx.close();
+}
+
 // ---------- desktop keyboard camera ----------
 {
   const { page, errors } = await boot(br, srv.url, 'nosave&seed=3&hour=16.5');

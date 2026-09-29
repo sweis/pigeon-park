@@ -34,6 +34,7 @@ const I = {
   search: svg('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16" y2="16"/>', 13),
 };
 
+const PHONE = matchMedia('(max-width: 760px)'); // same breakpoint as the compact CSS layout
 const TIER_NAME = { 1: 'uncommon', 2: 'rare', 3: 'impossible' };
 const traitLabel = (key) => M.ALLELE_META[key]?.label || M.ACCESSORIES[key.split(':')[1]]?.label || key;
 // A trait chip that starts the finder (highlights every bird that shows or carries it).
@@ -83,7 +84,7 @@ export class UI {
       this.suppressClick = false; // a new press: only the click ending a click-off press is ignored
       const set = this.$('settings');
       if (!set.classList.contains('hidden') && !set.contains(t) && !t.closest('[data-act="settings"]')) set.classList.add('hidden');
-      if (this.dialog && !t.closest('.dialog')) { this.closeDialog(); this.suppressClick = true; }
+      if (this.dialog && !t.closest('.dialog') && !this.g.clipBusy) { this.closeDialog(); this.suppressClick = true; } // filming: stays open
     }, true);
   }
 
@@ -147,7 +148,20 @@ export class UI {
     el.className = 'toast t-' + kind; el.textContent = msg;
     box.appendChild(el);
     while (box.children.length > 3) box.firstChild.remove();
+    this.placeToasts();
     setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 4200);
+  }
+  // Toasts sit above the roost bar; on phones the bird card / intro are bottom sheets over that spot,
+  // so lift the toasts to just above whichever sheet is open (they never draw over the UI).
+  placeToasts() {
+    const box = this.$('toasts'); let bottom = '';
+    if (PHONE.matches) for (const id of ['inspector', 'intro']) {
+      const el = this.$(id); if (el.classList.contains('hidden')) continue;
+      // layout box (offsetTop/Height), not the on-screen rect: the card slides in with a transform
+      const H = this.root.clientHeight; // #hud fills the viewport; #toasts is positioned inside it
+      if (el.offsetTop + el.offsetHeight > H - 140) bottom = Math.max(parseFloat(bottom) || 0, H - el.offsetTop + 8) + 'px';
+    }
+    if (box.style.bottom !== bottom) box.style.bottom = bottom;
   }
   onClick(e) {
     if (this.suppressClick) { this.suppressClick = false; return; } // the click finishing a click-off press
@@ -345,7 +359,7 @@ export class UI {
     el.innerHTML = `<div class="dialog card photo-dlg" role="dialog">${this.dlgHead('Photo', '')}<div class="photo-wrap"><div class="developing">Developing…</div></div></div>`;
     await new Promise(r => requestAnimationFrame(r));
     const res = await this.g.photo(target);
-    if (this.dialog !== 'photo') return;
+    if (this.dialog !== 'photo') { if (res) URL.revokeObjectURL(res.url); return; }
     if (!res) { this.closeDialog(); return; }
     if (this.photoRes) URL.revokeObjectURL(this.photoRes.url);
     this.photoRes = res;
@@ -363,7 +377,7 @@ export class UI {
     if (this.g.recording) return;
     this.dialog = 'clip';
     const el = this.$('dialog'); el.classList.remove('hidden');
-    el.innerHTML = `<div class="dialog card photo-dlg clip-dlg" role="dialog">${this.dlgHead('Video clip', '<span class="chip chip-t1">6 s · vertical</span>')}
+    el.innerHTML = `<div class="dialog card photo-dlg clip-dlg busy" role="dialog">${this.dlgHead('Video clip', '<span class="chip chip-t1">6 s · vertical</span>')}
       <div class="photo-wrap"><div class="filming"><div class="developing">Filming…</div><div class="bar clipbar"><i style="width:0%"></i></div>
       <div class="foot">Rendering every frame at 1080 × 1920 — the park keeps living while the camera rolls.</div></div></div></div>`;
     await new Promise(r => requestAnimationFrame(r));
@@ -371,9 +385,11 @@ export class UI {
     let res;
     try { res = await this.g.clip(id, (k) => { if (bar) bar.style.width = Math.round(k * 100) + '%'; }); }
     catch (e) {
+      el.querySelector('.clip-dlg')?.classList.remove('busy');
       if (this.dialog === 'clip') el.querySelector('.photo-wrap').innerHTML = `<p class="clip-err">${esc(e.message || String(e))}</p>`;
       return;
     }
+    el.querySelector('.clip-dlg')?.classList.remove('busy');
     if (this.dialog !== 'clip') { URL.revokeObjectURL(res.url); return; }
     if (this.clipRes) URL.revokeObjectURL(this.clipRes.url);
     this.clipRes = res;
@@ -408,15 +424,16 @@ export class UI {
     const S = this.sim, P = this.g.portraits, T = S.familyTree(lid), me = T.root; if (!me) return;
     this.dialog = 'family';
     const cells = [];
-    const where = (id) => { const w = S.whereIs(id); return w ? (w.park != null ? 'in the park' : 'in the roost') : 'flown off'; };
+
     const cell = (node, d, i) => {
       const span = 8 >> d, pos = d ? (i % 2 ? 'down' : 'up') : '', area = `grid-column:${d + 1};grid-row:${i * span + 1} / span ${span}`;
       if (!node) { cells.push(`<div class="ft-cell ${pos}" style="${area}"><div class="ft-node unknown"><span class="ft-q">?</span><span class="ft-txt"><b>Unknown</b><small>records lost</small></span></div></div>`); return; }
-      const r = node.rec, alive = !!S.whereIs(node.lid), kids = node.par && node.par.length;
+      const r = node.rec, w = S.whereIs(node.lid), alive = !!w, kids = node.par && node.par.length;
+      const where = w ? (w.park != null ? 'in the park' : 'in the roost') : 'flown off';
       const ph = M.computePheno(M.decodeGenome(r.g), r.a), breed = M.matchBreeds(ph)[0];
       cells.push(`<div class="ft-cell ${pos} ${kids ? 'kids' : ''}" style="${area}">
         <button class="ft-node ${d ? '' : 'self'} ${alive ? 'live' : ''}" ${alive && d ? `data-act="ft-go" data-arg="${node.lid}"` : ''} title="${esc(r.n)} — ${esc(ph.label)}${breed ? ' · ' + esc(breed.name) : ''}">
-          <img src="${P.get(ph)}" alt=""><span class="ft-txt"><b>${esc(r.n)}</b><small>${breed ? '★ ' + esc(breed.name) + ' · ' : ''}gen ${r.ge} · ${where(node.lid)}</small></span></button></div>`);
+          <img src="${P.get(ph)}" alt=""><span class="ft-txt"><b>${esc(r.n)}</b><small>${breed ? '★ ' + esc(breed.name) + ' · ' : ''}gen ${r.ge} · ${where}</small></span></button></div>`);
       if (kids) node.par.forEach((q, j) => cell(q, d + 1, i * 2 + j));
     };
     cell(me, 0, 0);
@@ -442,7 +459,10 @@ export class UI {
       ? `<span class="fk"><i class="fdot show"></i>${show} show${show === 1 ? 's' : ''} it</span>${f.key.startsWith('acc:') ? '' : `<span class="fk"><i class="fdot carry"></i>${carry} carr${carry === 1 ? 'ies' : 'y'} it</span>`}`
       : `<span class="fk">nobody in the park has it</span>`) + `<button class="btn icon" data-act="find-off" aria-label="Stop finding">${I.x}</button>`;
   }
-  closeDialog() { this.dialog = null; this.$('dialog').classList.add('hidden'); this.$('dialog').innerHTML = ''; }
+  closeDialog() {
+    this.dialog = null; this.$('dialog').classList.add('hidden'); this.$('dialog').innerHTML = '';
+    for (const k of ['photoRes', 'clipRes']) if (this[k]) { URL.revokeObjectURL(this[k].url); this[k] = null; } // MBs of image / video
+  }
   dlgHead(title, tag) { return `<div class="dlg-head"><div class="dlg-title">${title}</div>${tag}<span class="spacer"></span><button class="btn icon" data-act="close" aria-label="Close">${I.x}</button></div>`; }
   dlg_pedia() {
     const S = this.sim, keys = Object.keys(M.PEDIA);
@@ -483,15 +503,15 @@ export class UI {
     const list = M.BREEDS.map(b => ({ b, got: S.breeds[b.id] })).sort((x, y) => (!!y.got - !!x.got));
     const n = Object.keys(S.breeds).length;
     return this.dlgHead('Breed Registry', `<span class="chip chip-breed">${n} / ${M.BREEDS.length} discovered</span>`) +
-      `<div class="grid breeds">${list.map(({ b, got }) => `
+      `<div class="grid breeds">${list.map(({ b, got }) => { const missing = b.legend || got ? 0 : this.missingTraits(b).length, recipe = got || (!b.legend && !missing) ? this.recipeTraits(b) : []; return `
         <div class="entry breed">
           <img src="${P.get(M.breedSample(b))}" class="${got ? '' : 'silhouette'}" alt="">
           <b>${got ? esc(b.name) : '???'}</b>
           <span class="chip tiny ${b.legend ? 'chip-breed' : b.real ? 'chip-t1' : 'chip-t3'}">${b.legend ? 'legendary' : b.real ? (b.exotic ? 'exotic' : 'real breed') : 'cryptid'}</span>
-          <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : (() => { const n = this.missingTraits(b).length; return n ? `Recipe unknown — needs ${n} trait${n > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'; })()}</div>
-          ${(got || (!b.legend && !this.missingTraits(b).length)) && this.recipeTraits(b).length ? `<div class="chips recipe">${this.recipeTraits(b).map(k => findChip(k, 'chip-t1', I.search + ' ' + esc(traitLabel(k)))).join('')}</div>` : ''}
+          <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : missing ? `Recipe unknown — needs ${missing} trait${missing > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'}</div>
+          ${recipe.length ? `<div class="chips recipe">${recipe.map(k => findChip(k, 'chip-t1', I.search + ' ' + esc(traitLabel(k)))).join('')}</div>` : ''}
           ${got ? `<div class="by">first bred by ${esc(got.by)}</div><button class="btn small" data-act="clone-breed" data-arg="${b.id}">${I.clone} Clone into park</button>` : ''}
-        </div>`).join('')}</div>
+        </div>`; }).join('')}</div>
        <div class="foot">Match a real fancy-pigeon breed to register it. The cryptids are your problem. Tap a recipe trait to find birds that show or carry it.</div>`;
   }
   dlg_help() {
@@ -539,6 +559,7 @@ export class UI {
       this.$('b-pedia').classList.toggle('new', nP > this.seen.pedia);
       this.renderInspector(); this.renderSettings(); this.renderRoost(); this.renderFind();
       this.$('intro').classList.toggle('hidden', this.introDone || S.selId != null || this.roostSel != null || !!this.dialog);
+      this.placeToasts();
     }
     const rc = this.g.cam.name === 'overview' || this.g.cam.name === 'hud-check';
     if (rc !== this._rcHidden) { this._rcHidden = rc; this.$('recenter').classList.toggle('hidden', rc); }
@@ -561,14 +582,16 @@ export class UI {
         const text = p.emote.kind === 'heart' ? '♥' : p.emote.kind === 'zzz' ? 'z z z' : p.emote.text || '!';
         if (!b) { b = document.createElement('div'); box.appendChild(b); this.bubbles.set(p.id, b); }
         if (b.textContent !== text) { b.textContent = text; b.className = 'bubble ' + (p.emote.kind === 'heart' ? 'heart' : p.emote.kind === 'zzz' ? 'zzz' : 'say'); }
-        b.style.transform = `translate(${top.x}px, ${top.y}px) translate(-50%, -100%)`;
+        const tr = `translate(${top.x | 0}px, ${top.y | 0}px) translate(-50%, -100%)`;
+        if (b._tr !== tr) { b._tr = tr; b.style.transform = tr; } // birds standing still: no style writes
       }
       if (isSel) {
         let n = this.nameTag;
         if (!n) { n = this.nameTag = document.createElement('div'); n.className = 'nametag'; box.appendChild(n); }
         const feet = toScreen(view.vis.x, view.vis.y, view.vis.z, cam);
         if (n.textContent !== p.name) n.textContent = p.name;
-        n.style.transform = `translate(${feet.x}px, ${feet.y + 10}px) translate(-50%, 0)`;
+        const tr = `translate(${feet.x | 0}px, ${(feet.y | 0) + 10}px) translate(-50%, 0)`;
+        if (n._tr !== tr) { n._tr = tr; n.style.transform = tr; }
         tagShown = true;
       }
     }

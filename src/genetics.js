@@ -233,8 +233,10 @@ export function carriersOf(genome) {
 }
 
 // Does a bird show a trait (2), only carry it hidden (1), or neither (0)? key: 'locus:allele' or 'acc:name'.
+let _tsKey = null, _tsLoc = '', _tsAl = ''; // the finder asks about one key for every bird, every frame
 export function traitStatus(genome, pheno, key) {
-  const [loc, al] = key.split(':');
+  if (key !== _tsKey) { _tsKey = key; [_tsLoc, _tsAl] = key.split(':'); }
+  const loc = _tsLoc, al = _tsAl;
   if (loc === 'acc') return pheno.accessory === al ? 2 : 0;
   if (pheno.e[loc] === al) return 2;
   const pair = genome[loc];
@@ -500,12 +502,61 @@ export const THOUGHTS = ['crumb?', 'the void coos back', 'bread is a construct',
   'what if bread... but more', 'no thoughts, head smooth', 'coo coo ca-choo', 'is anyone else vibrating', 'i peaked in 2019',
   'loaf mode: activated', 'let me be clear: crumb', 'i think my feet are shoes', 'the pavement speaks to me', 'bench? bench.',
   'a single fry. at last.', 'i have seen a sandwich', 'plot twist: i can read', 'reply all', 'per my last coo',
-  'this is my good side', 'i would die for a crust', 'somebody has to be the main character', 'i have beef with that duck'];
-export const REPLIES = ['same', 'source?', 'ok gerald', 'valid', 'coo.', 'real', 'no', 'bestie…', 'and?', 'we know', 'shh', 'this', 'mood', 'huh', 'go off', 'bread?', 'ratio', 'wow', 'i also have feet'];
-export const NIGHT_THOUGHTS = ['is the moon bread', 'the lamps are watching', 'sleep is for doves', 'what is a star but a far crumb', 'the fountain whispers at night', 'nocturnal era', 'who turned the sky off'];
-export const HELD_LINES = ['PUT ME DOWN', 'i am flying (not)', 'unhand me', 'this is kidnapping', 'wheee', 'i did not consent to this altitude', 'am i the chosen one', 'finally, recognition', 'my lawyer will hear of this', 'is this heaven'];
-export const BABY_LINES = ['where am i', 'what is a pigeon', 'mama?', 'i know nothing', 'hello world', 'first coo!!', 'what are feet', 'i am new here'];
-export const COURT_LINES = ['nice feet', 'u come here often', 'u like crumbs?', 'is that a bread in ur pocket', 'your coo is so loud', 'hey', 'marry me (for tax reasons)', 'wanna see my bench'];
+  'this is my good side', 'i would die for a crust', 'somebody has to be the main character', 'i have beef with that duck',
+  'i contain multitudes (crumbs)', 'the ground is lava (it is not)', 'i should start a podcast', 'who is walking who here',
+  'my aura is 90% grey', 'i left the oven on. i do not have an oven', 'i am the pigeon your pigeon warned you about',
+  'if i fits i sits', 'tiny dinosaur, big dreams', 'my ancestors were in world war one', 'the benches are unionising',
+  'i saw a crumb in 2021 and never recovered', 'is it bread o\'clock', 'i have a very specific set of skills (pecking)',
+  'somebody said bagel', 'i believe in gravel', 'neck forward. neck back. neck forward', 'i am simply vibing',
+  'the humans think they run this place', 'what is my purpose. oh. bread', 'we should unionise', 'i am in my villain arc',
+  'crumb economics', 'tell my wife i said coo', 'i am not lost i am exploring', 'this fountain is giving', 'i would like a refund on the sky',
+  'the squirrels are hiding something', 'i have 3 brain cells and they are all busy', 'my left foot is my favourite',
+  'hot take: seeds', 'i am absolutely unbothered', 'i am absolutely bothered', 'look at this pavement. incredible',
+  'does anyone want to fight (politely)', 'im going to walk in a small circle', 'who moved my crumb', 'every day is leg day',
+  'certified bench inspector', 'i am 40% feathers', 'the wind has betrayed me', 'i know kung coo', 'crumbs are just bread confetti',
+  'i will be a statue one day', 'trust no seagull', 'i should call my mother', 'i think i am famous', 'this is a pigeon-only zone',
+  'i am the chosen crumb finder', 'my other car is a bench', 'rent is due. rent is always due', 'i have never seen a baby pigeon. suspicious',
+  'please clap', 'i am once again asking for bread', 'what if the park is inside ME', 'thinking about that one fry',
+  'i accidentally walked backwards', 'i am speed (walking)', 'does this bench make me look fat', 'i was here first',
+  'is that a hawk or a bag', 'i have a meeting at the fountain', 'ok but hear me out: toast', 'i nodded 400 times today',
+  'feathers are just fancy hair', 'my horoscope said crumbs', 'im just a little guy', 'i demand to see the pigeon manager',
+  'wings are optional', 'i am doing my best', 'this is my personality now', 'i got here by walking. all of it'];
+export const REPLIES = ['same', 'source?', 'ok gerald', 'valid', 'coo.', 'real', 'no', 'bestie…', 'and?', 'we know', 'shh', 'this', 'mood', 'huh', 'go off', 'bread?', 'ratio', 'wow', 'i also have feet',
+  'big if true', 'citation needed', 'deeply relatable', 'sir this is a fountain', 'noted', 'the audacity', 'i was just thinking that',
+  'lol', 'say less', 'not now', 'rude', 'respectfully, no', 'ok boomer', 'tell me more', 'huge', 'blocked', 'unfollowed',
+  'i disagree but politely', 'fair', 'go on…', 'coo coo (agreed)', 'we are so back', 'it\'s so over', 'touch grass', 'bold of you'];
+export const NIGHT_THOUGHTS = ['is the moon bread', 'the lamps are watching', 'sleep is for doves', 'what is a star but a far crumb', 'the fountain whispers at night', 'nocturnal era', 'who turned the sky off',
+  'the moon looks like a crumb i knew', 'night shift, baby', 'i can see my house from here (no)', 'the stars are just far-away pigeons',
+  'shh the lamps are sleeping', 'why is it so dark (it is night)', 'i am an owl now', 'the benches are cold', 'dream of bread',
+  'bedtime is a social construct', 'is anyone else awake', 'something rustled', 'i will sleep when i am a statue',
+  'the fountain sounds louder at night', 'counting crumbs to fall asleep', 'midnight snack?', 'i heard a hoot. rival.',
+  'the dark is just the sky resting', 'tomorrow: bread'];
+export const HELD_LINES = ['PUT ME DOWN', 'i am flying (not)', 'unhand me', 'this is kidnapping', 'wheee', 'i did not consent to this altitude', 'am i the chosen one', 'finally, recognition', 'my lawyer will hear of this', 'is this heaven',
+  'i can see the whole park', 'help (not really)', 'this is my first time flying first class', 'excuse me??', 'i am a very important bird',
+  'higher! higher!', 'where are we going', 'i will remember this', 'i knew you would pick me', 'mind the feathers', 'hands off the merch',
+  'is this about the crumb', 'weeeeee', 'i am being abducted (by a human)', 'call my agent'];
+export const BABY_LINES = ['where am i', 'what is a pigeon', 'mama?', 'i know nothing', 'hello world', 'first coo!!', 'what are feet', 'i am new here',
+  'is that bread', 'big world', 'am i a pigeon', 'hi!!!!', 'what year is it', 'who are all these birds', 'i have questions',
+  'is the ground always this big', 'coo? coo!', 'i can walk?!', 'where is the manual', 'who ordered me', 'i am baby', 'feathers, huh'];
+export const COURT_LINES = ['nice feet', 'u come here often', 'u like crumbs?', 'is that a bread in ur pocket', 'your coo is so loud', 'hey', 'marry me (for tax reasons)', 'wanna see my bench',
+  'are you a crumb because i want you', 'i would share my fry with you', 'your feathers are so grey', 'you had me at coo',
+  'let me buy you a seed', 'nice neck shimmer', 'i like the way you bob', 'is this seat taken', 'you + me + bench?',
+  'i saved you a crust', 'my heart goes coo coo', 'we should nest sometime', 'you look like a statue (compliment)'];
+// Said when two birds bump into each other in a crowd.
+export const BUMP_LINES = ['excuse me', 'oof', 'watch it', 'sorry!', 'personal space', 'rude', 'after you', 'no, after YOU', 'beep beep', 'coming through',
+  'hey!', 'do you mind', 'pardon me', 'traffic', 'move', 'we are touching', 'mind the wing', 'bonk', 'i was walking here'];
+
+// Pick a line from a pool without repeating anything said recently (the last ~half of the pool is held
+// back), so small pools don't loop and big ones feel fresh. Seeded like everything else.
+// `said` holds the history (a Map, one per park — the Sim owns it, so seeded replays stay identical).
+export function say(pool, said = new Map()) {
+  let r = said.get(pool); if (!r) said.set(pool, r = []);
+  const hold = Math.min(r.length, Math.floor(pool.length / 2));
+  let line, tries = 0;
+  do { line = pool[Math.floor(rand() * pool.length)]; } while (r.lastIndexOf(line) >= r.length - hold && ++tries < 12);
+  r.push(line); if (r.length > pool.length) r.shift();
+  return line;
+}
 
 export const COPY = {
   birth: ['A chick has been released into the wild. The wild is a car park.', 'Congratulations, it is a pigeon.', 'Another one. Nobody asked, everyone is delighted.', 'A pigeon has occurred.', 'New pigeon. It knows nothing.', 'The egg has opinions now.', 'One (1) pigeon, freshly issued.', 'A pigeon manifests, blinking.', 'Fresh pigeon. Handle with awe.'],

@@ -6,7 +6,7 @@ import { traitStatus } from './genetics.js';
 import { damp, raySphere } from './util.js';
 
 // Trait finder: 2 = shows the trait (green), 1 = carries it hidden (yellow).
-export const FIND_COLORS = { 2: '#3fbf5f', 1: '#f2c230' };
+const FIND_COLORS = { 2: '#3fbf5f', 1: '#f2c230' }; // (the banner's dots in style.css match)
 const FIND_MAX = 50;
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -234,6 +234,7 @@ export class FlockView {
     this.findGems = mk(new THREE.OctahedronGeometry(1, 0));
     this.findRings = mk(new THREE.RingGeometry(.33, .4, 32, 1).rotateX(-Math.PI / 2));
     this.findRings.renderOrder = 2;
+    this.findMeshes = [this.findGems, this.findRings];
     this._fc = { 1: new THREE.Color(FIND_COLORS[1]), 2: new THREE.Color(FIND_COLORS[2]) };
   }
 
@@ -364,10 +365,7 @@ export class FlockView {
         n++;
       }
     }
-    for (const M of [this.findGems, this.findRings]) {
-      if (!n && !M.count) continue;
-      M.count = n; M.instanceMatrix.needsUpdate = true; M.instanceColor.needsUpdate = true;
-    }
+    if (n || this.findGems.count) for (const M of this.findMeshes) { M.count = n; M.instanceMatrix.needsUpdate = true; M.instanceColor.needsUpdate = true; }
   }
 
   makeEgg() {

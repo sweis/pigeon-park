@@ -298,7 +298,7 @@ class Game {
     addEventListener('keydown', (e) => {
       if (!e.key || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
       if (CAM_KEYS[e.code] && !this.ui.dialog && !e.ctrlKey && !e.metaKey && !e.altKey) { this.keys.add(e.code); if (e.code.startsWith('Arrow')) e.preventDefault(); }
-      if (e.key === 'Escape') { if (this.ui.dialog) this.ui.closeDialog(); else if (this.find) this.findTrait(null); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
+      if (e.key === 'Escape') { if (this.ui.dialog) { if (!this.clipBusy) this.ui.closeDialog(); } else if (this.find) this.findTrait(null); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
       if ((e.key === 'p' || e.key === ' ') && !e.repeat) { if (e.key === ' ') e.preventDefault(); this.togglePause(); if (e.key === 'p') cheat = ''; return; }
       if (e.key === '?') { this.ui.dialog === 'help' ? this.ui.closeDialog() : this.ui.openDialog('help'); return; }
       if (e.key.length !== 1) return;
@@ -324,6 +324,7 @@ class Game {
   }
 
   resize() {
+    if (this.recording) return; // a clip owns the drawing buffer; it calls resize() when it's done
     this.renderer.setSize(innerWidth, innerHeight, false);
     this.cam.fit(innerWidth / innerHeight);
   }
@@ -384,19 +385,20 @@ class Game {
     this.world.setHour(S.hour(), S.night);
     this.world.setRain(this.flock.rainAmt || 0);
     this.world.update(dt);
-    this.flock.update(S, dt, this.time, camPos, this.find?.key);
+    this.flock.update(S, dt, this.time, camPos, this.recording ? null : this.find?.key); // no finder markers in clips
     this.fx.update(dt);
     this.monuments.update();
   }
   musicMood() { return EVENT_MUSIC[this.sim.happening?.kind] || (this.sim.night > .55 ? 'night' : 'day'); }
   // Each bird has its own voice: big birds low, small birds high, plus a fixed per-genome offset.
-  cooPitch(p) { return ({ king: .78, dinky: 1.32, chonk: .84 }[p.pheno.e.size] || 1) / Math.pow(p.jit || 1, 2.5); }
+  cooPitch(p) { return (COO_PITCH[p.pheno.e.size] || 1) / Math.pow(p.jit || 1, 2.5); }
 
   // ---------- photo mode ----------
   // Park birds: a one-off high-res render of the real scene from a close three-quarter camera (same
   // scene, same shader programs). Roost birds: a studio portrait. Either way, composed onto a caption card.
   async photo({ id, roost }) {
     const S = this.sim, W = this.q.mobile ? 1600 : 2400;
+    if (this.recording) return null;
     let pheno, name, gen, shot;
     if (id != null) {
       const p = S.byId(id), v = this.flock.view(id); if (!p || !v) return null;
@@ -420,15 +422,20 @@ class Game {
   // ---------- video clips ----------
   // 6 s vertical clip of a park bird (see clip.js; loaded on first use with its muxer).
   async clip(id, onProgress, opts = {}) {
-    const { recordClip } = await import('./clip.js');
-    this.audio.play('shutter');
-    return recordClip(this, id, { ...opts, onProgress });
+    if (this.clipBusy) throw new Error('Already filming.');
+    this.clipBusy = true; // set before any await: a second tap can't start a second recording
+    try {
+      const { recordClip } = await import('./clip.js');
+      this.audio.play('shutter');
+      return await recordClip(this, id, { ...opts, onProgress });
+    } finally { this.clipBusy = false; }
   }
 
   // One-off render of the real scene from any camera at any size → canvas (photos, monument pictures).
   // Same scene and shader programs as the game; the drawing buffer is resized for one frame and restored.
   renderView(cam, W, H) {
-    const r = this.renderer, pr = r.getPixelRatio(), selVis = this.flock.sel.visible;
+    if (this.recording) return null; // the clip recorder has the renderer
+    const r = this.renderer, pr = r.getPixelRatio();
     cam.aspect = W / H; cam.updateProjectionMatrix();
     this.flock.sel.visible = false;
     for (const fv of this.flock.views.values()) fv.rig.setLod(0); // full detail (LOD is re-chosen next frame)
@@ -437,7 +444,7 @@ class Game {
     const out = document.createElement('canvas'); out.width = W; out.height = H;
     out.getContext('2d').drawImage(r.domElement, 0, 0, W, H); // same task as the render: buffer still valid
     r.setPixelRatio(pr); r.setSize(innerWidth, innerHeight, false);
-    this.flock.sel.visible = selVis; this.render(0);
+    this.render(0); // (flock.update puts the selection ring back)
     return out;
   }
   monumentPicture(id, W = 720, H = 540) {
@@ -446,7 +453,7 @@ class Game {
     const dist = 1.6 + m.top * 1.1;
     cam.position.set(m.x + d.x * dist + d.z * .6, m.top * .75 + .5, m.z + d.z * dist - d.x * .6);
     cam.lookAt(m.x, m.top * .5, m.z);
-    return this.renderView(cam, W, H).toDataURL('image/jpeg', .9);
+    return this.renderView(cam, W, H)?.toDataURL('image/jpeg', .9) ?? null;
   }
 
   drainEvents() {
@@ -474,6 +481,7 @@ class Game {
 
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
 const FIND_MS = 30000;
+const COO_PITCH = { king: .78, dinky: 1.32, chonk: .84 }; // big birds low, small birds high
 const EVENT_MUSIC = { dance: 'dance', conga: 'conga', ufo: 'ufo' }; // happenings with their own song
 // Desktop camera keys by physical position (works on AZERTY too): [forward, right, rotate].
 const CAM_KEYS = {

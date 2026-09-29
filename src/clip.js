@@ -190,13 +190,16 @@ export async function recordClip(game, id, { w = CLIP.w, h = CLIP.h, fps = CLIP.
   const audio = sup.audio ? new AudioBufferSource({ codec: sup.audio, bitrate: 160e3 }) : null;
   if (audio) output.addAudioTrack(audio);
   await output.start();
+  try { return await film(); } catch (e) { await output.cancel().catch(() => {}); throw e; } // never leave an encoder open
 
+  async function film() {
   // take over the renderer: the live loop pauses, the drawing buffer becomes the clip frame
-  const r = g.renderer, pr = r.getPixelRatio(), selVis = g.flock.sel.visible, find = g.find;
+  // (while g.recording: no resize, photos or monument pictures touch it, and the finder draws nothing)
+  const r = g.renderer, pr = r.getPixelRatio();
   const cam = new THREE.PerspectiveCamera(40, w / h, .05, 400);
   cam.setViewOffset(w, h, 0, h * .16, w, h); // the bird sits in the upper half; captions own the lower half
   const sfx = [];
-  g.recording = true; g.clipSfx = (e, t) => sfx.push({ ...e, t }); g.find = null;
+  g.recording = true; g.clipSfx = (e, t) => sfx.push({ ...e, t });
   r.setPixelRatio(1); r.setSize(w, h, false);
   const tgt = new THREE.Vector3(), look = new THREE.Vector3(), peeks = {};
   let acc = 0, a0 = 0, d0 = 1;
@@ -237,8 +240,8 @@ export async function recordClip(game, id, { w = CLIP.w, h = CLIP.h, fps = CLIP.
       if (i % 3 === 2) await new Promise(res => setTimeout(res, 0)); // let the progress bar paint
     }
   } finally {
-    r.setPixelRatio(pr); r.setSize(innerWidth, innerHeight, false);
-    g.recording = false; g.clipSfx = null; g.find = find; g.flock.sel.visible = selVis; g.last = performance.now();
+    g.recording = false; g.clipSfx = null; g.last = performance.now();
+    r.setPixelRatio(pr); g.resize(); // back to the window (it may have been rotated meanwhile)
   }
   video.close();
   if (audio) {
@@ -246,9 +249,11 @@ export async function recordClip(game, id, { w = CLIP.w, h = CLIP.h, fps = CLIP.
     const pitch = g.cooPitch(p0);
     const { buffer } = await renderMusic(song, secs, {
       extras: (a) => {
-        // the star coos on cue; everything the park said while filming comes in at its own moment
-        a.coo(p0.pheno.e.voice, 1.1, pitch, 0, .55); a.coo(p0.pheno.e.voice, .9, pitch, 0, 3.3);
-        for (const e of sfx) if (e.name === 'coo' && e.t > .8) a.coo(e.voice, (e.vol ?? 1) * .5, e.pitch || 1, e.pan || 0, e.t);
+        // the star coos on cue; everything the park said while filming comes in at its own moment.
+        // In time order: coo() skips anything within 0.12 s after the last one it scheduled.
+        const coos = [{ t: .55, voice: p0.pheno.e.voice, vol: 1.1, pitch }, { t: 3.3, voice: p0.pheno.e.voice, vol: .9, pitch }];
+        for (const e of sfx) if (e.name === 'coo' && e.t > .8) coos.push({ t: e.t, voice: e.voice, vol: (e.vol ?? 1) * .5, pitch: e.pitch || 1, pan: e.pan || 0 });
+        coos.sort((x, y) => x.t - y.t).forEach(c => a.coo(c.voice, c.vol, c.pitch, c.pan || 0, c.t));
       },
     });
     await audio.add(buffer);
@@ -260,4 +265,5 @@ export async function recordClip(game, id, { w = CLIP.w, h = CLIP.h, fps = CLIP.
   const blob = new Blob([output.target.buffer], { type: mime });
   const slug = p0.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   return { blob, url: URL.createObjectURL(blob), file: `pigeon-${slug}${ext}`, mime, w, h, codec: sup.video, audioCodec: sup.audio, frames: N, name: p0.name, peeks };
+  }
 }
