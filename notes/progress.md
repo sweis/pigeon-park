@@ -61,9 +61,13 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 ## v0.8 pass (this round)
 - Features: family tree, trait finder, WASD/QE camera, video clips, 5 new songs (2 park, 1 night, 3 event) — see Layout.
 - Cleanup/perf: Start over no longer resets Weirdness; contact-shadow instance buffer can't overflow (4× `ore`); selected bird's name tag hides when it goes behind the camera; allocation-free sky keyframe sampling (drizzle was re-allocating ~20 Colors per frame), Fx.update, bubble layer, FlockView sets; inspector computes a cheap key before rebuilding (and now refreshes when a UFO hat changes the bird); clock redraws only when it changes; rAF callback bound once; shared `util.js` (damp/raySphere/toScreen) replacing 6 copies; `breedGenome()` replaces 3 hand-built copies; dead code removed (Audio.muted shim, portrait sleep option, write-only world fields, duplicate icon, dead CSS); favicon (the only console error on boot was its 404); `npm test` runner existed only in package.json — now real.
-- Verified vs not: see the final section of the session summary / below.
+- Numbers (v0.8, headless SwiftShader, 40 birds): overview 140 draws / 369k tris, close 118 / 621k — same as v0.7; 26 shader programs, constant; CPU per frame 0.19–0.30 ms (run-to-run noise, same range as v0.7). Finder adds 2 instanced draws only while active. Build: main JS 787 KB (221 KB gzip, +23 KB raw for all v0.8 features), clip chunk 252 KB (65 KB gzip, loaded only on Clip).
+- Verified (headless): every suite in `npm test` passes; seeded flocks identical to v0.7 (boot warm-up restores the RNG). Clip path verified as WebM VP9+Opus only (no H.264 encoder in Playwright Chromium).
+- Not verified: real phones/GPUs; clip MP4 H.264/AAC path; clip filming time + memory at 1080×1920 on phones; share sheet targets; new songs by ear (levels checked numerically; WAV renders in captures/music/).
 
 ## Next
+- Try Clip on a real iPhone + Android (MP4 path, filming time); fall back to 720×1280 on phones if slow. Add a Cancel button to filming.
+- Listen to the new songs; tune levels/instruments by ear.
 - Test on a real phone; step-down ladder only exercised via `?quality`.
 - Roosted birds perched on the dovecote in-world; hatch shell pieces; fireflies at night.
 - Rosewing/beard markings still subtle at overview distance.
