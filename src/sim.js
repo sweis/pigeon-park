@@ -26,9 +26,9 @@ export function fountainClearance(p) {
   const qx = ax + ex * t, qz = az + ez * t, d = Math.hypot(qx - FOUNTAIN.x, qz - FOUNTAIN.z);
   return { gap: d - (FOUNTAIN.lip + BODY.half * k), qx, qz, d };
 }
-// Bird-to-bird collisions use the body's core (chest to rump, beak and tail-tip overlaps read fine):
+// Bird-to-bird collisions use the body's core (chest to most of the tail; beak tips may brush):
 // a capsule along the heading, scaled by breed size and chick age.
-const CORE = { back: .3, front: .2, r: .13 };
+const CORE = { back: .38, front: .2, r: .13 };
 const chickK = (age) => age < 9 ? .58 : age < 18 ? .78 : 1; // same growth steps as the view
 export function coreOf(p, t, o = {}) {
   const k = bodyScale(p) * chickK(t - p.born), cx = Math.cos(p.dir), cz = Math.sin(p.dir);
