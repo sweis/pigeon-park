@@ -14,7 +14,8 @@ export const PARK = { w: 10.4, d: 6.6 };   // walkable rectangle, metres, centre
 export const FOUNTAIN = { x: -1.7, z: -0.8, r: 1.3, lip: 1.42 }; // r: basin wall (visual), lip: outer rim radius
 // A bird's footprint for collisions: a segment from tail tip to beak tip, plus half its body width (size 1).
 const BODY = { back: .5, front: .31, half: .15 };
-function bodyScale(p) { return ({ king: 1.42, dinky: .68, chonk: 1.25 }[p.pheno.e.size] || 1) * (p.jit || 1); }
+const BODY_SIZE = { king: 1.42, dinky: .68, chonk: 1.25 };
+function bodyScale(p) { return (BODY_SIZE[p.pheno.e.size] || 1) * (p.jit || 1); }
 // Distance from the fountain centre to the nearest point of the bird's body segment, minus what it needs.
 // >= 0 means the bird is clear of the rim.
 export function fountainClearance(p) {
@@ -29,6 +30,7 @@ export function fountainClearance(p) {
 // Bird-to-bird collisions use the body's core (chest to most of the tail; beak tips may brush):
 // a capsule along the heading, scaled by breed size and chick age.
 const CORE = { back: .38, front: .2, r: .13 };
+const byX = (a, b) => a.x - b.x;
 const chickK = (age) => age < 9 ? .58 : age < 18 ? .78 : 1; // same growth steps as the view
 export function coreOf(p, t, o = {}) {
   const k = bodyScale(p) * chickK(t - p.born), cx = Math.cos(p.dir), cz = Math.sin(p.dir);
@@ -36,7 +38,8 @@ export function coreOf(p, t, o = {}) {
   o.r = CORE.r * k; o.reach = (CORE.back + CORE.r) * k;
   return o;
 }
-// Closest points between segments a0→a1 and b0→b1 (2D). Returns { d, nx, nz } with n pointing from b to a.
+// Closest points between segments a0→a1 and b0→b1 (2D). Returns { d, nx, nz } with n pointing from b to a
+// (for crossing segments, d = 0 and n points from b's middle to a's).
 export function segGap(A, B) {
   const ux = A.bx - A.ax, uz = A.bz - A.az, vx = B.bx - B.ax, vz = B.bz - B.az, wx = A.ax - B.ax, wz = A.az - B.az;
   const a = ux * ux + uz * uz, b = ux * vx + uz * vz, c = vx * vx + vz * vz, d = ux * wx + uz * wz, e = vx * wx + vz * wz;
@@ -44,7 +47,10 @@ export function segGap(A, B) {
   let sN = D < 1e-9 ? 0 : clamp((b * e - c * d) / D, 0, 1), tN = c < 1e-9 ? 0 : (b * sN + e) / c;
   if (tN < 0) { tN = 0; sN = a < 1e-9 ? 0 : clamp(-d / a, 0, 1); } else if (tN > 1) { tN = 1; sN = a < 1e-9 ? 0 : clamp((b - d) / a, 0, 1); }
   const px = A.ax + ux * sN - (B.ax + vx * tN), pz = A.az + uz * sN - (B.az + vz * tN), dist = Math.hypot(px, pz);
-  return dist > 1e-6 ? { d: dist, nx: px / dist, nz: pz / dist } : { d: 0, nx: 1, nz: 0 };
+  if (dist > 1e-6) return { d: dist, nx: px / dist, nz: pz / dist };
+  // the body lines cross: separate along the centre-to-centre direction (midpoints), never an arbitrary axis
+  const cx = (A.ax + A.bx - B.ax - B.bx) / 2, cz = (A.az + A.bz - B.az - B.bz) / 2, cd = Math.hypot(cx, cz) || 1;
+  return { d: 0, nx: cd > 1e-6 ? cx / cd : 1, nz: cd > 1e-6 ? cz / cd : 0 };
 }
 export const ROOST_SIZE = 8;
 export const TREE_DEPTH = 3;      // family records kept per bird: parents, grandparents, great-grandparents
@@ -119,7 +125,7 @@ export class Sim {
     // Ancestry: lineage id → { n: name, g: encoded genome, a: accessory, ge: generation, par: [lid, lid] | null,
     // how: 'hatch'|'founder'|'clone'|'registry'|'summoned'|'golden'|'visitor'|'unknown', of: cloned bird's name }.
     // Lineage ids survive save/load (sim ids don't); records outside TREE_DEPTH of anyone alive are pruned.
-    this.family = {}; this.lids = 1;
+    this.family = {}; this.lids = 1; this.pruneAt = 60;
     this.stats = { births: 0, flown: 0, maxGen: 1, happenings: 0 };
     this.achievements = {};  // id → { at }
     this.court = null;
@@ -307,14 +313,17 @@ export class Sim {
     const n = list.length, C = this.court;
     // a few relaxation passes; the fountain and park edge are applied inside each pass so a bird pinned
     // against the rim doesn't get shoved back into its neighbour afterwards (the neighbour moves instead)
+    // Sweep along x: sorted by x, a pair further apart in x than the two largest reaches can't touch.
     for (let pass = 0; pass < 6; pass++) {
-      for (let i = 0; i < n; i++) cores[i] = coreOf(list[i], this.t, cores[i]);
+      list.sort(byX);
+      let maxReach = 0;
+      for (let i = 0; i < n; i++) { cores[i] = coreOf(list[i], this.t, cores[i]); maxReach = Math.max(maxReach, cores[i].reach); }
       let moved = false;
       for (let i = 0; i < n; i++) {
-        const p = list[i], A = cores[i];
+        const p = list[i], A = cores[i], xEnd = p.x + A.reach + maxReach;
         for (let j = i + 1; j < n; j++) {
-          const q = list[j], B = cores[j];
-          const lim = A.reach + B.reach, dx = p.x - q.x, dz = p.z - q.z;
+          const q = list[j]; if (q.x > xEnd) break;
+          const B = cores[j], lim = A.reach + B.reach, dx = p.x - q.x, dz = p.z - q.z;
           if (dx * dx + dz * dz > lim * lim) continue;
           if (C && ((C.a === p.id && C.b === q.id) || (C.a === q.id && C.b === p.id))) continue; // a courting pair gets close on purpose
           const g = segGap(A, B), over = A.r + B.r - g.d;
@@ -401,8 +410,7 @@ export class Sim {
     if (this.court) {
       const C = this.court, a = this.byId(C.a), b = this.byId(C.b);
       if (!a || !b || a.flying || b.flying || a.held || b.held || now > C.until) {
-        if (a) { a.courting = false; a.stateUntil = now; } if (b) { b.courting = false; b.stateUntil = now; }
-        this.court = null;
+        this.endCourt();
       } else {
         const close = Math.hypot(a.x - (C.mx - .24), a.z - C.mz) < .2 && Math.hypot(b.x - (C.mx + .24), b.z - C.mz) < .2;
         if (close) { a.dir = 0; b.dir = Math.PI; a.state = b.state = 'court'; }
@@ -454,6 +462,7 @@ export class Sim {
     }
     this.poops = this.poops.filter(pp => now - pp.at < 30);
     checkAchievements(this);
+    if (now >= this.pruneAt) { this.pruneFamily(); this.pruneAt = now + 60; } // also on save; this keeps ?nosave runs bounded
   }
 
   // Swap a bird's accessory (UFO gift): new phenotype, maybe new breeds; the view rebuilds on p.rev.
@@ -462,6 +471,13 @@ export class Sim {
     if (this.family[p.lid]) this.family[p.lid].a = acc;
     p.rev = (p.rev || 0) + 1;
     this.notice(p);
+  }
+
+  // Call off the current courtship: both birds stop courting and pick something new to do.
+  endCourt() {
+    const C = this.court; if (!C) return;
+    for (const id of [C.a, C.b]) { const p = this.byId(id); if (p) { p.courting = false; p.stateUntil = this.t; } }
+    this.court = null;
   }
 
   // ---------- player actions ----------
@@ -488,7 +504,7 @@ export class Sim {
     if (this.roost.length >= ROOST_SIZE) { this.toast(M.pick(M.COPY.roostFull)); return false; }
     this.roost.push({ name: p.name, genome: p.genome, accessory: p.accessory, gen: p.gen, lid: p.lid });
     this.pigeons = this.pigeons.filter(x => x.id !== id);
-    if (this.court && (this.court.a === id || this.court.b === id)) this.court = null;
+    if (this.court && (this.court.a === id || this.court.b === id)) this.endCourt(); // the partner goes back to its day
     if (this.selId === id) this.selId = null;
     this.emit({ type: 'roosted', x: p.x, z: p.z });
     this.toast(M.pick(M.COPY.roosted).replace('{n}', p.name), 'note');
@@ -553,11 +569,7 @@ export class Sim {
     const p = this.byId(id); if (!p || p.flying) return null;
     p.held = true; p.courting = false; p.state = 'held'; p.busy = null;
     p.emote = { kind: 'say', text: M.say(M.HELD_LINES, this.said) }; p.emoteUntil = this.t + 2.4;
-    if (this.court && (this.court.a === id || this.court.b === id)) {
-      const o = this.byId(this.court.a === id ? this.court.b : this.court.a);
-      if (o) { o.courting = false; o.stateUntil = this.t; }
-      this.court = null;
-    }
+    if (this.court && (this.court.a === id || this.court.b === id)) this.endCourt();
     return p;
   }
   carry(id, x, z) { const p = this.byId(id); if (p && p.held) { p.x = x; p.z = z; p.y = .55; } }
@@ -598,9 +610,10 @@ export class Sim {
       const rec = F[id]; if (!rec) return null;
       return { lid: id, rec, par: d < TREE_DEPTH && rec.par ? rec.par.map(q => node(q, d + 1)) : null };
     };
-    const kids = new Set(), grand = new Set();
-    for (const [k, r] of Object.entries(F)) if (r.par && r.par.includes(lid) && r.how === 'hatch') kids.add(+k);
-    for (const [k, r] of Object.entries(F)) if (r.par && r.par.some(q => kids.has(q))) grand.add(+k);
+    // chicks / grandchicks: birds hatched to it / to its chicks (a clone shares parents but wasn't hatched)
+    const kids = new Set(), grand = new Set(), hatched = Object.entries(F).filter(([, r]) => r.how === 'hatch' && r.par);
+    for (const [k, r] of hatched) if (r.par.includes(lid)) kids.add(+k);
+    for (const [k, r] of hatched) if (r.par.some(q => kids.has(q))) grand.add(+k);
     const inPark = (set) => this.pigeons.filter(p => !p.flying && set.has(p.lid)).length;
     return { root: node(lid, 0), chicks: inPark(kids), grandchicks: inPark(grand) };
   }

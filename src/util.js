@@ -16,8 +16,10 @@ export function raySphere(ray, c, r) {
 }
 
 // World point → CSS pixels for a camera filling the window. z > 1 means behind the camera.
-const _p = new THREE.Vector3();
+// Returns a shared object (valid until the next call) — hot per-frame callers allocate nothing.
+const _p = new THREE.Vector3(), _s = { x: 0, y: 0, z: 0, ndcX: 0, ndcY: 0 };
 export function toScreen(x, y, z, cam, W = innerWidth, H = innerHeight) {
   _p.set(x, y, z).project(cam);
-  return { x: (_p.x * .5 + .5) * W, y: (-_p.y * .5 + .5) * H, z: _p.z, ndcX: _p.x, ndcY: _p.y };
+  _s.x = (_p.x * .5 + .5) * W; _s.y = (-_p.y * .5 + .5) * H; _s.z = _p.z; _s.ndcX = _p.x; _s.ndcY = _p.y;
+  return _s;
 }

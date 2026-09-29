@@ -233,8 +233,10 @@ export function carriersOf(genome) {
 }
 
 // Does a bird show a trait (2), only carry it hidden (1), or neither (0)? key: 'locus:allele' or 'acc:name'.
+let _tsKey = null, _tsLoc = '', _tsAl = ''; // the finder asks about one key for every bird, every frame
 export function traitStatus(genome, pheno, key) {
-  const [loc, al] = key.split(':');
+  if (key !== _tsKey) { _tsKey = key; [_tsLoc, _tsAl] = key.split(':'); }
+  const loc = _tsLoc, al = _tsAl;
   if (loc === 'acc') return pheno.accessory === al ? 2 : 0;
   if (pheno.e[loc] === al) return 2;
   const pair = genome[loc];

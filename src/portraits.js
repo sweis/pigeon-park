@@ -55,6 +55,7 @@ export class Portraits {
     flipInto(this.ctx, this.buf, this.size);
     url = this.canvas.toDataURL('image/png');
     this.cache.set(k, url);
+    if (this.cache.size > 300) this.cache.delete(this.cache.keys().next().value); // oldest first; a long session sees thousands of looks
     return url;
   }
 }

@@ -115,6 +115,7 @@ button { font: inherit; color: inherit; }
 .photo-wrap { display: grid; place-items: center; min-height: 240px; overflow: auto; }
 .photo-img { width: 100%; max-height: 64vh; object-fit: contain; border-radius: var(--r-md); box-shadow: var(--sh-md); }
 .filming { display: flex; flex-direction: column; align-items: center; gap: 12px; width: min(420px, 80vw); padding: 40px 0; }
+.clip-dlg.busy .dlg-head [data-act="close"] { visibility: hidden; } /* filming owns the renderer until it's done */
 .clipbar { width: 100%; height: 8px; margin: 0; } .clipbar i { transition: width .15s; }
 .clip-video { background: #201e1d; aspect-ratio: 9 / 16; max-height: 66vh; width: auto; }
 .clip-err { max-width: 420px; text-align: center; font-size: 14px; line-height: 1.45; padding: 30px 10px; }

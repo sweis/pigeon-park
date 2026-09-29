@@ -126,6 +126,14 @@ for (const kind of Object.keys(HAPPENINGS)) {
   let quick = 0; for (let i = 0; i < thoughts.length; i++) if (thoughts.slice(Math.max(0, i - 40), i).includes(thoughts[i])) quick++;
   ok(M.THOUGHTS.length >= 120 && thoughts.length > 40 && quick === 0, `birds don't repeat a thought within 40 lines (${thoughts.length} thoughts in 20 min, ${new Set(thoughts).size} different, ${quick} quick repeats)`);
 }
+// roosting (or grabbing) one of a courting pair frees the other to get on with its day
+{
+  setSeed(3); const S = new Sim(); S.initFlock(null);
+  let i = 0; while (!S.court && i++ < 30000) S.step();
+  const { a, b } = S.court, partner = S.byId(b);
+  S.roostAdd(a);
+  ok(!S.court && partner && !partner.courting, `roosting a courting bird releases its partner (court ${S.court}, partner courting ${partner?.courting})`);
+}
 // family tree: hatchlings record their parents, clones share them, records survive save/load and stay bounded
 {
   const s = run(42, 1200).s;

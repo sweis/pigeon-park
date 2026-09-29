@@ -65,6 +65,22 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 - Verified (headless): every suite in `npm test` passes; seeded flocks identical to v0.7 (boot warm-up restores the RNG). Clip path verified as WebM VP9+Opus only (no H.264 encoder in Playwright Chromium).
 - Not verified: real phones/GPUs; clip MP4 H.264/AAC path; clip filming time + memory at 1080×1920 on phones; share sheet targets; new songs by ear (levels checked numerically; WAV renders in captures/music/).
 
+## v0.8.1 pass
+- Birds don't walk through each other: `Sim.separate()` — body capsules (chest→most of the tail, breed size ×
+  chick age), 6 relaxation passes with the fountain rim + park edge applied inside each pass, sweep-and-prune
+  along x (~0.02 ms/step for a full park). Crossing capsules separate centre-to-centre. A walker blocked ~0.7 s
+  stops (and may say a bump line). Courting pairs may touch. Test: no pair overlaps > 3 cm for more than 3 steps.
+- Speech: pools roughly doubled/tripled (130 thoughts, 44 replies, 26 night, 25 held, 22 baby, 21 courting, 19 bump);
+  `M.say(pool, sim.said)` holds back the recent half of each pool (history per Sim → replays stay deterministic).
+- Phones: toasts lift above the bird card / intro bottom sheet (`UI.placeToasts`, layout box not the animated rect).
+- Cleanup #2 (review agent + CPU profile): clip coos scheduled in time order (most were being dropped); the clip
+  owns the renderer (resize / photos / monument pictures wait, dialog can't be closed mid-film, encoder cancelled
+  on error, synchronous busy flag); finder markers suppressed in clips without clobbering the player's finder;
+  roosting a courting bird frees its partner (`endCourt()` shared by grab/roost/think); photo/clip blobs revoked on
+  close; family records pruned every 60 sim-s (not only on save); chick/grandchick counts consistent; portrait
+  cache capped at 300; hot-path lookup tables hoisted; finder key split cached; shared `toScreen` result; bubble
+  transforms written only when they change; Music/PLAYLISTS/FIND_COLORS no longer exported.
+
 ## Next
 - Try Clip on a real iPhone + Android (MP4 path, filming time); fall back to 720×1280 on phones if slow. Add a Cancel button to filming.
 - Listen to the new songs; tune levels/instruments by ear.
