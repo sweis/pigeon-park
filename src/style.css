@@ -117,7 +117,40 @@ button { font: inherit; color: inherit; }
 .developing { font-family: var(--font-h); font-size: 20px; opacity: .6; animation: breathe 1.2s ease-in-out infinite; }
 .photo-actions { align-items: center; }
 .photo-actions a.btn { text-decoration: none; }
-@media (max-width: 760px) { #paused { top: 96px; } }
+
+/* ---------- trait finder ---------- */
+.chip.findable { border: none; font-family: inherit; cursor: pointer; } .chip.chip-carry.findable { border: 1.5px dashed var(--n400); }
+.chip.findable:hover { filter: brightness(.95); box-shadow: 0 0 0 2px rgba(63, 191, 95, .5); }
+.chip svg { vertical-align: -2px; }
+.entry .find { margin: 6px 0 -4px -8px; padding: 4px 8px; }
+.chips.recipe { justify-content: center; }
+#finder { position: absolute; left: 50%; transform: translateX(-50%); top: 110px; z-index: 3; display: flex; align-items: center; gap: 10px; padding: 5px 6px 5px 14px; font-size: 13px; animation: rise .2s ease-out; }
+#finder .fk { display: inline-flex; align-items: center; gap: 5px; color: var(--n700); font-weight: 600; white-space: nowrap; }
+.fdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; } .fdot.show { background: #3fbf5f; } .fdot.carry { background: #f2c230; }
+#finder .btn.icon { width: 28px; height: 28px; padding: 5px; background: transparent; }
+
+/* ---------- family tree ---------- */
+.fam-dlg { width: min(900px, 96vw); }
+.fam-sum { margin: 0; font-size: 14px; line-height: 1.4; }
+.ftree-wrap { overflow: auto; min-height: 0; touch-action: pan-x pan-y; }
+.ftree { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); grid-template-rows: repeat(8, minmax(50px, auto)); column-gap: 22px; row-gap: 4px; padding: 2px; }
+.ftree.solo { grid-template-columns: minmax(150px, 260px); grid-template-rows: auto; }
+.ft-cell { position: relative; display: flex; align-items: center; min-width: 0; }
+.ft-cell.kids::after { content: ''; position: absolute; right: -11px; top: 50%; width: 11px; border-top: 2px solid var(--n400); }
+.ft-cell.up::before, .ft-cell.down::before { content: ''; position: absolute; left: -11px; width: 9px; border-left: 2px solid var(--n400); }
+.ft-cell.up::before { top: 50%; bottom: -2px; border-top: 2px solid var(--n400); border-top-left-radius: 6px; }
+.ft-cell.down::before { top: -2px; bottom: 50%; border-bottom: 2px solid var(--n400); border-bottom-left-radius: 6px; }
+.ft-node { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; text-align: left; font: inherit; color: inherit; background: var(--n100); border: none; border-radius: 12px; padding: 3px 8px 3px 3px; box-shadow: var(--sh-sm); cursor: default; }
+.ft-node.live { cursor: pointer; box-shadow: 0 0 0 1.5px var(--accent-2), var(--sh-sm); } .ft-node.live:hover { background: var(--g100); }
+.ft-node.self { background: var(--a100); box-shadow: 0 0 0 2px var(--accent), var(--sh-sm); padding: 6px 10px 6px 4px; }
+.ft-node img { width: 44px; height: 44px; flex: none; margin: -3px -2px; }
+.ft-node.self img { width: 72px; height: 72px; }
+.ft-node.unknown { opacity: .55; box-shadow: none; border: 1.5px dashed var(--n400); background: transparent; }
+.ft-q { width: 38px; height: 38px; flex: none; display: grid; place-items: center; font-family: var(--font-h); font-size: 20px; color: var(--n500); }
+.ft-txt { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.ft-txt b { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ft-node.self .ft-txt b { font-family: var(--font-h); font-weight: 400; font-size: 16px; }
+.ft-txt small { font-size: 10.5px; color: var(--n700); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- world-anchored bubbles ---------- */
 #bubbles { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
@@ -223,4 +256,11 @@ kbd { font-family: var(--font-b); font-size: 12px; font-weight: 700; background:
   #paused { top: 46px; font-size: 12px; }
   .help { grid-template-columns: 1fr; }
   .dialog { max-height: 90vh; padding: 12px; }
+  #finder { top: 84px; font-size: 12px; gap: 7px; padding: 3px 4px 3px 10px; max-width: calc(100% - 12px); }
+  .ftree { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(8, minmax(40px, auto)); column-gap: 12px; }
+  .ft-cell.kids::after { right: -6px; width: 6px; } .ft-cell.up::before, .ft-cell.down::before { left: -6px; width: 4px; }
+  .ft-node { flex-direction: column; align-items: center; text-align: center; gap: 0; padding: 2px 3px 4px; border-radius: 10px; }
+  .ft-node img { width: 36px; height: 36px; margin: 0; }
+  .ft-node.self { padding: 4px 3px; } .ft-node.self img { width: 52px; height: 52px; }
+  .ft-txt { align-items: center; } .ft-txt b { font-size: 11px; } .ft-node.self .ft-txt b { font-size: 13px; } .ft-txt small { font-size: 9.5px; white-space: normal; }
 }

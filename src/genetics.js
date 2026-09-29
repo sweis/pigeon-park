@@ -224,12 +224,35 @@ export function carriersOf(genome) {
     const ei = Math.min(l.alleles.indexOf(a), l.alleles.indexOf(b));
     for (const al of new Set([a, b])) {
       if (l.alleles.indexOf(al) > ei) {
-        const m = ALLELE_META[l.id + ':' + al];
-        if (m) out.push({ label: m.label, tier: m.tier });
+        const key = l.id + ':' + al, m = ALLELE_META[key];
+        if (m) out.push({ key, label: m.label, tier: m.tier });
       }
     }
   }
   return out;
+}
+
+// Does a bird show a trait (2), only carry it hidden (1), or neither (0)? key: 'locus:allele' or 'acc:name'.
+export function traitStatus(genome, pheno, key) {
+  const [loc, al] = key.split(':');
+  if (loc === 'acc') return pheno.accessory === al ? 2 : 0;
+  if (pheno.e[loc] === al) return 2;
+  const pair = genome[loc];
+  return pair && (pair[0] === al || pair[1] === al) ? 1 : 0;
+}
+
+// Compact genome string for ancestry records: two base-36 allele indices per locus, in LOCI order.
+// Loci added later decode as wild type, so old records stay readable.
+export function encodeGenome(g) {
+  return LOCI.map(l => g[l.id].map(a => Math.max(0, l.alleles.indexOf(a)).toString(36)).join('')).join('');
+}
+export function decodeGenome(s) {
+  const g = {};
+  LOCI.forEach((l, i) => {
+    const a = l.alleles[parseInt(s[i * 2], 36)], b = l.alleles[parseInt(s[i * 2 + 1], 36)];
+    g[l.id] = a && b ? [a, b] : [WILD[l.id], WILD[l.id]];
+  });
+  return g;
 }
 
 export const ACCESSORIES = {
@@ -365,6 +388,12 @@ export function breedSample(b) {
   }
   if (b.sample) for (const [k, v] of Object.entries(b.sample)) e[k] = v;
   return derivePheno(e, accessory);
+}
+// A true-breeding (homozygous) genome for a breed's sample look: registry clones, visitors, debug spawns.
+export function breedGenome(b) {
+  const sm = breedSample(b), genome = {};
+  for (const l of LOCI) genome[l.id] = [sm.e[l.id], sm.e[l.id]];
+  return { genome, accessory: sm.accessory };
 }
 
 export const PEDIA = {

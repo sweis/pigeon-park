@@ -1,7 +1,12 @@
 // Pigeon Park — renders sim state: animated pigeon rigs, eggs, poop, contact shadows, selection ring.
 
 import * as THREE from 'three';
-import { PigeonRig, sizeOf, pruneGeometryCache } from './pigeon3d.js';
+import { PigeonRig, sizeOf, birdHeight, pruneGeometryCache } from './pigeon3d.js';
+import { traitStatus } from './genetics.js';
+
+// Trait finder: 2 = shows the trait (green), 1 = carries it hidden (yellow).
+export const FIND_COLORS = { 2: '#3fbf5f', 1: '#f2c230' };
+const FIND_MAX = 50;
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const POSE_BONES = ['body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR'];
@@ -35,6 +40,7 @@ class PigeonView {
     this.googly = p.pheno.e.eye === 'googly';
     this.rev = p.rev || 0;
     this.baseSize = sizeOf(p.pheno, p.jit);
+    this.height = birdHeight(p.pheno);
   }
   size(p, simT) { return this.baseSize * chickScale(simT - p.born); }
   update(p, simT, dt, t) {
@@ -222,11 +228,19 @@ export class FlockView {
     this.sel.add(dash); this.selDash = dash;
     this.sel.visible = false; this.sel.renderOrder = 2;
     scene.add(this.sel);
+    // trait-finder markers: a bobbing gem over each matching bird + a ring at its feet (2 instanced draws).
+    // Same material setup as the sparkles (basic, untonemapped, instance colours) so no new shader program.
+    const mk = (geo) => { const m = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ toneMapped: false }), FIND_MAX); m.frustumCulled = false; m.count = 0; m.setColorAt(0, new THREE.Color()); scene.add(m); return m; };
+    this.findGems = mk(new THREE.OctahedronGeometry(1, 0));
+    this.findRings = mk(new THREE.RingGeometry(.33, .4, 32, 1).rotateX(-Math.PI / 2));
+    this.findRings.renderOrder = 2;
+    this._fc = { 1: new THREE.Color(FIND_COLORS[1]), 2: new THREE.Color(FIND_COLORS[2]) };
   }
 
   view(id) { return this.views.get(id); }
 
-  update(sim, dt, t, camPos) {
+  // find: trait key being searched for (or null). Returns nothing; markers are drawn per frame.
+  update(sim, dt, t, camPos, find = null) {
     const seen = new Set(), m = _m, q = _q.identity();
     let si = 0, hi = 0;
     for (const p of sim.pigeons) {
@@ -248,6 +262,7 @@ export class FlockView {
       }
     }
     this.shadows.count = si; this.shadows.instanceMatrix.needsUpdate = true;
+    this.updateFind(sim, t, camPos, find);
     this.haloMat.opacity = .12 + sim.night * .7;
     for (let i = hi; i < this.halos.length; i++) this.halos[i].visible = false;
     for (const [id, v] of this.views) if (!seen.has(id)) { this.root.remove(v.g); v.dispose(); this.views.delete(id); }
@@ -326,6 +341,31 @@ export class FlockView {
       this.sel.position.set(sv.vis.x, .012, sv.vis.z);
       this.sel.scale.setScalar(s * 1.1);
       this.selDash.rotation.y = t * .8;
+    }
+  }
+
+  updateFind(sim, t, camPos, key) {
+    let n = 0;
+    if (key) {
+      const m = _m, q = _q;
+      for (const p of sim.pigeons) {
+        if (p.flying || n >= FIND_MAX) continue;
+        const st = traitStatus(p.genome, p.pheno, key); if (!st) continue;
+        const v = this.views.get(p.id); if (!v) continue;
+        const s = v.size(p, sim.t), c = this._fc[st];
+        // gems grow with camera distance so they stay findable from the overview
+        const k = camPos ? THREE.MathUtils.clamp(camPos.distanceTo(v.vis) / 9, .8, 2.2) : 1;
+        q.setFromAxisAngle(UP, t * 2 + p.id);
+        m.compose(_p.set(v.vis.x, v.vis.y + v.height * s + .12 * k + Math.sin(t * 3 + p.id) * .03 * k, v.vis.z), q, _s.set(.06 * k, .11 * k, .06 * k));
+        this.findGems.setMatrixAt(n, m); this.findGems.setColorAt(n, c);
+        m.compose(_p.set(v.vis.x, .014, v.vis.z), q.identity(), _s.setScalar(s * 1.05));
+        this.findRings.setMatrixAt(n, m); this.findRings.setColorAt(n, c);
+        n++;
+      }
+    }
+    for (const M of [this.findGems, this.findRings]) {
+      if (!n && !M.count) continue;
+      M.count = n; M.instanceMatrix.needsUpdate = true; M.instanceColor.needsUpdate = true;
     }
   }
 

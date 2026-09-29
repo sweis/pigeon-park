@@ -44,10 +44,9 @@ export const HAPPENINGS = {
     start(S) {
       const pool = M.BREEDS.filter(b => b.real && !S.breeds[b.id]);
       const b = pick(pool.length ? pool : M.BREEDS.filter(x => x.real));
-      const sm = M.breedSample(b), genome = {};
-      for (const l of M.LOCI) genome[l.id] = [sm.e[l.id], sm.e[l.id]];
       if (S.alive() >= S.cap) return null;
-      const p = S.spawn({ genome, accessory: sm.accessory, name: 'Visiting ' + b.name, adult: true, quiet: true, x: (rand() - .5) * PARK.w * .6, z: (rand() - .2) * PARK.d * .5, dir: Math.PI / 2 });
+      const { genome, accessory } = M.breedGenome(b);
+      const p = S.spawn({ genome, accessory, name: 'Visiting ' + b.name, adult: true, quiet: true, x: (rand() - .5) * PARK.w * .6, z: (rand() - .2) * PARK.d * .5, dir: Math.PI / 2, how: 'visitor' });
       p.y = 3.5; p.visitor = { leaveAt: S.t + 50, breed: b.id };
       S.toast(`A ${b.name} is visiting from out of town. Clone it before it leaves!`, 'breed');
       S.sound('chime');
@@ -209,7 +208,7 @@ Object.assign(HAPPENINGS, {
     start(S) {
       if (S.alive() >= S.cap) return null;
       const g = pureGenome({ pied: 'white', size: 'king', beak: 'long', eye: 'pearl' });
-      const p = S.spawn({ genome: g, name: 'Definitely A Seagull', adult: true, quiet: true, x: PARK.w / 2 - .6, z: 0, dir: Math.PI });
+      const p = S.spawn({ genome: g, name: 'Definitely A Seagull', adult: true, quiet: true, x: PARK.w / 2 - .6, z: 0, dir: Math.PI, how: 'visitor' });
       p.y = 3; p.visitor = { leaveAt: S.t + 24 }; p.busy = 'seagull';
       say(S, p, 'MINE', 2.5);
       S.toast(pick(['A seagull has landed. Hide your chips.', 'SEAGULL. Everyone act natural.']), 'event');

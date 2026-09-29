@@ -12,7 +12,8 @@ export async function startServer({ dist = false } = {}) {
 }
 
 export async function launch() {
-  return chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+  // PW_CHROMIUM: use a preinstalled browser when the pinned Playwright build isn't downloaded
+  return chromium.launch({ executablePath: process.env.PW_CHROMIUM || undefined, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 }
 
 // Open the game and wait until the debug API is ready and a few frames have been presented.

@@ -45,6 +45,8 @@ class Game {
     this.simdt = params.has('simdt') ? +params.get('simdt') : null;
     this.frameMs = []; this.lastShaderError = null; this.contextLost = false;
     this.nosave = flag('nosave');
+    this.find = null;          // trait finder: { key, until } — birds showing (green) / carrying (yellow) it get marked
+    this.keys = new Set();     // held camera keys (desktop WASD / arrows / Q E)
   }
 
   async boot() {
@@ -116,7 +118,9 @@ class Game {
     this.sim.bread = { x: 0, z: 2.5, hp: .5, a: 0 }; // bread happening props
     this.sim.ufo = { x: 0, z: 0, y: 4, beam: 1 }; this.sim.rain = 1; this.flock.rainAmt = 1;
     this.fx.burst(0, .5, 2, 3);
-    this.flock.update(this.sim, 0, 0);
+    this.sim.spawn({ genome: pureGenome({}), name: 'warm-up', adult: true, quiet: true, x: 0, z: 1 }); // a finder marker target
+    this.flock.update(this.sim, 0, 0, null, 'pattern:bar');
+    this.sim.family = {}; this.sim.lids = 1; this.sim.ids = 1;
     this.sim.pigeons.length = 0;
     this.flock.halos[0].visible = true;
     this.world.setHour(22, 1);
@@ -151,10 +155,10 @@ class Game {
   }
   resetAll() {
     try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
-    const keep = { speed: this.sim.speed, mut: this.sim.mut, ph: this.sim.phase() }, nextId = this.sim.ids;
+    const keep = { speed: this.sim.speed, mut: this.sim.mut, whimsy: this.sim.whimsy, ph: this.sim.phase() }, nextId = this.sim.ids;
     this.sim.reset(); this.sim.restore(keep);
     this.sim.ids = nextId; // ids keep counting so no new bird inherits an old bird's 3D view
-    this.cam.follow = null;
+    this.cam.follow = null; this.findTrait(null);
     this.sim.initFlock(null);
     this.monuments.clear();
     this.ui.roostSel = null; this.ui.seen = { pedia: 0, breeds: 0 };
@@ -174,6 +178,12 @@ class Game {
     if (this.cam.follow === id) this.cam.shot('overview', { snap: false });
     else { this.select(id); this.cam.shot('follow', { id, snap: false }); }
     this.ui.refreshT = 0;
+  }
+
+  // Trait finder: mark every bird that shows (green) or hides (yellow) a trait for a while. null clears it.
+  findTrait(key) {
+    this.find = key ? { key, until: performance.now() + FIND_MS } : null;
+    this.ui.renderFind();
   }
 
   // ---------- input ----------
@@ -279,9 +289,12 @@ class Game {
     c.addEventListener('wheel', (e) => { e.preventDefault(); this.cam.zoomAt(Math.exp(e.deltaY * .0012), ground(e.clientX, e.clientY)); }, { passive: false });
 
     let cheat = '';
+    addEventListener('keyup', (e) => this.keys.delete(e.code));
+    addEventListener('blur', () => this.keys.clear());
     addEventListener('keydown', (e) => {
       if (!e.key || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
-      if (e.key === 'Escape') { if (this.ui.dialog) this.ui.closeDialog(); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
+      if (CAM_KEYS[e.code] && !this.ui.dialog && !e.ctrlKey && !e.metaKey && !e.altKey) { this.keys.add(e.code); if (e.code.startsWith('Arrow')) e.preventDefault(); }
+      if (e.key === 'Escape') { if (this.ui.dialog) this.ui.closeDialog(); else if (this.find) this.findTrait(null); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
       if ((e.key === 'p' || e.key === ' ') && !e.repeat) { if (e.key === ' ') e.preventDefault(); this.togglePause(); if (e.key === 'p') cheat = ''; return; }
       if (e.key === '?') { this.ui.dialog === 'help' ? this.ui.closeDialog() : this.ui.openDialog('help'); return; }
       if (e.key.length !== 1) return;
@@ -349,9 +362,15 @@ class Game {
     this.audio.setMood(S.happening?.kind === 'dance' ? 'dance' : S.night > .55 ? 'night' : 'day');
     this.audio.setDuck(this.paused ? .35 : 1);
     this.world.update(dt);
-    this.flock.update(S, dt, this.time, this.cam.cam.position);
+    if (this.find && performance.now() > this.find.until) this.findTrait(null);
+    this.flock.update(S, dt, this.time, this.cam.cam.position, this.find?.key);
     this.fx.update(dt);
     this.monuments.update();
+    if (this.keys.size) { // held keys → camera intent (fwd, right, rotate) for this frame
+      let f = 0, r = 0, rot = 0;
+      for (const k of this.keys) { const [a, b, c] = CAM_KEYS[k]; f += a; r += b; rot += c; }
+      this.cam.keyMove(Math.sign(f), Math.sign(r), Math.sign(rot), this.camDt || 1 / 60);
+    }
     let fp = null;
     if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.cam.shot('overview', { snap: false }); }
     this.cam.update(this.camDt || 1 / 60, fp);
@@ -435,6 +454,13 @@ class Game {
 }
 
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
+const FIND_MS = 30000;
+// Desktop camera keys by physical position (works on AZERTY too): [forward, right, rotate].
+const CAM_KEYS = {
+  KeyW: [1, 0, 0], ArrowUp: [1, 0, 0], KeyS: [-1, 0, 0], ArrowDown: [-1, 0, 0],
+  KeyA: [0, -1, 0], ArrowLeft: [0, -1, 0], KeyD: [0, 1, 0], ArrowRight: [0, 1, 0],
+  KeyQ: [0, 0, 1], KeyE: [0, 0, -1],
+};
 const CODES = {
   rizz: (S) => S.summonLegends(),
   ore: (S) => S.summonOres(),
@@ -488,9 +514,10 @@ function makeDebugApi(g) {
         t: +S.t.toFixed(3), wall: +S.wall.toFixed(3), hour: +S.hour().toFixed(2), night: S.night, frozen: g.frozen, seeded: isSeeded(),
         speed: S.speed, mut: S.mut, whimsy: S.whimsy, paused: g.paused, happening: S.happening?.kind || null, bread: S.bread ? +S.bread.hp.toFixed(2) : null, cap: S.cap, selId: S.selId, follow: g.cam.follow, cam: g.cam.name,
         pop: S.alive(), eggs: S.eggs.length, poops: S.poops.length, court: !!S.court,
+        find: g.find?.key || null, findMarks: g.flock.findGems.count, camAz: +g.cam.cur.az.toFixed(3), camTarget: g.cam.cur.target.toArray().map(v => +v.toFixed(2)), dialog: g.ui.dialog, familySize: Object.keys(S.family).length,
         roost: S.roost.map(r => r.name), stats: { ...S.stats },
         breedsFound: Object.keys(S.breeds), breedsTotal: M.BREEDS.length, traitsFound: Object.keys(S.discovered).length, traitsTotal: Object.keys(M.PEDIA).length,
-        pigeons: S.pigeons.map(p => ({ id: p.id, name: p.name, x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), dir: +p.dir.toFixed(2), state: p.state, flying: p.flying, held: p.held, gen: p.gen, label: p.pheno.label, breeds: p.breeds.map(b => b.id) })),
+        pigeons: S.pigeons.map(p => ({ id: p.id, lid: p.lid, name: p.name, x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), dir: +p.dir.toFixed(2), state: p.state, flying: p.flying, held: p.held, gen: p.gen, label: p.pheno.label, breeds: p.breeds.map(b => b.id) })),
         render: {
           frameMsP50: pct(g.frameMs, .5), frameMsP99: pct(g.frameMs, .99), drawCalls: info.render.calls, triangles: info.render.triangles,
           programs: info.programs.length, programsAfterBoot: g.programsAfterBoot, geometries: info.memory.geometries, textures: info.memory.textures,
@@ -519,7 +546,7 @@ function makeDebugApi(g) {
       if (kind === 'ores') return S.summonOres();
       const b = M.BREEDS.find(x => x.id === kind);
       let genome;
-      if (b) { const sm = M.breedSample(b); genome = {}; for (const l of M.LOCI) genome[l.id] = [sm.e[l.id], sm.e[l.id]]; return S.spawn({ genome, accessory: sm.accessory, name: b.name, adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id; }
+      if (b) { const bg = M.breedGenome(b); return S.spawn({ ...bg, name: b.name, adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id; }
       genome = typeof kind === 'object' ? pureGenome(kind) : M.founderGenome();
       return S.spawn({ genome, accessory: pos.accessory || null, name: M.randomName(), adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id;
     },
@@ -534,6 +561,8 @@ function makeDebugApi(g) {
     },
     screenOfWorld(x, y, z) { const w = new THREE.Vector3(x, y, z).project(g.cam.cam); return { x: (w.x * .5 + .5) * innerWidth, y: (-w.y * .5 + .5) * innerHeight }; },
     pickAt(x, y) { return g.pickAt(x, y); },
+    find(key) { g.findTrait(key); g.render(0); return g.flock.findGems.count; },
+    family(id) { const p = S.byId(id); return p ? S.familyTree(p.lid) : null; },
     win() { for (const b of M.BREEDS) S.breeds[b.id] ||= { by: 'debug', at: Date.now() }; for (const k of Object.keys(M.PEDIA)) S.discovered[k] = 1; },
     lose() { api.clearAll(); S.roost.length = 0; },
     render() { g.render(0); },
