@@ -31,6 +31,7 @@ const I = {
   play: svg('<polygon points="6 4 20 12 6 20 6 4"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>', 14),
   tree: svg('<circle cx="6" cy="5" r="2.5"/><circle cx="18" cy="5" r="2.5"/><circle cx="12" cy="19" r="2.5"/><path d="M6 7.5v1.5a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7.5M12 12v4.5"/>', 14),
+  film: svg('<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 8h5M2 16h5M17 8h5M17 16h5"/>', 14),
   search: svg('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16" y2="16"/>', 13),
 };
 
@@ -168,6 +169,8 @@ export class UI {
       case 'settings': this.$('settings').classList.toggle('hidden'); this.renderSettings(true); break;
       case 'photo': this.openPhoto({ id: +arg }); break;
       case 'photo-roost': this.openPhoto({ roost: +arg }); break;
+      case 'clip': this.openClip(+arg); break;
+      case 'share-clip': this.shareClip(); break;
       case 'share': this.sharePhoto(); break;
       case 'copy-photo': this.copyPhoto(a); break;
       case 'speed': S.speed = +arg; this.renderSettings(true); g.save(); break;
@@ -250,7 +253,7 @@ export class UI {
         actions: `<button class="btn primary" data-act="clone" data-arg="${sel.id}">${I.clone} Clone</button>
                   <button class="btn" data-act="roost-add" data-arg="${sel.id}">${I.roost} Roost</button>
                   <button class="btn ghost" data-act="dismiss" data-arg="${sel.id}">Dismiss<span class="opt"> politely</span></button>`,
-        follow: sel.id, photo: `data-act="photo" data-arg="${sel.id}"`, lid: sel.lid };
+        follow: sel.id, photo: `data-act="photo" data-arg="${sel.id}"`, lid: sel.lid, clip: sel.id };
     } else if (this.roostSel != null && S.roost[this.roostSel]) {
       const i = this.roostSel, r = S.roost[i], ph = M.computePheno(r.genome, r.accessory);
       d = { img: P.get(ph), kicker: 'Roost resident', name: r.name, meta: 'Generation ' + r.gen + ' · kept bird', color: ph.label,
@@ -273,7 +276,7 @@ export class UI {
       ${d.breeds.length ? `<div class="chips">${d.breeds.map(b => `<span class="chip chip-breed">★ ${esc(b.name)}</span>`).join('')}</div>` : ''}
       ${d.traits.length ? `<div class="chips">${d.traits.map(t => findChip(t.key, chip(t.tier), esc(t.label))).join('')}</div>` : ''}
       ${d.carries.length ? `<div><div class="label">Hidden in the DNA</div><div class="chips">${d.carries.map(c => findChip(c.key, 'chip-carry', '½ ' + esc(c.label))).join('')}</div></div>` : ''}
-      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera}<span class="opt"> Photo</span></button>${d.lid != null && this.sim.family[d.lid] ? `<button class="btn ghost" data-act="family" data-arg="${d.lid}" title="Family tree">${I.tree}<span class="opt"> Family</span></button>` : ''}${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye}<span class="opt"> ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</span></button>` : ''}</div>`;
+      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera}<span class="opt"> Photo</span></button>${d.clip != null ? `<button class="btn ghost" data-act="clip" data-arg="${d.clip}" title="Make a 6-second vertical video">${I.film}<span class="opt"> Clip</span></button>` : ''}${d.lid != null && this.sim.family[d.lid] ? `<button class="btn ghost" data-act="family" data-arg="${d.lid}" title="Family tree">${I.tree}<span class="opt"> Family</span></button>` : ''}${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye}<span class="opt"> ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</span></button>` : ''}</div>`;
   }
 
   // ---------- settings ----------
@@ -354,6 +357,38 @@ export class UI {
         ${canCopy ? `<button class="btn" data-act="copy-photo">${I.copy} <span>Copy image</span></button>` : ''}
         ${canShare ? `<button class="btn" data-act="share">${I.share} Share</button>` : ''}
         <span class="foot">${res.w} × ${res.h} px</span></div>`);
+  }
+  // Video clip: film 6 s of this bird with captions (see clip.js), then preview / download / share.
+  async openClip(id) {
+    if (this.g.recording) return;
+    this.dialog = 'clip';
+    const el = this.$('dialog'); el.classList.remove('hidden');
+    el.innerHTML = `<div class="dialog card photo-dlg clip-dlg" role="dialog">${this.dlgHead('Video clip', '<span class="chip chip-t1">6 s · vertical</span>')}
+      <div class="photo-wrap"><div class="filming"><div class="developing">Filming…</div><div class="bar clipbar"><i style="width:0%"></i></div>
+      <div class="foot">Rendering every frame at 1080 × 1920 — the park keeps living while the camera rolls.</div></div></div></div>`;
+    await new Promise(r => requestAnimationFrame(r));
+    const bar = el.querySelector('.clipbar i');
+    let res;
+    try { res = await this.g.clip(id, (k) => { if (bar) bar.style.width = Math.round(k * 100) + '%'; }); }
+    catch (e) {
+      if (this.dialog === 'clip') el.querySelector('.photo-wrap').innerHTML = `<p class="clip-err">${esc(e.message || String(e))}</p>`;
+      return;
+    }
+    if (this.dialog !== 'clip') { URL.revokeObjectURL(res.url); return; }
+    if (this.clipRes) URL.revokeObjectURL(this.clipRes.url);
+    this.clipRes = res;
+    const file = new File([res.blob], res.file, { type: res.mime });
+    const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+    const kind = `${res.mime.includes('mp4') ? 'MP4' : 'WebM'} (${{ avc: 'H.264', vp9: 'VP9', av1: 'AV1', vp8: 'VP8' }[res.codec] || res.codec}${res.audioCodec ? ' + ' + res.audioCodec.toUpperCase() : ', silent'})`;
+    el.querySelector('.photo-wrap').innerHTML = `<video class="photo-img clip-video" src="${res.url}" autoplay loop muted playsinline controls></video>`;
+    el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
+        <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} Download</a>
+        ${canShare ? `<button class="btn" data-act="share-clip">${I.share} Share</button>` : ''}
+        <span class="foot">${res.w} × ${res.h} · ${kind} · ${(res.blob.size / 1e6).toFixed(1)} MB${res.mime.includes('mp4') ? '' : ' · for Instagram, convert to MP4 first'}</span></div>`);
+  }
+  async shareClip() {
+    const r = this.clipRes; if (!r) return;
+    try { await navigator.share({ files: [new File([r.blob], r.file, { type: r.mime })], title: r.name, text: `${r.name} — Pigeon Park 🐦 pigeonpark.live` }); } catch (e) { /* cancelled */ }
   }
   // Put the picture itself on the clipboard (paste straight into chats, docs, email).
   async copyPhoto(btn) {

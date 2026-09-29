@@ -43,7 +43,8 @@ class Game {
     this.sim = new Sim();
     this.frozen = false; this.paused = false; this.stepQueue = 0; this.acc = 0; this.time = 0;
     this.simdt = params.has('simdt') ? +params.get('simdt') : null;
-    this.frameMs = []; this.lastShaderError = null; this.contextLost = false;
+    this.frameMs = []; this.frameI = 0; this.lastShaderError = null; this.contextLost = false;
+    this.frameCb = (t) => this.frame(t);
     this.nosave = flag('nosave');
     this.find = null;          // trait finder: { key, until } — birds showing (green) / carrying (yellow) it get marked
     this.keys = new Set();     // held camera keys (desktop WASD / arrows / Q E)
@@ -101,7 +102,7 @@ class Game {
     this.programsAfterBoot = r.info.programs.length;
     document.getElementById('loading').classList.add('done');
     setTimeout(() => document.getElementById('loading').remove(), 700);
-    requestAnimationFrame((t) => this.frame(t));
+    requestAnimationFrame(this.frameCb);
   }
 
   // Compile every material/effect behind the loading screen so nothing compiles mid-game.
@@ -334,14 +335,13 @@ class Game {
 
   // ---------- loop ----------
   frame(now) {
-    requestAnimationFrame((t) => this.frame(t));
-    if (this.contextLost) return;
-    let dt = Math.min(.25, Math.max(0, (now - this.last) / 1000));
-    this.frameMs.push(now - this.last); if (this.frameMs.length > 240) this.frameMs.shift();
+    requestAnimationFrame(this.frameCb);
+    if (this.contextLost || this.recording) return; // a clip being recorded drives the world itself
+    const raw = Math.max(0, (now - this.last) / 1000);
+    this.frameMs[this.frameI++ % 240] = now - this.last; // ring buffer for the p50/p99 readout
     this.last = now;
-    if (this.simdt != null) dt = this.simdt;
-    this.camDt = Math.min(.1, (performance.now() - (this.camLast || now)) / 1000) || 1 / 60; this.camLast = performance.now();
-    this.render(dt);
+    this.camDt = Math.min(.1, raw) || 1 / 60;         // the camera always moves in wall time, even with ?simdt
+    this.render(this.simdt ?? Math.min(.25, raw));
   }
   render(dt) {
     const S = this.sim;
@@ -354,18 +354,11 @@ class Game {
       while (this.stepQueue > 0) { S.step(); this.stepQueue--; }
       dt = 0;
     }
-    this.time += dt;
-    this.drainEvents();
-    this.world.setHour(S.hour(), S.night);
-    this.world.setRain(this.flock.rainAmt || 0);
     this.audio.setRain(!!S.rain);
-    this.audio.setMood(EVENT_MUSIC[S.happening?.kind] || (S.night > .55 ? 'night' : 'day'));
+    this.audio.setMood(this.musicMood());
     this.audio.setDuck(this.paused ? .35 : 1);
-    this.world.update(dt);
     if (this.find && performance.now() > this.find.until) this.findTrait(null);
-    this.flock.update(S, dt, this.time, this.cam.cam.position, this.find?.key);
-    this.fx.update(dt);
-    this.monuments.update();
+    this.animate(dt, this.cam.cam.position);
     if (this.keys.size) { // held keys → camera intent (fwd, right, rotate) for this frame
       let f = 0, r = 0, rot = 0;
       for (const k of this.keys) { const [a, b, c] = CAM_KEYS[k]; f += a; r += b; rot += c; }
@@ -379,6 +372,20 @@ class Game {
     this.ui?.frame(dt, this.cam.cam);
     this.diag?.frame();
   }
+  // Everything that moves with world time (after the sim has stepped): events, sky, water, birds, effects.
+  // Shared by the live loop and the clip recorder.
+  animate(dt, camPos) {
+    const S = this.sim;
+    this.time += dt;
+    this.drainEvents();
+    this.world.setHour(S.hour(), S.night);
+    this.world.setRain(this.flock.rainAmt || 0);
+    this.world.update(dt);
+    this.flock.update(S, dt, this.time, camPos, this.find?.key);
+    this.fx.update(dt);
+    this.monuments.update();
+  }
+  musicMood() { return EVENT_MUSIC[this.sim.happening?.kind] || (this.sim.night > .55 ? 'night' : 'day'); }
   // Each bird has its own voice: big birds low, small birds high, plus a fixed per-genome offset.
   cooPitch(p) { return ({ king: .78, dinky: 1.32, chonk: .84 }[p.pheno.e.size] || 1) / Math.pow(p.jit || 1, 2.5); }
 
@@ -405,6 +412,14 @@ class Game {
     const card = await composeCard(shot, { name, gen, pheno, studio: id == null });
     const blob = await new Promise(res => card.toBlob(res, 'image/png'));
     return { blob, url: URL.createObjectURL(blob), name, file: 'pigeon-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.png', w: card.width, h: card.height };
+  }
+
+  // ---------- video clips ----------
+  // 6 s vertical clip of a park bird (see clip.js; loaded on first use with its muxer).
+  async clip(id, onProgress, opts = {}) {
+    const { recordClip } = await import('./clip.js');
+    this.audio.play('shutter');
+    return recordClip(this, id, { ...opts, onProgress });
   }
 
   // One-off render of the real scene from any camera at any size → canvas (photos, monument pictures).
@@ -437,6 +452,7 @@ class Game {
       if (e.type === 'toast') this.ui?.toast(e.msg, e.kind);
       else if (e.type === 'sound') {
         const p = e.id != null && S.byId(e.id), o = { ...e, pitch: p ? this.cooPitch(p) : 1 };
+        if (this.clipSfx) { this.clipSfx(o, this.clipTime); continue; } // filming: sounds go into the clip's soundtrack
         if (p) { // place the coo where the bird is: pan by screen side, quieter with distance
           const v = new THREE.Vector3(p.x, .3, p.z), d = v.distanceTo(this.cam.cam.position);
           o.pan = v.project(this.cam.cam).x * .8; o.vol = (o.vol ?? 1) * Math.min(1, Math.max(.25, 9 / d));
@@ -568,6 +584,13 @@ function makeDebugApi(g) {
     lose() { api.clearAll(); S.roost.length = 0; },
     render() { g.render(0); },
     async photo(id) { const r = await g.photo({ id }); return r && { w: r.w, h: r.h, size: r.blob.size, file: r.file }; },
+    async clipSupport() { return (await import('./clip.js')).clipSupport(); },
+    async clip(id, opts = {}) { // small/short clips for headless tests; returns metadata + sampled frames + the file as base64
+      const r = await g.clip(id, null, opts);
+      const b64 = opts.bytes ? await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result.split(',')[1]); fr.readAsDataURL(r.blob); }) : null;
+      return { w: r.w, h: r.h, size: r.blob.size, mime: r.mime, file: r.file, codec: r.codec, audioCodec: r.audioCodec, frames: r.frames, peeks: r.peeks, b64 };
+    },
+    async clipScript(id) { const p = S.byId(id); return p && (await import('./clip.js')).clipScript(p); },
     audio: () => ({ unlocked: !!g.audio.ac, sfxOn: g.audio.sfxOn, musicOn: g.audio.musicOn, sfxVol: g.audio.sfxVol, musicVol: g.audio.musicVol, mood: g.audio.mood, song: g.audio.music?.songId || null, songTitle: g.audio.songTitle, notes: g.audio.music?.notes || 0, musicRunning: !!g.audio.music?.timer, state: g.audio.ac?.state }),
     audioLevel() { // RMS of the master output right now (verifies sound is actually produced)
       const A = g.audio; if (!A.ac) return null;
