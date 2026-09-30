@@ -100,6 +100,7 @@ export class Audio {
     if (name === 'chime') return this.chime();
     if (name === 'pop') return this.pop();
     if (name === 'whoosh') return this.whoosh();
+    if (name === 'flap') return this.flap(o.vol ?? 1, o.pan);
     if (name === 'shutter') return this.shutter();
   }
 
@@ -171,6 +172,11 @@ export class Audio {
     const ac = this.ac, len = Math.max(1, Math.floor(ac.sampleRate * dur)), buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
     const src = ac.createBufferSource(); src.buffer = buf; return src;
+  }
+  flap(vol = 1, pan = 0) { // a short hop: three soft wingbeats, quieter than a take-off whoosh
+    const t = this.ac.currentTime, out = this.ac.createStereoPanner ? this.ac.createStereoPanner() : this.ac.createGain();
+    if (out.pan) out.pan.value = Math.max(-.85, Math.min(.85, pan || 0)); out.connect(this.sfx);
+    for (let i = 0; i < 3; i++) { const src = this.noise(.07), f = this.ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900 + i * 120; f.Q.value = .8; src.connect(f); f.connect(this.env(.07, .05 * vol, out, t + i * .085, .01)); src.start(t + i * .085); }
   }
   whoosh() { const src = this.noise(.3), f = this.ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 700; src.connect(f); f.connect(this.env(.3, .12)); src.start(); }
   shutter() { const t = this.ac.currentTime; [0, .07].forEach((d) => { const src = this.noise(.05), f = this.ac.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2500; src.connect(f); f.connect(this.env(.05, .25, this.sfx, t + d, .003)); src.start(t + d); }); }

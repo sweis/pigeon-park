@@ -51,7 +51,8 @@ const shots = [];
   const { page, errors } = await boot(br, srv.url, 'nosave&seed=21&hour=15');
   await page.evaluate(() => { window.pp.freeze(); });
   // stage a bird in open plaza so the click target is unambiguous
-  const id = await page.evaluate(() => { const id = window.__game.sim.pigeons[0].id; window.pp.teleport(id, 2.2, .8); return id; });
+  // park every other bird in a row along the back edge, so the staged spots are unambiguous whatever the flock
+  const id = await page.evaluate(() => { const S = window.__game.sim, id = S.pigeons[0].id; S.pigeons.forEach((p, i) => { if (i) window.pp.teleport(p.id, -4.6 + i * .95, -2.9); }); window.pp.teleport(id, 2.2, .8); return id; });
   const p = await page.evaluate((id) => window.pp.screenOf(id), id);
   await page.mouse.click(p.x, p.y);
   let s = await state(page);

@@ -81,6 +81,19 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
   cache capped at 300; hot-path lookup tables hoisted; finder key split cached; shared `toScreen` result; bubble
   transforms written only when they change; Music/PLAYLISTS/FIND_COLORS no longer exported.
 
+## v0.8.2 — traffic jams
+- Problem: v0.8.1's hard collisions + "blocked walker stops where it is" piled the flock into one mass by the
+  fountain (captures/jam-before.png vs jam-after.png, full park after 2 sim-minutes).
+- Collisions are soft now: smaller capsule (back .3, front .17, r .11), 2 cm slop, a standing bird is nudged at
+  most 1 cm per pass, a moving bird takes 75% of the correction itself (it steers round instead of shoving).
+- Stuck = jostled without getting closer to its destination for ~1 s (walker) or squeezed ~2.5 s (standing):
+  first a fresh route; stuck again within 6 s → `Sim.hop()`: a short flutter (state 'hop', arc in `move()`,
+  flapping pose in the view, soft `flap` sound) to the emptiest of 8 random spots ≥ 1.2 m away.
+- Random destinations inside the fountain are re-rolled instead of projected onto the rim (that ring was
+  getting ~1 in 7 trips).
+- Numbers (full 44-bird park): walkers not moving over 1 s ≈ 2%, ~45 hops / 5 min, overlaps > 5 cm clear within
+  ~0.5 s. Tests assert those.
+
 ## Next
 - Try Clip on a real iPhone + Android (MP4 path, filming time); fall back to 720×1280 on phones if slow. Add a Cancel button to filming.
 - Listen to the new songs; tune levels/instruments by ear.
