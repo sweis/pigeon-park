@@ -69,6 +69,11 @@ class PigeonView {
       b.legL.rotation.z = b.legR.rotation.z = -1.1;
       b.body.rotation.z = .25;
       b.tail.rotation.z = -.2;
+    } else if (st === 'hop') { // a short flutter over the crowd: quick wingbeats, feet tucked, leaning into it
+      const f = Math.sin(t * 30 + this.seed);
+      b.wingL.rotation.x = .9 + f * .8; b.wingR.rotation.x = -(.9 + f * .8);
+      b.legL.rotation.z = b.legR.rotation.z = -.7;
+      b.body.rotation.z = -.12; b.tail.rotation.z = -.15;
     } else if (p.held || st === 'abducted') {
       const f = Math.sin(t * 13 + this.seed);
       b.wingL.rotation.x = .55 + f * .45; b.wingR.rotation.x = -(.55 + f * .45);

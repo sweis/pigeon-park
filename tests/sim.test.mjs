@@ -18,7 +18,7 @@ function run(seed, seconds) {
     s.step();
     for (const p of s.pigeons) {
       if (!Number.isFinite(p.x + p.z + p.y + p.dir)) nan++;
-      if (!p.flying && !p.held) {
+      if (!p.flying && !p.held && p.state !== 'hop') { // (a hop flutters over the fountain on purpose)
         if (Math.abs(p.x) > PARK.w / 2 + 1e-6 || Math.abs(p.z) > PARK.d / 2 + 1e-6) badPos++;
         if (fountainClearance(p).gap < -1e-6) { badPos++; worst = Math.min(worst, fountainClearance(p).gap); }
       }
@@ -87,34 +87,48 @@ for (const kind of Object.keys(HAPPENINGS)) {
   const some = run('some'), off = run('off');
   ok(some >= 3 && off === 0, `happenings happen on their own (10 min: ${some} at "some", ${off} at "off")`);
 }
-// birds don't pass through each other: body capsules may touch for a frame or two (a push resolves within
-// ~2 steps) but no pair stays overlapped. Gusts (everyone blown into a pile on purpose) are exempt.
+// birds don't pass through each other. Collisions are soft (a moving bird steers round, a still one is only
+// nudged, 2 cm of slop), so brief shallow contact is fine — but no pair stays more than 5 cm into each other
+// for over half a second. Gusts (everyone blown into a pile on purpose) and mid-air hops are exempt.
 {
   const measure = (seed, secs, setup) => {
     setSeed(seed); const S = new Sim(); S.initFlock(null); setup?.(S);
     const run = new Map(); let longest = 0, worst = 0;
     for (let i = 0; i < secs / FIXED_DT; i++) {
       S.step(); const seen = new Set(), C = S.court;
-      const L = S.pigeons.filter(p => !p.flying && !p.held && p.state !== 'abducted' && p.y < .3);
+      const L = S.pigeons.filter(p => !p.flying && !p.held && p.state !== 'abducted' && p.state !== 'hop' && p.y < .3);
       for (let a = 0; a < L.length; a++) for (let b = a + 1; b < L.length; b++) {
         const p = L[a], q = L[b];
         if (C && [C.a, C.b].includes(p.id) && [C.a, C.b].includes(q.id)) continue;
         if (p.state === 'blown' || q.state === 'blown') continue;
         const A = coreOf(p, S.t), B = coreOf(q, S.t), o = A.r + B.r - segGap(A, B).d;
         worst = Math.max(worst, o);
-        if (o > .03) { const k = p.id + ':' + q.id; seen.add(k); const n = (run.get(k) || 0) + 1; run.set(k, n); longest = Math.max(longest, n); }
+        if (o > .05) { const k = p.id + ':' + q.id; seen.add(k); const n = (run.get(k) || 0) + 1; run.set(k, n); longest = Math.max(longest, n); }
       }
       for (const k of run.keys()) if (!seen.has(k)) run.delete(k);
     }
-    return { longest, worst };
+    return { longest, worst, S };
   };
   for (const seed of [42, 7]) {
     const m = measure(seed, 600);
-    ok(m.longest <= 3, `seed ${seed}, 10 min: birds never stay inside each other (longest overlap ${m.longest} steps, worst single-frame ${(m.worst * 100).toFixed(1)} cm)`);
+    ok(m.longest <= 15, `seed ${seed}, 10 min: birds never stay inside each other (longest > 5 cm overlap ${m.longest} steps, worst single frame ${(m.worst * 100).toFixed(1)} cm)`);
   }
   for (const kind of ['bread', 'parliament', 'conga', 'staring', 'runway']) {
     const c = measure(5, 45, (S) => { for (let i = 0; i < 25; i++) S.spawn({ genome: M.founderGenome(), name: 'x', adult: true, quiet: true }); S.nextHappeningAt = Infinity; startHappening(S, kind); });
-    ok(c.longest <= 3, `${kind} crowd: no birds passing through each other (longest overlap ${c.longest} steps, worst ${(c.worst * 100).toFixed(1)} cm)`);
+    ok(c.longest <= 15, `${kind} crowd: no birds passing through each other (longest > 5 cm overlap ${c.longest} steps, worst ${(c.worst * 100).toFixed(1)} cm)`);
+  }
+  // a full park doesn't jam: stuck birds find a way out (reroute, then hop), and hops stay occasional
+  {
+    setSeed(42); const S = new Sim(); S.initFlock(null); S.whimsy = 'off'; S.nextHappeningAt = Infinity;
+    while (S.alive() < 44) S.spawn({ genome: M.founderGenome(), name: 'x', adult: true, quiet: true });
+    let hops = 0, stalled = 0, walkers = 0; const last = new Map();
+    for (let i = 0; i < 300 / FIXED_DT; i++) {
+      S.step();
+      for (const p of S.pigeons) { if (p.state === 'hop' && !p._h) { hops++; p._h = 1; } else if (p.state !== 'hop') p._h = 0; }
+      if (i % 30) continue;
+      for (const p of S.pigeons) if (p.state === 'walk' && !p.busy) { walkers++; const l = last.get(p.id); if (l && l[2] === 'walk' && Math.hypot(l[0] - p.x, l[1] - p.z) < .05) stalled++; last.set(p.id, [p.x, p.z, p.state]); } else last.set(p.id, [p.x, p.z, p.state]);
+    }
+    ok(stalled / walkers < .05 && hops > 0 && hops < 120, `full park, 5 min: walkers rarely stall (${(stalled / walkers * 100).toFixed(1)}% not moving over 1 s), stuck birds hop out (${hops} hops)`);
   }
 }
 // speech: big pools, and no line comes back until much of its pool has been used

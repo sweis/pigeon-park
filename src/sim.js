@@ -27,9 +27,13 @@ export function fountainClearance(p) {
   const qx = ax + ex * t, qz = az + ez * t, d = Math.hypot(qx - FOUNTAIN.x, qz - FOUNTAIN.z);
   return { gap: d - (FOUNTAIN.lip + BODY.half * k), qx, qz, d };
 }
-// Bird-to-bird collisions use the body's core (chest to most of the tail; beak tips may brush):
-// a capsule along the heading, scaled by breed size and chick age.
-const CORE = { back: .38, front: .2, r: .13 };
+// Bird-to-bird collisions use the body's core (chest to rump; beak and tail tips may brush):
+// a capsule along the heading, scaled by breed size and chick age. Pushes are soft: a small overlap is
+// allowed (SLOP), a bird standing still can only be nudged a little per pass (MAX_PUSH), and a moving bird
+// takes most of the correction itself (it walks around the crowd instead of shoving it along).
+const CORE = { back: .3, front: .17, r: .11 };
+const SLOP = .02, MAX_PUSH = .01, MOVER_SHARE = .75;
+const MOVING = new Set(['walk', 'moonwalk', 'roll', 'blown']);
 const byX = (a, b) => a.x - b.x;
 const chickK = (age) => age < 9 ? .58 : age < 18 ? .78 : 1; // same growth steps as the view
 export function coreOf(p, t, o = {}) {
@@ -176,7 +180,13 @@ export class Sim {
     p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2);
     return true;
   }
+  // A random open spot. Spots inside the fountain are re-rolled (not pushed onto the rim — that sent one
+  // trip in seven to the same thin ring and piled birds up around the basin).
   randomSpot() {
+    for (let k = 0; k < 6; k++) {
+      const x = (rand() - .5) * PARK.w, z = (rand() - .5) * PARK.d;
+      if (Math.hypot(x - FOUNTAIN.x, z - FOUNTAIN.z) > FOUNTAIN.lip + .5) return this.clampToPark(x, z);
+    }
     return this.clampToPark((rand() - .5) * PARK.w, (rand() - .5) * PARK.d);
   }
 
@@ -271,7 +281,7 @@ export class Sim {
     while (this.thinkAcc >= THINK_DT) {
       this.thinkAcc -= THINK_DT; this.think();
       for (const p of this.pigeons) if (!p.flying && !p.held) this.keepOut(p); // think() may have turned birds
-      this.separate(); // ...or placed / turned them into a neighbour
+      this.separate(false); // ...or placed / turned them into a neighbour
     }
   }
 
@@ -286,6 +296,12 @@ export class Sim {
         continue;
       }
       if (p.state === 'abducted') { p.y += ((p.ty || 0) - p.y) * Math.min(1, dt * 1.6); continue; } // beamed up (and back down)
+      if (p.state === 'hop' && p.hop) { // flutter along an arc to the landing spot
+        const H = p.hop, k = Math.min(1, (this.t - H.at) / H.dur);
+        p.x = H.x0 + (p.tx - H.x0) * k; p.z = H.z0 + (p.tz - H.z0) * k; p.y = Math.sin(k * Math.PI) * H.h;
+        if (k >= 1) { p.y = 0; p.hop = null; p.state = 'idle'; p.stateUntil = this.t + .6 + rand(); this.keepOut(p); }
+        continue;
+      }
       if (p.y > 0) p.y = Math.max(0, p.y - dt * 3);
       if (p.state === 'walk' || p.state === 'roll' || p.state === 'blown' || p.state === 'moonwalk') {
         const x0 = p.x, z0 = p.z;
@@ -305,16 +321,17 @@ export class Sim {
   }
 
   // Birds don't walk through each other: overlapping body capsules are pushed apart along the gap (half
-  // each), a couple of passes per step. A walker that stays blocked gives up and stands where it is.
-  separate() {
+  // by share, capped), a few passes per step.
+  // countStuck: once per sim step (the extra pass after a think tick doesn't count toward "stuck").
+  separate(countStuck = true) {
     const list = this._solid || (this._solid = []), cores = this._cores || (this._cores = []);
     list.length = 0;
     for (const p of this.pigeons) if (!p.flying && !p.held && p.state !== 'abducted' && p.y < .3) list.push(p);
     const n = list.length, C = this.court;
     // a few relaxation passes; the fountain and park edge are applied inside each pass so a bird pinned
-    // against the rim doesn't get shoved back into its neighbour afterwards (the neighbour moves instead)
+    // against the rim doesn't get shoved back into its neighbour afterwards (the neighbour moves instead).
     // Sweep along x: sorted by x, a pair further apart in x than the two largest reaches can't touch.
-    for (let pass = 0; pass < 6; pass++) {
+    for (let pass = 0; pass < 3; pass++) {
       list.sort(byX);
       let maxReach = 0;
       for (let i = 0; i < n; i++) { cores[i] = coreOf(list[i], this.t, cores[i]); maxReach = Math.max(maxReach, cores[i].reach); }
@@ -326,25 +343,57 @@ export class Sim {
           const B = cores[j], lim = A.reach + B.reach, dx = p.x - q.x, dz = p.z - q.z;
           if (dx * dx + dz * dz > lim * lim) continue;
           if (C && ((C.a === p.id && C.b === q.id) || (C.a === q.id && C.b === p.id))) continue; // a courting pair gets close on purpose
-          const g = segGap(A, B), over = A.r + B.r - g.d;
+          const g = segGap(A, B), over = A.r + B.r - SLOP - g.d;
           if (over <= 0) continue;
-          const h = over / 2 + 1e-4;
-          p.x += g.nx * h; p.z += g.nz * h; q.x -= g.nx * h; q.z -= g.nz * h;
+          // a moving bird takes most of the correction (it steers round); a bird standing still is only nudged
+          const mp = MOVING.has(p.state), mq = MOVING.has(q.state), sp = mp === mq ? .5 : mp ? MOVER_SHARE : 1 - MOVER_SHARE;
+          const hp = mp ? over * sp : Math.min(over * sp, MAX_PUSH), hq = mq ? over * (1 - sp) : Math.min(over * (1 - sp), MAX_PUSH);
+          p.x += g.nx * hp; p.z += g.nz * hp; q.x -= g.nx * hq; q.z -= g.nz * hq;
           p.bump = q.bump = true; moved = true;
         }
       }
       if (!moved) break;
       for (const p of list) if (p.bump) { p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2); this.keepOut(p); p.blockedNow = true; p.bump = false; }
     }
+    // Stuck → hop somewhere quieter: a walker jostled without getting any closer to where it's going for
+    // ~1 s (sliding round a neighbour is progress, not stuck), or a bird squeezed standing still for ~2.5 s.
+    if (!countStuck) { for (const p of list) p.blockedNow = false; return; }
     for (const p of list) {
-      if (!p.blockedNow) { p.blocked = 0; continue; }
+      const walking = p.state === 'walk', d = walking ? Math.hypot(p.tx - p.x, p.tz - p.z) : 0;
+      const progress = walking && p.prevD != null ? p.prevD - d : 0; p.prevD = walking ? d : null;
+      const jammed = p.blockedNow && (!walking || progress < p.v * FIXED_DT * this.speed * .25);
       p.blockedNow = false;
-      if (p.state === 'walk' && !p.courting && !p.busy && (p.blocked = (p.blocked || 0) + 1) > 20) { // ~0.7 s stuck: stop (and say so)
-        p.tx = p.x; p.tz = p.z; p.state = 'idle'; p.blocked = 0;
-        if (!p.emote && rand() < .35) { p.emote = { kind: 'say', text: M.say(M.BUMP_LINES, this.said) }; p.emoteUntil = this.t + 1.8; }
+      if (!jammed || p.courting || p.busy || p.visitor || p.state === 'sleep' || p.state === 'hop') { if (p.stuck) p.stuck = Math.max(0, p.stuck - 2); continue; }
+      p.stuck = (p.stuck || 0) + 1;
+      if (p.stuck > (walking ? 30 : 75)) {
+        p.stuck = 0; p.prevD = null;
+        // first try another way (a fresh destination, away from the blockage); jammed again soon after → hop
+        if (walking && !(this.t - (p.reroutedAt ?? -99) < 6)) { p.reroutedAt = this.t; const [tx, tz] = this.randomSpot(); this.walkTo(p, tx, tz, p.v); this.keepOut(p); } // (turning can swing a tail into the rim)
+        else this.hop(p);
       }
     }
   }
+
+  // A short flutter to the emptiest of a few random spots (a stuck bird's way out of a jam).
+  hop(p) {
+    let best = null, bestGap = -1;
+    for (let k = 0; k < 8; k++) {
+      const [x, z] = this.randomSpot(), dd = Math.hypot(x - p.x, z - p.z);
+      if (dd < 1.2) continue; // somewhere else, not next door
+      let gap = Infinity;
+      for (const q of this.pigeons) if (q !== p && !q.flying) gap = Math.min(gap, Math.hypot(q.x - x, q.z - z));
+      if (gap > bestGap) { bestGap = gap; best = [x, z]; }
+    }
+    if (!best) return;
+    const [tx, tz] = best, d = Math.hypot(tx - p.x, tz - p.z);
+    p.state = 'hop'; p.courting = false;
+    p.hop = { x0: p.x, z0: p.z, at: this.t, dur: .7 + d * .22, h: .35 + d * .1 };
+    p.tx = tx; p.tz = tz; p.dir = Math.atan2(tz - p.z, tx - p.x);
+    p.stateUntil = this.t + p.hop.dur + .5;
+    if (!p.emote && rand() < .4) { p.emote = { kind: 'say', text: M.say(M.BUMP_LINES, this.said) }; p.emoteUntil = this.t + 1.6; }
+    this.sound('flap', { id: p.id });
+  }
+
 
 
   think() {
@@ -360,7 +409,7 @@ export class Sim {
       if (p.flying || p.held) continue;
       if (p.emote && now > p.emoteUntil) p.emote = null;
       if (p.visitor && now > p.visitor.leaveAt && !p.busy) { this.fly(p, false); continue; }
-      if (p.courting || p.busy) continue;
+      if (p.courting || p.busy || p.state === 'hop') continue;
       if (now >= p.stateUntil) {
         const sleepy = this.night > .6, r = rand();
         p.stateAt = now;
@@ -391,7 +440,7 @@ export class Sim {
     }
     // courtship
     if (!this.court && pop >= 2 && pop < cap && rand() < (0.10 * (1 - pop / cap) + 0.02) * sp) {
-      const adults = this.pigeons.filter(p => this.adult(p) && !p.flying && !p.held && !p.busy && !p.visitor && p.state !== 'sleep');
+      const adults = this.pigeons.filter(p => this.adult(p) && !p.flying && !p.held && !p.busy && !p.visitor && p.state !== 'sleep' && p.state !== 'hop');
       if (adults.length >= 2) {
         const a = adults[Math.floor(rand() * adults.length)];
         let b = null, bd = 1e9;
