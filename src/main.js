@@ -148,9 +148,12 @@ class Game {
     }
     if (d) { this.sim.restore(d); this.savedUI = d.ui; }
     if (params.has('hour')) this.sim.setTimeOfDay(+params.get('hour'));
+    if (params.has('season')) this.sim.season = M.SEASONS[params.get('season')] ? params.get('season') : null; // ?season=halloween|christmas|easter|none
     this.sim.initFlock(d);
     this.sim.events.length = 0;
     if (this.migrated) setTimeout(() => this.ui.toast('Your prototype flock has moved into the new park.', 'note'), 600);
+    const season = M.SEASONS[this.sim.season];
+    if (season) setTimeout(() => this.ui.toast(`It's ${season.label} season in the park. ${season.blurb}`, 'note'), 1800);
   }
   save() {
     if (this.nosave || !this.sim.ready) return; // never write before the flock has loaded
@@ -516,7 +519,7 @@ async function composeCard(shot, { name, gen, pheno, studio }) {
   g.fillText(name, pad, W + cap * .38, W - pad * 2);
   g.font = `600 ${W * .027}px Figtree, sans-serif`; g.fillStyle = '#474238';
   g.fillText(`${pheno.label} · Generation ${gen}`, pad, W + cap * .6, W - pad * 2);
-  const breeds = M.matchBreeds(pheno).map(b => '★ ' + b.name).join('   ');
+  const breeds = M.matchBreeds(pheno, { gen, found: game.sim.breeds }).map(b => '★ ' + b.name).join('   ');
   const traits = pheno.traits.slice(0, 5).map(t => t.label).join(' · ');
   g.fillStyle = breeds ? '#c67139' : '#645c50'; g.font = `700 ${W * .024}px Figtree, sans-serif`;
   g.fillText(breeds || traits || 'A perfectly ordinary pigeon', pad, W + cap * .8, W - pad * 2);
@@ -561,6 +564,8 @@ function makeDebugApi(g) {
     setTimeOfDay(h) { S.setTimeOfDay(h); g.render(0); },
     setSeed(n) { setSeed(n); },
     setSpeed(v) { S.speed = v; },
+    setSeason(s) { S.season = M.SEASONS[s] ? s : null; return S.season; },
+    jacob() { S.stats.playTime = Math.max(S.stats.playTime, 20 * 60); g.render(0); return S.stats.jacob; },
     happen(kind) { const ok = startHappening(S, kind); g.render(0); return ok; },
     happenings: () => Object.keys(HAPPENINGS),
     achievements: () => ({ earned: Object.keys(S.achievements), built: [...g.monuments.built.keys()], total: ACHIEVEMENTS.length }),

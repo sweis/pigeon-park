@@ -173,11 +173,12 @@ function materialKind(pheno) {
 
 // Standing height in bird units (before size scaling): used to frame photos and portraits.
 const TALL_TOP = { lace: .16, horn: .13, hood: .06, shell: .05, rose: .05, double: .06, peak: .06 };
-const TALL_HAT = { tophat: .16, chefhat: .16, partyhat: .16, crown: .1, propeller: .1, cowboy: .08, blackhat: .1 };
+const TALL_HAT = { tophat: .16, chefhat: .16, partyhat: .16, crown: .1, propeller: .1, cowboy: .08, blackhat: .1, fancap: .05 };
+const TALL_OUTFIT = { punk: .07, christmas: .12, easter: .2, halloween: .06 }; // mohawk, Santa hat, bunny ears, pumpkin stem
 export function birdHeight(pheno) {
   const e = pheno.e;
   let h = .6 + headOffset(e).y + (e.legs === 'long' ? LEG_LIFT : 0);
-  h += Math.max(TALL_TOP[e.crest] || 0, e.mane === 'hood' ? .06 : 0, e.outfit === 'punk' ? .07 : 0, ...accList(pheno.accessory).map(a => TALL_HAT[a] || 0));
+  h += Math.max(TALL_TOP[e.crest] || 0, e.mane === 'hood' ? .06 : 0, TALL_OUTFIT[e.outfit] || 0, ...accList(pheno.accessory).map(a => TALL_HAT[a] || 0));
   if (e.tail === 'fantail') h = Math.max(h, .56);
   return h;
 }
@@ -615,6 +616,55 @@ const OUTFITS = {
     trim(b, bodyS) { for (let i = 0; i < 3; i++) b.ell('body', [.011, .006, .012], OC('#6b4a2a'), onSurface(bodyS, V(.95, .2 - i * .24, .06), .006, 0, 1), 8, 5); }, // toggles
   },
 };
+Object.assign(OUTFITS, {
+  christmas: { // Santa suit: red coat, white fur front and hem, black belt with a gold buckle, and the hat
+    body: (u) => (u.y < -.62 || (Math.abs(u.z) < .13 && u.x > .55)) ? OC('#fbf8f2') : (u.y > -.34 && u.y < -.2 && u.x > -.2) ? OC('#1e1c1c') : OC('#c4302b'),
+    wing: (u) => u.x < -.62 ? OC('#fbf8f2') : OC('#b82a26'),
+    trim(b, bodyS, headS, { hatted }) {
+      b.prim('body', new THREE.BoxGeometry(.034, .028, .012), OC('#e8b64c'), onSurface(bodyS, V(.94, -.28, 0), .006, 0, 1));
+      if (hatted) return;
+      const m = trs(V(H.x - .02, H.y + .07, 0), [0, 0, .55]);
+      b.prim('head', new THREE.ConeGeometry(.06, .15, 16), OC('#c4302b'), m.clone().multiply(trs(V(0, .06, 0))));
+      b.prim('head', new THREE.TorusGeometry(.058, .016, 8, 20), OC('#fbf8f2'), m.clone().multiply(trs(V(0, -.012, 0), [Math.PI / 2, 0, 0])));
+      b.ell('head', [.022, .022, .022], OC('#fbf8f2'), m.clone().multiply(trs(V(0, .14, 0))), 10, 8);
+    },
+  },
+  easter: { // bunny costume: pastel suit with painted eggs, long ears, a cotton tail
+    body: (u) => { const f = vnoise(u.clone().multiplyScalar(4.5), 77); return f > .8 ? OC('#f6b3c8') : f > .74 ? OC('#bfe6c6') : f < .14 ? OC('#ffe59a') : OC('#e7ddf6'); },
+    wing: () => OC('#ece4f8'),
+    trim(b, bodyS, headS, { hatted }) {
+      b.ell('tail', [.05, .05, .05], OC('#fffdf8'), trs(V(-.25, .3, 0)), 12, 8); // cotton tail
+      if (hatted) return;
+      for (const s of [-1, 1]) {
+        const base = V(H.x - .03, H.y + .06, .035 * s), dir = V(-.25, 1, .22 * s).normalize();
+        b.ell('head', [.024, .1, .012], OC('#fbf8f2'), alongY(base.clone().addScaledVector(dir, .1), dir), 12, 8);
+        b.ell('head', [.013, .075, .006], OC('#f4a9bf'), alongY(base.clone().addScaledVector(dir, .1).add(V(.006, 0, 0)), dir), 10, 6);
+      }
+    },
+  },
+  halloween: { // pumpkin costume: ribbed orange, a carved grin, a leafy stem
+    body: (u) => { const rib = .5 + .5 * Math.cos(Math.atan2(u.z, u.y) * 8); return mix(OC('#ec7d2a'), OC('#b9541a'), rib * .55); },
+    wing: (u) => u.x < -.55 ? OC('#b9541a') : OC('#de6f22'),
+    trim(b, bodyS, headS, { hatted }) {
+      const ink = OC('#2a1a10');
+      for (const s of [-1, 1]) b.prim('body', new THREE.ConeGeometry(.022, .03, 3), ink, onSurface(bodyS, V(.92, .3, .2 * s), .004, 0, 1, V(0, 1, 0)).multiply(new THREE.Matrix4().makeScale(1, 1, .25)));
+      for (let i = 0; i < 5; i++) b.prim('body', new THREE.ConeGeometry(.012, .018, 3), ink, onSurface(bodyS, V(.95, -.12 + (i % 2) * .04, (i - 2) * .085), .004, i % 2 ? Math.PI : 0, 1, V(0, 1, 0)).multiply(new THREE.Matrix4().makeScale(1, 1, .25)));
+      if (hatted) return;
+      b.prim('head', new THREE.CylinderGeometry(.012, .016, .05, 8), OC('#4f6b2a'), trs(V(H.x - .01, H.y + .1, 0), [0, 0, .25]));
+      b.ell('head', [.035, .006, .018], OC('#6d9a3a'), trs(V(H.x - .035, H.y + .105, .02), [.3, 0, .4]), 10, 6);
+    },
+  },
+  jersey: { // Jacob's superfan jersey: park orange, cream sleeves, a big number 1
+    body: (u) => (u.y > .55 && u.x > .2) ? OC('#f5ead8') : OC('#c67139'),
+    wing: (u) => u.x < -.55 ? OC('#c67139') : OC('#f5ead8'),
+    trim(b, bodyS) {
+      const cream = OC('#fbf6ec'), m = onSurface(bodyS, V(.95, -.05, 0), .006, 0, 1, V(0, 1, 0));
+      b.prim('body', new THREE.BoxGeometry(.016, .085, .01), cream, m.clone());
+      b.prim('body', new THREE.BoxGeometry(.012, .03, .01), cream, m.clone().multiply(trs(V(-.014, .03, 0), [0, 0, -.8])));
+      b.prim('body', new THREE.BoxGeometry(.04, .012, .01), cream, m.clone().multiply(trs(V(0, -.043, 0))));
+    },
+  },
+});
 function hibiscus(u, s) {
   const f = vnoise(u.clone().multiplyScalar(5.5).addScalar(s * 3.1), 40 + s);
   return f > .78 ? OC('#f07aa0') : f > .72 ? OC('#ffd34d') : f < .16 ? OC('#f6f3ea') : OC('#2a9ca2');
@@ -725,6 +775,13 @@ function accessory(b, acc, C, bodyS) {
         b.prim('body', new THREE.CylinderGeometry(.03, .03, .008, 18), g1, m.clone().multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)));
         b.prim('body', new THREE.TorusGeometry(.03, .004, 6, 18), g2, m.clone().multiply(trs(V(0, 0, .004))));
       }
+      break;
+    }
+    case 'fancap': { // a superfan's baseball cap: park orange crown, cream peak pointing forward, a button on top
+      const or = col('#c67139'), cream = col('#f5ead8');
+      b.blob('head', { ws: 16, hs: 10, color: or, matrix: trs(top.clone().add(V(-.005, -.022, 0))), deform: (u) => u.set(u.x * .088, Math.max(0, u.y) * .065, u.z * .084) });
+      b.blob('head', { ws: 14, hs: 6, color: cream, matrix: trs(top.clone().add(V(.085, -.018, 0)), [0, 0, -.12]), deform: (u) => u.set(u.x * .06, u.y * .008, u.z * .07 * (1 - .3 * Math.max(0, u.x))) });
+      b.ell('head', [.01, .006, .01], cream, trs(top.clone().add(V(-.005, .045, 0))), 8, 5);
       break;
     }
     case 'propeller': {

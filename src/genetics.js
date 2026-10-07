@@ -35,7 +35,8 @@ export const LOCI = [
   { id: 'voice',    alleles: ['coo', 'trumpet', 'laugher'] },
   // mutation-only quirks (added in v0.9; appended so older saves / encoded genomes still line up)
   { id: 'gait',     alleles: ['normal', 'speedy', 'sluggish', 'jumpy', 'strutter', 'twirly'], mutOnly: { speedy: 1, sluggish: 1, jumpy: 1, strutter: 1, twirly: 1 } },
-  { id: 'outfit',   alleles: ['none', 'suit', 'elvis', 'punk', 'tracksuit', 'hawaiian', 'raincoat'], mutOnly: { suit: 1, elvis: 1, punk: 1, tracksuit: 1, hawaiian: 1, raincoat: 1 } },
+  { id: 'outfit',   alleles: ['none', 'suit', 'elvis', 'punk', 'tracksuit', 'hawaiian', 'raincoat', 'christmas', 'easter', 'halloween', 'jersey'],
+    mutOnly: { suit: 1, elvis: 1, punk: 1, tracksuit: 1, hawaiian: 1, raincoat: 1, christmas: 1, easter: 1, halloween: 1, jersey: 1 }, never: { jersey: 1 } },
 ];
 
 // Wild-type expression for every locus (a plain blue-bar feral). Used to fill in genes that an
@@ -142,6 +143,8 @@ export const ALLELE_META = {
   'gait:strutter': { label: 'Strutter', tier: 2 }, 'gait:twirly': { label: 'Twirly', tier: 2 },
   'outfit:suit': { label: 'Business suit', tier: 3 }, 'outfit:elvis': { label: 'Rhinestone jumpsuit', tier: 3 }, 'outfit:punk': { label: 'Punk leathers', tier: 3 },
   'outfit:tracksuit': { label: 'Tracksuit', tier: 3 }, 'outfit:hawaiian': { label: 'Hawaiian shirt', tier: 3 }, 'outfit:raincoat': { label: 'Raincoat', tier: 3 },
+  'outfit:christmas': { label: 'Santa suit', tier: 3 }, 'outfit:easter': { label: 'Bunny costume', tier: 3 }, 'outfit:halloween': { label: 'Pumpkin costume', tier: 3 },
+  'outfit:jersey': { label: 'Superfan jersey', tier: 3 },
 };
 
 function pickWeighted(weights) {
@@ -158,13 +161,14 @@ export function founderGenome() {
 }
 
 // mutFactor: 0.5 calm / 1 normal / 3 chaos
-export function offspring(gA, gB, mutFactor = 1) {
+// season: 'christmas' | 'easter' | 'halloween' | null — that holiday's costume mutates in far more often.
+export function offspring(gA, gB, mutFactor = 1, season = null) {
   const g = {}, mutated = [];
   for (const l of LOCI) {
     const pair = [gA[l.id][rand() < .5 ? 0 : 1], gB[l.id][rand() < .5 ? 0 : 1]];
     if (rand() < 0.022 * mutFactor) {
       const w = {};
-      l.alleles.forEach((a, i) => { w[a] = (l.mutOnly && l.mutOnly[a]) ? 0.05 : (i === l.alleles.length - 1 || i === 0 ? 0.8 : 1); });
+      l.alleles.forEach((a, i) => { w[a] = l.never?.[a] ? 0 : (l.mutOnly && l.mutOnly[a]) ? (a === season ? 0.75 : 0.05) : (i === l.alleles.length - 1 || i === 0 ? 0.8 : 1); });
       const na = pickWeighted(w);
       const slot = rand() < .5 ? 0 : 1;
       if (pair[slot] !== na) { pair[slot] = na; mutated.push(l.id + ':' + na); }
@@ -172,6 +176,28 @@ export function offspring(gA, gB, mutFactor = 1) {
     g[l.id] = pair;
   }
   return { genome: g, mutated };
+}
+
+// ---------- seasons ----------
+// Holiday windows (real calendar): costumes for that holiday are much more likely then, still possible otherwise.
+export const SEASONS = {
+  halloween: { label: 'Halloween', blurb: 'Pumpkin costumes are hatching more often.' },
+  christmas: { label: 'Christmas', blurb: 'Santa suits are hatching more often.' },
+  easter: { label: 'Easter', blurb: 'Bunny costumes are hatching more often.' },
+};
+function easterSunday(y) { // anonymous Gregorian algorithm
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(y, month - 1, day);
+}
+export function seasonOf(date = new Date()) {
+  const m = date.getMonth(), d = date.getDate(), y = date.getFullYear();
+  if (m === 9 || (m === 10 && d <= 7)) return 'halloween';                  // October → first week of November
+  if (m === 11 || (m === 0 && d <= 6)) return 'christmas';                  // December → Twelfth Night
+  const e = easterSunday(y), days = (date - e) / 864e5;
+  if (days >= -21 && days <= 8) return 'easter';                             // three weeks before Easter → a week after
+  return null;
 }
 
 function expressedOf(genome) {
@@ -217,10 +243,14 @@ function derivePheno(e, accessory) {
   }
   for (const a of accList(accessory)) traits.push({ key: 'acc:' + a, label: ACCESSORIES[a].label, tier: 2 });
   const sparkTier = traits.reduce((m, t) => Math.max(m, t.tier), 0);
-  return { e, accessory: accessory || null, colorKey, label, patternVisible, traits, sparkTier };
+  const ph = { e, accessory: accessory || null, colorKey, label, patternVisible, traits, sparkTier };
+  ph.cryptids = cryptidCount(ph);
+  return ph;
 }
 
 export function computePheno(genome, accessory) { return derivePheno(expressedOf(genome), accessory); }
+// How many mutation-only ("cryptid") traits a bird shows at once — one per gene.
+export function cryptidCount(pheno) { let n = 0; for (const l of LOCI) if (l.mutOnly?.[pheno.e[l.id]]) n++; return n; }
 
 export function phenoKey(pheno) {
   return LOCI.map(l => pheno.e[l.id]).join('|') + '|' + (pheno.accessory || '-');
@@ -275,7 +305,9 @@ export const ACCESSORIES = {
   scarf: { label: 'Tiny scarf', w: 10, slot: 'neck' }, propeller: { label: 'Propeller cap', w: 5, slot: 'head' }, crown: { label: 'Crown', w: 3, slot: 'head' },
   partyhat: { label: 'Party hat', w: 8, slot: 'head' }, chefhat: { label: 'Chef hat', w: 6, slot: 'head' }, mustache: { label: 'Magnificent moustache', w: 7, slot: 'face' },
   blackhat: { label: 'Black fedora', w: 10, slot: 'head' }, goldchain: { label: 'Gold chain', w: 10, slot: 'neck' },
+  fancap: { label: 'Superfan cap', w: 0, slot: 'head' }, // Jacob's — never handed out at random
 };
+export const giftable = (a) => ACCESSORIES[a].w > 0;
 const SLOTS = ['head', 'face', 'neck'];
 export const accList = (acc) => acc ? acc.split('+').filter(a => ACCESSORIES[a]) : [];
 // Put `item` on: replaces whatever was in its slot, keeps the rest.
@@ -372,6 +404,18 @@ export const BREEDS = [
   { id: 'jogger', name: 'The Jogger', real: 0, fashion: 1, req: { outfit: 'tracksuit', gait: 'speedy' }, blurb: 'Training for a race nobody has scheduled. Personal best: the fountain, twice.' },
   { id: 'tourist', name: 'The Tourist', real: 0, fashion: 1, req: { outfit: 'hawaiian', accessory: 'sunglasses' }, blurb: 'On holiday. Permanently. Has four hundred photos of the same fountain.' },
   { id: 'fisherman', name: 'The Old Salt', real: 0, fashion: 1, req: { outfit: 'raincoat' }, blurb: 'Has never seen the sea. Dresses for it every day, just in case.' },
+  // seasonal costumes: far more likely around their holiday
+  { id: 'santa', name: 'Santa Claws', real: 0, seasonal: 'christmas', req: { outfit: 'christmas' }, blurb: 'Knows if you have been feeding the seagulls. Delivers crumbs down chimneys.' },
+  { id: 'bunny', name: 'The Easter Bunnigeon', real: 0, seasonal: 'easter', req: { outfit: 'easter' }, blurb: 'Hides eggs. Its own eggs. Then forgets where. Every year.' },
+  { id: 'pumpkin', name: "Jack-o'-Pigeon", real: 0, seasonal: 'halloween', req: { outfit: 'halloween' }, blurb: 'Carved by a very talented squirrel. Glows faintly. Says boo, means coo.' },
+  // the superfan: arrives once you have spent long enough in the park
+  { id: 'jacob', name: 'Jacob', real: 0, special: 1, req: { accessory: 'fancap' }, sample: { outfit: 'jersey' }, blurb: 'Pigeon Park Superfan #1.' },
+  // cryptid stacks
+  { id: 'anomaly', name: 'The Anomaly', real: 0, req: { cryptids: 6 }, sample: { fantasy: 'void', fpattern: 'stars', glow: 'glow', crest: 'horn', eye: 'googly', beak: 'duck' },
+    blurb: "Even among cryptids, it's an anomaly. Technically it shouldn't exist. Yet here it is." },
+  { id: 'omnipigeon', name: 'The Omnipigeon', real: 0, req: { cryptids: 9, gen: 10, after: 'anomaly' },
+    sample: { fantasy: 'rainbow', fpattern: 'hearts', glow: 'glow', crest: 'horn', eye: 'googly', beak: 'duck', neck: 'noodle', size: 'chonk', sheen: 'galaxy' },
+    blurb: 'Nine impossible traits, ten generations of devotion. Physics has filed a complaint.' },
   // quirky gaits
   { id: 'roadrunner', name: 'Roadrunner', real: 0, req: { gait: 'speedy', legs: 'long' }, blurb: 'Beep beep. (Coo coo.) Leaves a little dust cloud. Allegedly.' },
   { id: 'sloth', name: 'Sloth Pigeon', real: 0, req: { gait: 'sluggish' }, blurb: 'Will get there. Not today. Possibly not this week.' },
@@ -382,8 +426,12 @@ export const BREEDS = [
   { id: 'galaxylegend', name: 'THE GALAXY PIGEON', real: 0, legend: 1, req: { sheen: 'galaxy', fpattern: 'stars' }, blurb: 'Contains several billion stars and one (1) crumb. Summoned, never bred.' },
 ];
 
-export function matchBreeds(pheno) {
+// ctx (from the sim): { gen, found } — a bird's generation and the registry so far, for the breeds that need them.
+export function matchBreeds(pheno, ctx = null) {
   return BREEDS.filter(b => Object.entries(b.req).every(([k, v]) => {
+    if (k === 'cryptids') return pheno.cryptids >= v;
+    if (k === 'gen') return !ctx || ctx.gen >= v;
+    if (k === 'after') return !ctx || !!ctx.found?.[v];
     if (k === 'accessory') { const worn = accList(pheno.accessory); return (Array.isArray(v) ? v : [v]).some(want => want.split('+').every(a => worn.includes(a))); }
     const val = k === 'colorKey' ? pheno.colorKey : pheno.e[k];
     return Array.isArray(v) ? v.includes(val) : val === v;
@@ -406,7 +454,11 @@ const REQ_HINTS = {
   colorKey: { blueSd: 'an icy color (blue + spread + dilute, all at once)', blued: 'a silvery color (blue + dilute, no spread)', indigoS: 'a slate color (indigo + spread on a blue bird)',
     blueS: 'a black or icy color (blue + spread)', redd: 'a golden-yellow color (recessive red + dilute)', brown: 'a brown color' },
   accessory: { crown: 'be born wearing a very specific hat', partyhat: 'be born ready to party (hat included)', chefhat: 'hatch already employed in hospitality', mustache: 'grow a truly magnificent moustache',
-    'blackhat+goldchain': 'wear a black fedora and a gold chain at the same time', tophat: 'wear a top hat', sunglasses: 'wear sunglasses' },
+    'blackhat+goldchain': 'wear a black fedora and a gold chain at the same time', tophat: 'wear a top hat', sunglasses: 'wear sunglasses',
+    fancap: 'be the biggest fan the park has ever had (he turns up on his own, eventually)' },
+  cryptids: { 6: 'show 6 cryptid traits at once (any mix of mutation-only traits)', 9: 'show 9 cryptid traits at once' },
+  gen: { 10: 'be generation 10 or later' },
+  after: { anomaly: 'first, register The Anomaly' },
 };
 export function breedHint(b) {
   return Object.entries(b.req).map(([k, v]) => {
@@ -425,7 +477,7 @@ export function breedSample(b) {
     const val = Array.isArray(v) ? v[0] : v;
     if (k === 'colorKey') Object.assign(e, colorGenes(val));
     else if (k === 'accessory') accessory = val;
-    else e[k] = val;
+    else if (k in e) e[k] = val; // (cryptids / gen / after aren't genes: the sample sets the traits)
   }
   if (b.sample) for (const [k, v] of Object.entries(b.sample)) e[k] = v;
   return derivePheno(e, accessory);
@@ -518,6 +570,25 @@ export const PEDIA = {
   'outfit:tracksuit': 'Tracksuit. Three stripes, zero intention of exercising.',
   'outfit:hawaiian': 'Hawaiian shirt. Permanently on holiday, emotionally and sartorially.',
   'outfit:raincoat': 'Raincoat. Bright yellow and ready for weather that rarely comes.',
+  'outfit:christmas': 'Santa suit. Red, fluffy, festive. Turns up mostly in December, and insists on it.',
+  'outfit:easter': 'Bunny costume. Ears, cotton tail, pastel eggs. Hatches most around Easter.',
+  'outfit:halloween': 'Pumpkin costume. Carved grin, leafy stem. Haunts the park every October.',
+  'outfit:jersey': 'Superfan jersey. Number one. There is only one number one.',
+  'acc:tophat': 'Top hat. Inherited from a pigeon who inherited it from a magician.',
+  'acc:beret': 'Beret. Paints a little. Mostly sighs at the fountain.',
+  'acc:cowboy': 'Cowboy hat. This plaza ain\'t big enough for the both of us (it is quite big).',
+  'acc:monocle': 'Monocle. For reading the small print on breadcrumbs.',
+  'acc:sunglasses': 'Sunglasses. Too cool to make eye contact with the fountain.',
+  'acc:bowtie': 'Bow tie. Ready for a gala that was never announced.',
+  'acc:scarf': 'Tiny scarf. Hand-knitted by an anonymous admirer.',
+  'acc:propeller': 'Propeller cap. Spins. Does not help with flying. Has been tested.',
+  'acc:crown': 'Crown. Born royal. Expects to be addressed accordingly.',
+  'acc:partyhat': 'Party hat. Every day is someone\'s birthday, it reasons.',
+  'acc:chefhat': 'Chef hat. Hatched with strong opinions about crumb texture.',
+  'acc:mustache': 'Magnificent moustache. Twirls it while thinking. Thinks often.',
+  'acc:blackhat': 'Black fedora. Worn level, worn proud. Pairs well with gold.',
+  'acc:goldchain': 'Gold chain. Heavy. Shiny. Mostly confidence.',
+  'acc:fancap': 'Superfan cap. Only one pigeon wears this. You know who.',
   'voice:trumpet': 'Trumpeter voice. Jazz, unfortunately.',
   'fantasy:rainbow': 'Rainbow. Every colour, none of the restraint.',
   'fantasy:toast': 'Toasted. Crispy at the edges. Do not add butter.',

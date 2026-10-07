@@ -48,6 +48,7 @@ const ORIGIN = {
   golden: 'Hatched from the golden egg. Nobody laid it.',
   visitor: 'Visiting from out of town. Its family stayed home.',
   unknown: 'It arrived before the park kept family records.',
+  superfan: 'Pigeon Park Superfan #1. Has been coming every day since opening.',
 };
 function chip(tier) { return tier >= 3 ? 'chip-t3' : tier === 2 ? 'chip-t2' : 'chip-t1'; }
 function fmtAge(s) { if (s < 20) return 'freshly hatched'; if (s < 60) return 'a chick'; const m = Math.floor(s / 60); return m < 60 ? m + 'm in the park' : Math.floor(m / 60) + 'h in the park'; }
@@ -274,7 +275,7 @@ export class UI {
     } else {
       const ph = M.computePheno(r.genome, r.accessory);
       d = { img: P.get(ph), kicker: 'Roost resident', name: r.name, meta: 'Generation ' + r.gen + ' · kept bird', color: ph.label,
-        breeds: M.matchBreeds(ph), traits: ph.traits, carries: M.carriersOf(r.genome),
+        breeds: M.matchBreeds(ph, { gen: r.gen, found: S.breeds }), traits: ph.traits, carries: M.carriersOf(r.genome),
         actions: `<button class="btn primary" data-act="clone-out" data-arg="${ri}">${I.clone} Clone into park</button>
                   <button class="btn" data-act="release" data-arg="${ri}">Release to park</button>
                   <button class="btn ghost" data-act="let-go" data-arg="${ri}">Let go</button>`, photo: `data-act="photo-roost" data-arg="${ri}"`, lid: r.lid };
@@ -430,7 +431,7 @@ export class UI {
       if (!node) { cells.push(`<div class="ft-cell ${pos}" style="${area}"><div class="ft-node unknown"><span class="ft-q">?</span><span class="ft-txt"><b>Unknown</b><small>records lost</small></span></div></div>`); return; }
       const r = node.rec, w = S.whereIs(node.lid), alive = !!w, kids = node.par && node.par.length;
       const where = w ? (w.park != null ? 'in the park' : 'in the roost') : 'flown off';
-      const ph = M.computePheno(M.decodeGenome(r.g), r.a), breed = M.matchBreeds(ph)[0];
+      const ph = M.computePheno(M.decodeGenome(r.g), r.a), breed = M.matchBreeds(ph, { gen: r.ge, found: S.breeds })[0];
       cells.push(`<div class="ft-cell ${pos} ${kids ? 'kids' : ''}" style="${area}">
         <button class="ft-node ${d ? '' : 'self'} ${alive ? 'live' : ''}" ${alive && d ? `data-act="ft-go" data-arg="${node.lid}"` : ''} title="${esc(r.n)} — ${esc(ph.label)}${breed ? ' · ' + esc(breed.name) : ''}">
           <img src="${P.get(ph)}" alt=""><span class="ft-txt"><b>${esc(r.n)}</b><small>${breed ? '★ ' + esc(breed.name) + ' · ' : ''}gen ${r.ge} · ${where}</small></span></button></div>`);
@@ -467,12 +468,12 @@ export class UI {
   dlg_pedia() {
     const S = this.sim, keys = Object.keys(M.PEDIA);
     const items = keys.map(k => {
-      const meta = M.ALLELE_META[k] || { label: k, tier: 1 }, got = !!S.discovered[k];
-      return { k, got, tier: meta.tier, title: got ? meta.label : '???', note: got ? M.PEDIA[k] : 'Not yet observed in your park.' };
+      const acc = k.startsWith('acc:'), meta = M.ALLELE_META[k] || (acc ? { label: traitLabel(k), tier: 2 } : { label: k, tier: 1 }), got = !!S.discovered[k];
+      return { k, got, acc, tier: meta.tier, title: got ? meta.label : '???', note: got ? M.PEDIA[k] : acc ? 'An accessory not yet seen in your park.' : 'Not yet observed in your park.' };
     }).sort((a, b) => (b.got - a.got) || (a.tier - b.tier) || (a.title > b.title ? 1 : -1));
     const n = keys.filter(k => S.discovered[k]).length;
     return this.dlgHead('The Pigeonpedia', `<span class="chip chip-t1">${n} / ${keys.length} observed</span>`) +
-      `<div class="grid pedia">${items.map(i => `<div class="entry ${i.got ? '' : 'dim'}"><div class="entry-top"><b>${esc(i.title)}</b><span class="chip ${chip(i.tier)} tiny">${TIER_NAME[i.tier] || 'odd'}</span></div><div class="note">${esc(i.note)}</div>${i.got ? `<button class="btn small ghost find" data-act="find" data-arg="${esc(i.k)}">${I.search} Find in park</button>` : ''}</div>`).join('')}</div>
+      `<div class="grid pedia">${items.map(i => `<div class="entry ${i.got ? '' : 'dim'}"><div class="entry-top"><b>${esc(i.title)}</b><span class="chip ${i.acc ? 'chip-breed' : chip(i.tier)} tiny">${i.acc ? 'accessory' : TIER_NAME[i.tier] || 'odd'}</span></div><div class="note">${esc(i.note)}</div>${i.got ? `<button class="btn small ghost find" data-act="find" data-arg="${esc(i.k)}">${I.search} Find in park</button>` : ''}</div>`).join('')}</div>
        <div class="foot">Field notes are written the first time a trait hatches in your park. <b>Find in park</b> marks birds that show a trait in green and hidden carriers in yellow.</div>`;
   }
   // Trait groups a breed needs that the player hasn't observed yet (each group: any one allele counts).
@@ -493,7 +494,7 @@ export class UI {
     for (const [k, v] of Object.entries(b.req)) {
       const vals = Array.isArray(v) ? v : [v];
       if (k === 'colorKey') keys.push(...M.colorTraits(vals[0]));
-      else if (k === 'accessory') keys.push(...vals.map(x => 'acc:' + x));
+      else if (k === 'accessory') keys.push(...vals.flatMap(x => x.split('+')).map(x => 'acc:' + x)); // combos: one chip per item
       else keys.push(...vals.map(x => k + ':' + x).filter(key => M.ALLELE_META[key]));
     }
     return keys;
@@ -501,14 +502,15 @@ export class UI {
   dlg_breeds() {
     const S = this.sim, P = this.g.portraits;
     const list = M.BREEDS.map(b => ({ b, got: S.breeds[b.id] })).sort((x, y) => (!!y.got - !!x.got));
+    // (special breeds' recipes stay a surprise until they turn up)
     const n = Object.keys(S.breeds).length;
     return this.dlgHead('Breed Registry', `<span class="chip chip-breed">${n} / ${M.BREEDS.length} discovered</span>`) +
       `<div class="grid breeds">${list.map(({ b, got }) => { const missing = b.legend || got ? 0 : this.missingTraits(b).length, recipe = got || (!b.legend && !missing) ? this.recipeTraits(b) : []; return `
         <div class="entry breed">
           <img src="${P.get(M.breedSample(b))}" class="${got ? '' : 'silhouette'}" alt="">
           <b>${got ? esc(b.name) : '???'}</b>
-          <span class="chip tiny ${b.legend ? 'chip-breed' : b.real ? 'chip-t1' : b.fashion ? 'chip-t2' : 'chip-t3'}">${b.legend ? 'legendary' : b.real ? (b.exotic ? 'exotic' : 'real breed') : b.fashion ? 'fashion' : 'cryptid'}</span>
-          <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : missing ? `Recipe unknown — needs ${missing} trait${missing > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'}</div>
+          <span class="chip tiny ${b.legend || b.special ? 'chip-breed' : b.real ? 'chip-t1' : b.fashion || b.seasonal ? 'chip-t2' : 'chip-t3'}">${b.legend ? 'legendary' : b.special ? 'superfan' : b.real ? (b.exotic ? 'exotic' : 'real breed') : b.fashion ? 'fashion' : b.seasonal ? M.SEASONS[b.seasonal].label : 'cryptid'}</span>
+          <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : b.special ? 'Turns up on his own, if you spend long enough in the park.' : missing ? `Recipe unknown — needs ${missing} trait${missing > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'}${!got && b.seasonal ? ` Far more likely around ${M.SEASONS[b.seasonal].label}.` : ''}</div>
           ${recipe.length ? `<div class="chips recipe">${recipe.map(k => findChip(k, 'chip-t1', I.search + ' ' + esc(traitLabel(k)))).join('')}</div>` : ''}
           ${got ? `<div class="by">first bred by ${esc(got.by)}</div><button class="btn small" data-act="clone-breed" data-arg="${b.id}">${I.clone} Clone into park</button>` : ''}
         </div>`; }).join('')}</div>
@@ -534,6 +536,8 @@ export class UI {
           <li>Park speed goes from ${SPEEDS[0].label} to ${SPEEDS[SPEEDS.length - 1].label}. It's fine to just leave the park running.</li>
           <li>Hunting a breed? Tap a trait (in a bird's card, the Pigeonpedia or a registry recipe) to <b>find</b> it: birds that show it get a green marker, hidden carriers a yellow one. Clone those.</li>
           <li><b>Family</b> on a bird's card shows its parents, grandparents and great-grandparents.</li>
+          <li>Holiday costumes (Halloween, Christmas, Easter) hatch far more often around their holidays — but can turn up any time.</li>
+          <li>Accessories have field notes too: the Pigeonpedia shows which ones you've spotted.</li>
           <li>Tap <b>Photo</b> on any bird for a high-res picture card, or <b>Clip</b> for a 6-second vertical video (with captions and music) to post.</li>
           <li>Music and sound effects have separate buttons in the top bar and volume sliders in settings.</li>
           <li>Milestones build <b>monuments</b> on the lawn around the plaza. Tap one to see what it's for and how close you are to the rest.</li>

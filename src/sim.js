@@ -60,6 +60,8 @@ export function segGap(A, B) {
   return { d: 0, nx: cd > 1e-6 ? cx / cd : 1, nz: cd > 1e-6 ? cz / cd : 0 };
 }
 export const ROOST_SIZE = 8;
+const FESTIVE_HATCH = .03;           // in a holiday season, share of eggs that hatch already in that holiday's costume
+export const JACOB_AFTER = 20 * 60;  // seconds of play (wall clock, park running) before Jacob turns up
 export const TREE_DEPTH = 3;      // family records kept per bird: parents, grandparents, great-grandparents
 // Park layout outside the plaza, in rings: benches/lamps → open lawn → monument ring → hedges, bushes, trees.
 export const DOVECOTE = { x: 8.9, z: -6.5 };
@@ -133,7 +135,8 @@ export class Sim {
     // how: 'hatch'|'founder'|'clone'|'registry'|'summoned'|'golden'|'visitor'|'unknown', of: cloned bird's name }.
     // Lineage ids survive save/load (sim ids don't); records outside TREE_DEPTH of anyone alive are pruned.
     this.family = {}; this.lids = 1; this.pruneAt = 60;
-    this.stats = { births: 0, flown: 0, maxGen: 1, happenings: 0 };
+    this.stats = { births: 0, flown: 0, maxGen: 1, happenings: 0, playTime: 0, jacob: 0 };
+    this.season = M.seasonOf();          // the real calendar's holiday season (or null); ?season= overrides
     this.achievements = {};  // id → { at }
     this.court = null;
     this.selId = null;
@@ -206,7 +209,7 @@ export class Sim {
       dir: dir !== undefined ? dir : (rand() < .5 ? 0 : Math.PI),
       state: 'idle', stateUntil: this.t + .4 + rand() * 1.5, stateAt: this.t,
       emote: null, emoteUntil: 0, courting: false, flying: false, flyAt: 0, held: false,
-      breeds: M.matchBreeds(pheno),
+      breeds: M.matchBreeds(pheno, { gen, found: this.breeds }),
       lid: lid ?? this.lids++,
     };
     if (!this.family[p.lid]) this.family[p.lid] = { n: name, g: M.encodeGenome(genome), a: accessory, ge: gen, par, how, ...(of ? { of } : {}) };
@@ -242,6 +245,8 @@ export class Sim {
         const q = this.spawn({ genome: sp.g, accessory: sp.a, name: sp.n, gen: sp.ge || 1, adult: true, quiet: true, x: sp.x, z: sp.z, lid: sp.l, how: 'unknown' });
         if (sp.d != null) q.dir = sp.d;
       });
+      // accessories already in the park / roost count as observed (field notes for them were added in v0.9)
+      for (const a of [...this.pigeons, ...this.roost].flatMap(b => M.accList(b.accessory))) this.discovered['acc:' + a] = 1;
       return;
     }
     for (let i = 0; i < 7; i++) {
@@ -278,6 +283,7 @@ export class Sim {
   step() {
     const dt = FIXED_DT * this.speed;
     this.wall += FIXED_DT;
+    this.stats.playTime += FIXED_DT;
     this.t += dt;
     this.move(dt);
     this.thinkAcc += dt;
@@ -476,7 +482,8 @@ export class Sim {
           this.sound('coo', { voice: a.pheno.e.voice, vol: .8, id: a.id });
         }
         if (C.eggAt && now >= C.eggAt) {
-          const off = M.offspring(a.genome, b.genome, this.mutF());
+          const off = M.offspring(a.genome, b.genome, this.mutF(), this.season);
+          if (this.season && rand() < FESTIVE_HATCH) off.genome.outfit = [this.season, this.season]; // in season, some chicks hatch in costume
           this.eggs.push({ id: this.ids++, x: C.mx, z: C.mz + .12, genome: off.genome, gen: Math.max(a.gen, b.gen) + 1, laidAt: now, hatchAt: now + 6 + rand() * 3.5, parents: [a.lid, b.lid] });
           this.sound('pop');
           a.courting = b.courting = false; a.stateUntil = b.stateUntil = now; a.state = b.state = 'idle';
@@ -504,7 +511,7 @@ export class Sim {
     // fly-offs: gentle pressure as the park fills, forced when over capacity
     const n = this.pigeons.length, over = n > cap;
     if (n > 4 && (over ? rand() < .5 : rand() < 0.10 * Math.pow(n / cap, 3) * sp)) {
-      const cands = this.pigeons.filter(p => !p.flying && !p.held && !p.courting && !p.busy && !p.visitor && p.id !== this.selId && this.adult(p));
+      const cands = this.pigeons.filter(p => !p.flying && !p.held && !p.courting && !p.busy && !p.visitor && p.id !== this.selId && this.adult(p) && !p.accessory?.includes('fancap')); // superfans never leave
       if (cands.length) this.fly(cands[Math.floor(rand() * cands.length)], rand() < .5);
     }
     // poop (cosmetic)
@@ -517,12 +524,13 @@ export class Sim {
     }
     this.poops = this.poops.filter(pp => now - pp.at < 30);
     checkAchievements(this);
+    if (!this.stats.jacob && this.stats.playTime >= JACOB_AFTER && this.alive() < this.cap && !this.happening) this.jacobArrives();
     if (now >= this.pruneAt) { this.pruneFamily(); this.pruneAt = now + 60; } // also on save; this keeps ?nosave runs bounded
   }
 
   // Swap a bird's accessory (UFO gift): new phenotype, maybe new breeds; the view rebuilds on p.rev.
   setAccessory(p, acc) {
-    p.accessory = acc; p.pheno = M.computePheno(p.genome, acc); p.breeds = M.matchBreeds(p.pheno);
+    p.accessory = acc; p.pheno = M.computePheno(p.genome, acc); p.breeds = this.breedsOf(p);
     if (this.family[p.lid]) this.family[p.lid].a = acc;
     p.rev = (p.rev || 0) + 1;
     this.notice(p);
@@ -535,9 +543,23 @@ export class Sim {
     this.court = null;
   }
 
+  // Pigeon Park Superfan #1: turns up once, after a good while of play, and stays.
+  jacobArrives() {
+    this.stats.jacob = 1;
+    const { genome, accessory } = M.breedGenome(M.BREEDS.find(b => b.id === 'jacob'));
+    const p = this.spawn({ genome, accessory, name: 'Jacob', gen: this.stats.maxGen, adult: true, x: -PARK.w / 2 + .6, z: PARK.d / 2 - .6, dir: -.6, how: 'superfan' });
+    p.emote = { kind: 'say', text: 'GO PIGEON PARK!!' }; p.emoteUntil = this.t + 3.5;
+    this.sparkle(p.x, p.z, 3); this.sound('chime');
+    this.toast("Jacob has arrived. He's been here every day since opening. Pigeon Park Superfan #1!", 'breed');
+    return p;
+  }
+
+  // A bird's breeds: some depend on more than looks (the Omnipigeon needs generation 10 and The Anomaly first).
+  breedsOf(p) { return M.matchBreeds(p.pheno, { gen: p.gen, found: this.breeds }); }
+
   // Change a bird's genes in place (the goddess's mutations): new look, maybe new breeds, the view rebuilds.
   regene(p, genome) {
-    p.genome = M.normalizeGenome(genome); p.pheno = M.computePheno(p.genome, p.accessory); p.breeds = M.matchBreeds(p.pheno);
+    p.genome = M.normalizeGenome(genome); p.pheno = M.computePheno(p.genome, p.accessory); p.breeds = this.breedsOf(p);
     p.rev = (p.rev || 0) + 1;
     if (this.family[p.lid]) this.family[p.lid].g = M.encodeGenome(p.genome);
     this.notice(p);

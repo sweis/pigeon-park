@@ -10,7 +10,7 @@
 
 ## Layout
 - `src/sim.js` — flock simulation (pure, no DOM). Fixed step 1/30 s, 0.45 s "think" tick ported from the prototype, seeded RNG (`src/rng.js`). Emits events (toast/sound/sparkle/hatch…).
-- `src/genetics.js` — prototype genetics, extended: 30 loci, 73 breeds (incl. whimsical cryptids: horn, duck bill, googly eyes, noodle neck, chonk, rainbow/toast/zebra/sunset), 79 field notes, big saying pools (THOUGHTS, REPLIES, NIGHT/HELD/BABY/COURT lines). `WILD` + `normalizeGenome` keep old saves loading.
+- `src/genetics.js` — prototype genetics, extended: 32 loci, 93 breeds (incl. whimsical cryptids: horn, duck bill, googly eyes, noodle neck, chonk, rainbow/toast/zebra/sunset), 109 field notes (incl. accessories), big saying pools (THOUGHTS, REPLIES, NIGHT/HELD/BABY/COURT lines). `WILD` + `normalizeGenome` keep old saves loading.
 - `src/happenings.js` — 17 random park events (bread, visitor, golden egg, conga, gust, statue, parliament, crisis, dance, moonwalk, seagull, zoomies, staring contest, synchro, UFO, drizzle, runway). Seeded; cadence set by the Weirdness setting (Off/Some/Lots).
 - `src/pigeon3d.js` — procedural pigeon: one SkinnedMesh per bird (11 bones), geometry cached per phenotype + LOD (far = ~¼ tris).
 - `src/world.js` — plaza, fountain, props (merged static mesh), instanced paving/grass/flowers, sky, keyed day/night.
@@ -111,6 +111,26 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
   (accessory for a free slot, or a random mutation-only allele — usually expressed, sometimes only carried) with a
   golden beam, then ascends. `Sim.regene()` updates genes in place (view rebuilds, family record follows).
   Own song "Heavenly Coo" (choir "aah"s, harp, bells) with a harp-glissando sting. No new shader programs.
+
+## v0.9.1 — Jacob, seasons, anomalies, accessory field notes
+- **Jacob** (breed `jacob`, tag "superfan", "Pigeon Park Superfan #1."): `sim.stats.playTime` counts sim seconds
+  (saved). After `JACOB_AFTER` = 20 sim-minutes, once per save, `jacobArrives()` spawns him in a park-orange #1
+  jersey (outfit `jersey`, `never` rolled by mutation) and Superfan cap (`fancap`, accessory weight 0: no random
+  rolls, no goddess/UFO gifts). He never flies off. Debug: `pp.jacob()`.
+- **Seasons** from the real calendar (`M.seasonOf`): Halloween Oct 1–Nov 7, Christmas Dec 1–Jan 6, Easter from 21 days
+  before to 8 days after Easter Sunday. Override with `?season=halloween|christmas|easter|none` or `pp.setSeason`.
+  New outfits Santa suit / Easter bunny / pumpkin costume and breeds Santa Claws, The Easter Bunnigeon,
+  Jack-o'-Pigeon (registry tag = season name). In season: that outfit's mutation weight is 15× (0.75 vs 0.05),
+  3 % of hatchlings come out in it, and the goddess gives it 35 % of the time. Out of season still possible.
+  Season toast on load.
+- **The Anomaly** (`cryptids: 6`: 6 different mutation-only traits showing at once) and **The Omnipigeon**
+  (`cryptids: 9`, `gen: 10`, `after: 'anomaly'`). `M.matchBreeds(pheno, ctx)` takes `{gen, found}`; `sim.breedsOf(p)`.
+  `pheno.cryptids` counts expressed mutation-only alleles.
+- **Accessories in the Pigeonpedia** (`acc:<id>` keys, 15 entries, field note each). Seen on any bird → discovered;
+  older saves are caught up silently on load. Registry recipe chips split combos (Homey → Black fedora + Gold chain).
+- Verified: sim suite (season boost 355 vs 43 per 40k eggs; festive hatch rate; Jacob timing/once/saved; Anomaly and
+  Omnipigeon gating; accessory notes + catch-up) and the browser suites. Not verified: a real 20-minute session
+  for Jacob (forced via playTime), seasons on the actual dates other than today's (Halloween).
 
 ## Next
 - Try Clip on a real iPhone + Android (MP4 path, filming time); fall back to 720×1280 on phones if slow. Add a Cancel button to filming.

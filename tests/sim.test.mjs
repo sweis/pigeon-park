@@ -163,6 +163,40 @@ for (const kind of Object.keys(HAPPENINGS)) {
   const blessed = G.pigeons.filter(b => (b.rev || 0) > 0).length;
   ok(blessed >= 3 && !G.goddess && !G.happening && JSON.stringify(G.pigeons.map(b => [b.genome, b.accessory])) !== before, `the goddess blesses ${blessed} birds with mutations or finery, then ascends`);
 }
+// v0.9.1: seasons, Jacob, cryptid stacks, accessory field notes
+{
+  ok(M.seasonOf(new Date(2026, 9, 31)) === 'halloween' && M.seasonOf(new Date(2026, 11, 24)) === 'christmas' && M.seasonOf(new Date(2027, 2, 26)) === 'easter' && M.seasonOf(new Date(2026, 6, 4)) === null, 'holiday seasons follow the calendar (Easter moves with Easter Sunday)');
+  const carriers = (season) => { setSeed(4); let n = 0; for (let i = 0; i < 40000; i++) { const g = M.offspring(pureG({}), pureG({}), 1, season).genome; if (g.outfit.includes('halloween')) n++; } return n; };
+  const inSeason = carriers('halloween'), outSeason = carriers(null);
+  ok(inSeason > outSeason * 6 && outSeason > 0, `Halloween costumes mutate in far more often in season, still possible out of it (${inSeason} vs ${outSeason} in 40k eggs)`);
+  ok(!Array.from({ length: 20000 }, () => M.offspring(pureG({}), pureG({}), 3).genome.outfit).flat().includes('jersey'), "Jacob's jersey never turns up as a random mutation");
+  { setSeed(12); const F = new Sim(); F.initFlock(null); F.season = 'christmas'; F.whimsy = 'off'; F.nextHappeningAt = Infinity; let dressed = 0; const seen = new Set();
+    for (let i = 0; i < 1800 / FIXED_DT; i++) { F.step(); for (const b of F.pigeons) if (!seen.has(b.id)) { seen.add(b.id); if (b.pheno.e.outfit === 'christmas') dressed++; } }
+    ok(dressed > 0, `in Christmas season some chicks hatch in Santa suits (${dressed} of ${F.stats.births} births in 30 min)`); }
+  // Jacob: not before 20 minutes of play, then once
+  setSeed(3); const J = new Sim(); J.initFlock(null); J.whimsy = 'off'; J.nextHappeningAt = Infinity;
+  for (let i = 0; i < 19 * 60 / FIXED_DT; i++) J.step();
+  const early = J.pigeons.some(b => b.name === 'Jacob');
+  for (let i = 0; i < 3 * 60 / FIXED_DT; i++) J.step();
+  const jacobs = J.pigeons.filter(b => b.name === 'Jacob');
+  ok(!early && jacobs.length === 1 && J.breeds.jacob && jacobs[0].pheno.e.outfit === 'jersey', `Jacob (Pigeon Park Superfan #1) arrives once, after ${Math.round(J.stats.playTime / 60)} min of play, and registers`);
+  const saved = JSON.parse(JSON.stringify(J.serialize())), J2 = new Sim(); J2.restore(saved); J2.initFlock(saved);
+  for (let i = 0; i < 60 / FIXED_DT; i++) J2.step();
+  ok(J2.pigeons.filter(b => b.name === 'Jacob').length === 1 && J2.stats.playTime > J.stats.playTime, 'play time is saved and Jacob comes only once');
+  // cryptid stacks: The Anomaly at 6 cryptid traits; the Omnipigeon at 9, generation 10+, Anomaly first
+  const six = pureG({ fantasy: 'void', fpattern: 'stars', glow: 'glow', crest: 'horn', eye: 'googly', beak: 'duck' });
+  const nine = { ...six, ...pureG({ fantasy: 'void', fpattern: 'stars', glow: 'glow', crest: 'horn', eye: 'googly', beak: 'duck', neck: 'noodle', size: 'chonk', sheen: 'galaxy' }) };
+  setSeed(5); const C = new Sim(); C.initFlock(null);
+  const a6 = C.spawn({ genome: six, name: 'a', gen: 4, adult: true }), n9early = C.spawn({ genome: structuredClone(nine), name: 'b', gen: 4, adult: true });
+  ok(a6.pheno.cryptids === 6 && a6.breeds.some(b => b.id === 'anomaly') && !n9early.breeds.some(b => b.id === 'omnipigeon'), 'six cryptid traits make The Anomaly; nine at generation 4 are not yet the Omnipigeon');
+  const n9 = C.spawn({ genome: structuredClone(nine), name: 'c', gen: 10, adult: true });
+  ok(n9.breeds.some(b => b.id === 'omnipigeon') && C.breeds.omnipigeon, 'nine cryptid traits at generation 10, after The Anomaly → The Omnipigeon');
+  // accessories are field notes, and loading a save catches up on ones already present
+  const hat = C.spawn({ genome: pureG({}), accessory: 'blackhat', name: 'h', adult: true });
+  ok(C.discovered['acc:blackhat'] && Object.keys(M.ACCESSORIES).every(a => M.PEDIA['acc:' + a]), 'every accessory has a field note, unlocked when first seen');
+  const old = JSON.parse(JSON.stringify(C.serialize())); old.disc = {}; const C2 = new Sim(); C2.restore(old); C2.initFlock(old);
+  ok(C2.discovered['acc:blackhat'] && !Object.keys(C2.discovered).some(k => !k.startsWith('acc:')), 'an older save quietly notes the accessories already in the park');
+}
 // speech: big pools, and no line comes back until much of its pool has been used
 {
   setSeed(11); const S = new Sim(); S.initFlock(null);

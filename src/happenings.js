@@ -301,7 +301,7 @@ Object.assign(HAPPENINGS, {
       U.y = Math.max(3.2, 9 - k * 3); U.x += (p.x - U.x) * .3; U.z += (p.z - U.z) * .3;
       U.beam = k > 2 && k < 11 ? 1 : 0;
       p.state = 'abducted';
-      if (k < 2) p.ty = 0; else if (k < 6) p.ty = 2.6; else if (k < 7.5) { p.ty = 2.6; if (!h.hat) { h.hat = pick(Object.keys(M.ACCESSORIES).filter(a => !M.accList(p.accessory).includes(a))); S.setAccessory(p, M.withAccessory(p.accessory, h.hat)); } } else p.ty = 0;
+      if (k < 2) p.ty = 0; else if (k < 6) p.ty = 2.6; else if (k < 7.5) { p.ty = 2.6; if (!h.hat) { h.hat = pick(Object.keys(M.ACCESSORIES).filter(a => M.giftable(a) && !M.accList(p.accessory).includes(a))); S.setAccessory(p, M.withAccessory(p.accessory, h.hat)); } } else p.ty = 0;
       if (k > 3 && k < 4) say(S, p, pick(['take me to your breadder', 'wheeeee', 'hello?']), 1.5);
       return now < h.until;
     },
@@ -358,8 +358,12 @@ function bless(S, p) {
     S.setAccessory(p, M.withAccessory(p.accessory, item));
     return `${M.ACCESSORIES[item].label.toLowerCase()}`;
   }
+  if (S.season && !p.genome.outfit.includes(S.season) && rand() < .35) { // in season she favours the holiday costume
+    S.regene(p, { ...structuredClone(p.genome), outfit: [S.season, S.season] });
+    return M.ALLELE_META['outfit:' + S.season].label.toLowerCase();
+  }
   const pool = [];
-  for (const l of M.LOCI) for (const a of Object.keys(l.mutOnly || {})) if (!p.genome[l.id].includes(a)) pool.push([l.id, a]);
+  for (const l of M.LOCI) for (const a of Object.keys(l.mutOnly || {})) if (!p.genome[l.id].includes(a) && !l.never?.[a]) pool.push([l.id, a]);
   if (!pool.length) return null;
   const [loc, al] = pick(pool), g = structuredClone(p.genome), shown = rand() < .7;
   g[loc] = shown ? [al, al] : [g[loc][0], al];
