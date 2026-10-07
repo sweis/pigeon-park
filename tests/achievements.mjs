@@ -23,7 +23,7 @@ await shot(page, 'ach-pane.png');
 await page.keyboard.press('Escape');
 // everything at once: all monuments on the lawn
 await page.evaluate(() => window.pp.win({ all: true }));
-await page.waitForTimeout(2500);
+await poll(page, () => { const a = window.pp.achievements(); return a.built.length === a.total; }, null, 30000); // next think tick
 a = await page.evaluate(() => window.pp.achievements());
 check(a.built.length === a.total, `all ${a.total} monuments built`);
 await page.evaluate(() => { window.pp.freeze(); window.pp.cam('overview'); }); await frames(page, 3);
