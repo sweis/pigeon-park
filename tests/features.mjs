@@ -111,9 +111,45 @@ const { srv, br } = await setup();
   check(r.toastBottom <= r.insTop, `phone: toast sits above the bird card (toast bottom ${r.toastBottom} ≤ card top ${r.insTop})`);
   await shot(page, 'feat-phone-toast.png');
   await page.evaluate(() => window.pp.select(null)); await page.evaluate(() => { window.__game.ui.introDone = true; window.__game.ui.refreshT = 0; }); await frames(page, 3);
-  const b = await page.evaluate(() => document.getElementById('toasts').style.bottom);
-  check(b === '', `toasts drop back to their usual spot when the card closes (${b || 'default'})`);
+  await page.evaluate(() => window.__game.ui.toast('Another toast, card closed.')); await page.waitForTimeout(500);
+  // (the toast column itself: a toast still sliding in is drawn a few px lower for a moment)
+  const g = await page.evaluate(() => { const t = document.getElementById('toasts').getBoundingClientRect(), r = document.getElementById('roost').getBoundingClientRect(); return { t: Math.round(t.bottom), r: Math.round(r.top) }; });
+  check(g.t <= g.r && g.r - g.t < 40, `with the card closed, toasts sit just above the roost bar (toast bottom ${g.t}, roost top ${g.r})`);
   checkNoErrors(errors, '(phone toasts)');
+  await ctx.close();
+}
+
+// ---------- roost bar + toasts at desktop widths, full roost ----------
+{
+  const { page, errors, ctx } = await boot(br, srv.url, 'nosave&seed=3&hour=16');
+  for (const w of [1440, 1280, 1024, 900]) {
+    await page.setViewportSize({ width: w, height: 800 });
+    const r = await page.evaluate(() => {
+      const S = window.__game.sim; while (S.roost.length < 8 && S.pigeons.length) S.roostAdd(S.pigeons[0].id);
+      window.__game.ui.toast('A remarkable hatch: Grizzled Almond.', 'note'); window.pp.render();
+      return new Promise(res => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const rb = document.getElementById('roost').getBoundingClientRect(), t = document.getElementById('toasts').getBoundingClientRect();
+        res({ h: Math.round(rb.height), top: Math.round(rb.top), toast: Math.round(t.bottom), hint: getComputedStyle(document.querySelector('.roost-hint')).display, hintW: Math.round(document.querySelector('.roost-hint').getBoundingClientRect().width) });
+      })));
+    });
+    check(r.h <= 70 && r.toast <= r.top && (r.hint === 'none' || r.hintW >= 140), `${w} px: full roost bar is one slim row (${r.h} px, hint ${r.hint === 'none' ? 'hidden' : r.hintW + ' px'}), toasts above it`);
+  }
+  await shot(page, 'feat-roost-desktop.png');
+  checkNoErrors(errors, '(roost bar)');
+  await ctx.close();
+}
+
+// ---------- Pigeonpedia sections ----------
+{
+  const { page, errors, ctx } = await boot(br, srv.url, 'nosave&seed=3&hour=16');
+  await page.evaluate(() => { window.pp.spawn({ gait: 'jumpy' }); window.pp.spawn({ voice: 'trumpet' }); window.pp.render(); });
+  await clickSel(page, '#b-pedia');
+  await clickSel(page, '.pedia-tabs [data-arg="behaviour"]');
+  const r = await page.evaluate(() => ({ tab: document.querySelector('.pedia-tabs .on').textContent, n: document.querySelectorAll('.grid.pedia .entry').length,
+    got: [...document.querySelectorAll('.grid.pedia .entry:not(.dim) b')].map(b => b.textContent) }));
+  check(/Behaviour 2\/9/.test(r.tab) && r.n === 9 && r.got.includes('Jumpy') && r.got.includes('Trumpeter voice'), `Pigeonpedia Behaviour tab lists the 9 behaviours, 2 seen (${r.tab}: ${r.got.join(', ')})`);
+  await shot(page, 'feat-pedia-behaviour.png');
+  checkNoErrors(errors, '(pedia)');
   await ctx.close();
 }
 
