@@ -6,6 +6,7 @@ import * as M from './genetics.js';
 const nBreeds = (S) => Object.keys(S.breeds).length;
 const found = (S, pred) => M.BREEDS.some(b => S.breeds[b.id] && pred(b));
 const count = (n, get) => ({ test: (S) => get(S) >= n, progress: (S) => [Math.min(n, get(S)), n] });
+const has = (pred) => count(1, (S) => found(S, pred) ? 1 : 0); // found at least one breed like this
 
 export const ACHIEVEMENTS = [
   { id: 'firstbreed', name: 'First Registration', monument: 'statue', how: 'Discover your first breed.',
@@ -22,13 +23,13 @@ export const ACHIEVEMENTS = [
     blurb: 'The Golden Crumb. Only one exists. It is enormous. It is yours.', ...count(M.BREEDS.length, nBreeds) },
   { id: 'cryptid', name: 'Cryptozoologist', monument: 'runestone', how: 'Discover your first cryptid.',
     blurb: 'A standing stone that hums at night. Nobody installed it. It was simply there one morning.',
-    test: (S) => found(S, b => !b.real && !b.legend), progress: (S) => [found(S, b => !b.real && !b.legend) ? 1 : 0, 1] },
+    ...has(b => !b.real && !b.legend) },
   { id: 'legend', name: 'Summoner', monument: 'monolith', how: 'Bring a legendary pigeon into the park.',
     blurb: 'A black monolith full of stars. The pigeons gather at it and coo in a slightly different key.',
-    test: (S) => found(S, b => b.legend), progress: (S) => [found(S, b => b.legend) ? 1 : 0, 1] },
+    ...has(b => b.legend) },
   { id: 'exotic', name: 'Globetrotter', monument: 'globe', how: 'Discover an exotic breed.',
     blurb: 'A globe with a pigeon on top, pointing (with its whole body) at somewhere very far away.',
-    test: (S) => found(S, b => b.exotic), progress: (S) => [found(S, b => b.exotic) ? 1 : 0, 1] },
+    ...has(b => b.exotic) },
   { id: 'naturalist', name: 'Field Naturalist', monument: 'books', how: 'Fill in half of the Pigeonpedia.',
     blurb: 'A stack of field guides in bronze. The top one is open to a page that just says “coo”.',
     ...count(Math.ceil(Object.keys(M.PEDIA).length / 2), (S) => Object.keys(S.discovered).length) },
@@ -37,7 +38,7 @@ export const ACHIEVEMENTS = [
   { id: 'hatchery', name: 'The Hatchery', monument: 'egg', how: 'Hatch 100 chicks.',
     blurb: 'A giant marble egg in a bronze nest. Everyone is waiting for it to hatch. It will not.', ...count(100, (S) => S.stats.births) },
   { id: 'fullroost', name: 'Full House', monument: 'minicote', how: 'Fill every perch in the Roost.',
-    blurb: 'A tiny dovecote for tiny dignitaries. Mostly used by the Crouton.', ...count(8, (S) => S.roost.length) },
+    blurb: 'A tiny dovecote for tiny dignitaries. Mostly used by the Crouton.', ...count(8, (S) => S.roost.length) }, // 8 = ROOST_SIZE (sim.js imports this module)
   { id: 'weird', name: 'Weirdness Witness', monument: 'spiral', how: 'Witness 10 weird happenings.',
     blurb: 'A rainbow sculpture of no particular shape. The council calls it “art”. The pigeons call it “a perch”.',
     ...count(10, (S) => S.stats.happenings || 0) },
@@ -50,20 +51,26 @@ export const MONUMENT_SLOTS = [
   [8.5, 3.0], [-8.5, -3.2], [8.5, -3.2], [-5.6, -6.8], [5.6, -6.8], [-8.0, 6.0], [8.0, 6.0],
 ];
 
+// Everything the tests above read; nothing new can be earned while it stays the same (checked every think).
+const progressSig = (S) => `${Object.keys(S.breeds).length}|${Object.keys(S.discovered).length}|${S.stats.maxGen}|${S.stats.births}|${S.roost.length}|${S.stats.happenings}`;
+const lastSig = new WeakMap(); // per achievements record (a reset or load starts a new one)
+
 // Earn anything newly satisfied. quiet: award silently (e.g. catching up an older save), returns new ids.
 export function checkAchievements(S, quiet = false) {
-  const got = [];
-  for (const a of ACHIEVEMENTS) {
-    if (S.achievements[a.id] || !a.test(S)) continue;
+  const got = [], sig = progressSig(S);
+  if (lastSig.get(S.achievements) === sig) return got;
+  lastSig.set(S.achievements, sig);
+  ACHIEVEMENTS.forEach((a, i) => {
+    if (S.achievements[a.id] || !a.test(S)) return;
     S.achievements[a.id] = { at: Date.now() };
     got.push(a.id);
     if (!quiet) {
-      const i = ACHIEVEMENTS.indexOf(a), [x, z] = MONUMENT_SLOTS[i];
+      const [x, z] = MONUMENT_SLOTS[i];
       S.toast(`🏆 ${a.name} — a monument has appeared at the edge of the park.`, 'breed');
       S.sound('chime'); S.sparkle(x, z, 3);
       S.emit({ type: 'achievement', id: a.id });
     }
-  }
+  });
   if (quiet && got.length) S.toast(`${got.length} monument${got.length > 1 ? 's were' : ' was'} built in your honour while you were away.`, 'note');
   return got;
 }

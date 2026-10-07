@@ -3,8 +3,8 @@
 // scripted runs (seeded RNG + fixed dt) replay identically.
 
 import * as M from './genetics.js';
-import { rand } from './rng.js';
-import { tickHappenings } from './happenings.js';
+import { rand, isSeeded } from './rng.js';
+import { tickHappenings, optionOf } from './happenings.js';
 import { checkAchievements } from './achievements.js';
 
 export const FIXED_DT = 1 / 30;          // physics step, sim seconds
@@ -17,15 +17,17 @@ const BODY = { back: .5, front: .31, half: .15 };
 const BODY_SIZE = { king: 1.42, dinky: .68, chonk: 1.25 };
 function bodyScale(p) { return (BODY_SIZE[p.pheno.e.size] || 1) * (p.jit || 1); }
 // Distance from the fountain centre to the nearest point of the bird's body segment, minus what it needs.
-// >= 0 means the bird is clear of the rim.
-export function fountainClearance(p) {
+// >= 0 means the bird is clear of the rim. Fills `o` (a scratch object by default: per-step callers allocate nothing).
+const _fc = {};
+export function fountainClearance(p, o = _fc) {
   const k = bodyScale(p), cx = Math.cos(p.dir), cz = Math.sin(p.dir);
   const ax = p.x - cx * BODY.back * k, az = p.z - cz * BODY.back * k;
   const bx = p.x + cx * BODY.front * k, bz = p.z + cz * BODY.front * k;
   const ex = bx - ax, ez = bz - az;
   const t = Math.max(0, Math.min(1, ((FOUNTAIN.x - ax) * ex + (FOUNTAIN.z - az) * ez) / (ex * ex + ez * ez)));
   const qx = ax + ex * t, qz = az + ez * t, d = Math.hypot(qx - FOUNTAIN.x, qz - FOUNTAIN.z);
-  return { gap: d - (FOUNTAIN.lip + BODY.half * k), qx, qz, d };
+  o.gap = d - (FOUNTAIN.lip + BODY.half * k); o.qx = qx; o.qz = qz; o.d = d;
+  return o;
 }
 // Bird-to-bird collisions use the body's core (chest to rump; beak and tail tips may brush):
 // a capsule along the heading, scaled by breed size and chick age. Pushes are soft: a small overlap is
@@ -34,31 +36,37 @@ export function fountainClearance(p) {
 const CORE = { back: .3, front: .17, r: .11 };
 const SLOP = .02, MAX_PUSH = .01, MOVER_SHARE = .75;
 const MOVING = new Set(['walk', 'moonwalk', 'roll', 'blown']);
+// Quirky gaits (mutation): walking speed and how long a bird lingers between decisions.
+const GAIT_SPEED = { speedy: 1.55, sluggish: .6, strutter: .85 };
+const GAIT_PAUSE = { speedy: .6, sluggish: 1.7 };
 const byX = (a, b) => a.x - b.x;
-const chickK = (age) => age < 9 ? .58 : age < 18 ? .78 : 1; // same growth steps as the view
+export const chickK = (age) => age < 9 ? .58 : age < 18 ? .78 : 1; // chick growth steps (the view draws the same sizes)
 export function coreOf(p, t, o = {}) {
   const k = bodyScale(p) * chickK(t - p.born), cx = Math.cos(p.dir), cz = Math.sin(p.dir);
   o.ax = p.x - cx * CORE.back * k; o.az = p.z - cz * CORE.back * k; o.bx = p.x + cx * CORE.front * k; o.bz = p.z + cz * CORE.front * k;
   o.r = CORE.r * k; o.reach = (CORE.back + CORE.r) * k;
   return o;
 }
-// Closest points between segments a0→a1 and b0→b1 (2D). Returns { d, nx, nz } with n pointing from b to a
-// (for crossing segments, d = 0 and n points from b's middle to a's).
-export function segGap(A, B) {
+// Closest points between segments a0→a1 and b0→b1 (2D). Fills and returns { d, nx, nz } with n pointing from b
+// to a (for crossing segments, d = 0 and n points from b's middle to a's; birds in exactly the same spot: +x).
+export function segGap(A, B, o = {}) {
   const ux = A.bx - A.ax, uz = A.bz - A.az, vx = B.bx - B.ax, vz = B.bz - B.az, wx = A.ax - B.ax, wz = A.az - B.az;
   const a = ux * ux + uz * uz, b = ux * vx + uz * vz, c = vx * vx + vz * vz, d = ux * wx + uz * wz, e = vx * wx + vz * wz;
   const D = a * c - b * b;
   let sN = D < 1e-9 ? 0 : clamp((b * e - c * d) / D, 0, 1), tN = c < 1e-9 ? 0 : (b * sN + e) / c;
   if (tN < 0) { tN = 0; sN = a < 1e-9 ? 0 : clamp(-d / a, 0, 1); } else if (tN > 1) { tN = 1; sN = a < 1e-9 ? 0 : clamp((b - d) / a, 0, 1); }
   const px = A.ax + ux * sN - (B.ax + vx * tN), pz = A.az + uz * sN - (B.az + vz * tN), dist = Math.hypot(px, pz);
-  if (dist > 1e-6) return { d: dist, nx: px / dist, nz: pz / dist };
+  if (dist > 1e-6) { o.d = dist; o.nx = px / dist; o.nz = pz / dist; return o; }
   // the body lines cross: separate along the centre-to-centre direction (midpoints), never an arbitrary axis
-  const cx = (A.ax + A.bx - B.ax - B.bx) / 2, cz = (A.az + A.bz - B.az - B.bz) / 2, cd = Math.hypot(cx, cz) || 1;
-  return { d: 0, nx: cd > 1e-6 ? cx / cd : 1, nz: cd > 1e-6 ? cz / cd : 0 };
+  const cx = (A.ax + A.bx - B.ax - B.bx) / 2, cz = (A.az + A.bz - B.az - B.bz) / 2, cd = Math.hypot(cx, cz);
+  o.d = 0; o.nx = cd > 1e-6 ? cx / cd : 1; o.nz = cd > 1e-6 ? cz / cd : 0;
+  return o;
 }
 export const ROOST_SIZE = 8;
+const FESTIVE_HATCH = .03;           // in a holiday season, share of eggs that hatch already in that holiday's costume
+export const JACOB_AFTER = 20 * 60;  // seconds of play (wall clock, park running) before Jacob turns up
 export const TREE_DEPTH = 3;      // family records kept per bird: parents, grandparents, great-grandparents
-// Park layout outside the plaza, in rings: benches/lamps → open lawn → monument ring → hedges, bushes, trees.
+export const POOP = { max: 14, life: 30 }; // cosmetic poop: at most this many at once, each lasts `life` sim seconds
 export const DOVECOTE = { x: 8.9, z: -6.5 };
 const ADULT_AGE = 13;
 const PX = 0.0066;                       // prototype pixel → metre (92 px pigeon ≈ 0.6 m)
@@ -77,6 +85,16 @@ export const MUTATIONS = [
 ];
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// Turn a bird to face a point.
+export const face = (p, x, z) => { p.dir = Math.atan2(z - p.z, x - p.x); };
+// Nearest bird to (x, z) in `list` within maxD that passes `ok` (the first found wins ties) → { q, d }.
+function nearest(list, x, z, maxD = Infinity, ok) {
+  let q = null, d = maxD;
+  for (const b of list) { if (ok && !ok(b)) continue; const e = Math.hypot(b.x - x, b.z - z); if (e < d) { d = e; q = b; } }
+  return { q, d };
+}
+// "Also Nugget" for a copy — unless that gets too long, then a fresh name.
+const cloneName = (name) => { const nm = 'Also ' + name; return nm.length > 30 ? M.randomName() : nm; };
 
 // Night amount 0..1 from day phase (same curve as the prototype).
 function nightOf(ph) {
@@ -107,13 +125,7 @@ function genomeHash(genome) {
   return jh >>> 0;
 }
 
-// Wild-type genome with some loci overridden: an allele (homozygous) or an explicit [a, b] pair.
-export function pureGenome(over) {
-  const g = {};
-  for (const l of M.LOCI) g[l.id] = [M.WILD[l.id], M.WILD[l.id]];
-  for (const [k, v] of Object.entries(over)) g[k] = Array.isArray(v) ? [...v] : [v, v];
-  return g;
-}
+export const pureGenome = M.pureGenome; // (lived here first; tests and the debug API still import it from the sim)
 
 export class Sim {
   constructor() { this.reset(); }
@@ -127,10 +139,12 @@ export class Sim {
     this.pigeons = []; this.eggs = []; this.poops = [];
     this.roost = []; this.discovered = {}; this.breeds = {};
     // Ancestry: lineage id → { n: name, g: encoded genome, a: accessory, ge: generation, par: [lid, lid] | null,
-    // how: 'hatch'|'founder'|'clone'|'registry'|'summoned'|'golden'|'visitor'|'unknown', of: cloned bird's name }.
+    // how: 'hatch'|'founder'|'clone'|'registry'|'summoned'|'golden'|'visitor'|'superfan'|'unknown', of: cloned bird's name }.
     // Lineage ids survive save/load (sim ids don't); records outside TREE_DEPTH of anyone alive are pruned.
     this.family = {}; this.lids = 1; this.pruneAt = 60;
-    this.stats = { births: 0, flown: 0, maxGen: 1, happenings: 0 };
+    this.stats = { births: 0, flown: 0, maxGen: 1, happenings: 0, playTime: 0, jacob: 0 };
+    this.season = isSeeded() ? null : M.seasonOf(); // the real calendar's holiday season (or null); ?season= overrides.
+                                                    // Seeded runs ignore the date so they replay the same any day.
     this.achievements = {};  // id → { at }
     this.court = null;
     this.selId = null;
@@ -138,9 +152,10 @@ export class Sim {
     this.speed = 1; this.mut = 'normal'; this.poopEnabled = true;
     this.events = [];
     this.ready = false;      // autosave gate: never save before the flock has loaded
-    this.happening = null; this.nextHappeningAt = 55; this.whimsy = 'some'; this.bread = null; this.ufo = null; this.rain = 0;
+    this.happening = null; this.nextHappeningAt = 55; this.whimsy = 'some'; this.bread = null; this.ufo = null; this.goddess = null; this.rain = 0;
     this.replies = [];       // queued "reply" bubbles: { id, at, text }
     this.said = new Map();   // recently said lines per pool (no quick repeats)
+    this._rp = new WeakMap(); // roost entry → phenotype (roost entries are plain saved records)
     this.night = nightOf(this.phase());
   }
 
@@ -148,7 +163,7 @@ export class Sim {
   phase() { return (((this.phase0 + this.wall / DAY_LEN) % 1) + 1) % 1; }
   hour() { return phaseToHour(this.phase()); }
   setTimeOfDay(h) { this.phase0 = hourToPhase(h) - this.wall / DAY_LEN; this.night = nightOf(this.phase()); }
-  mutF() { return (MUTATIONS.find(m => m.id === this.mut) || MUTATIONS[1]).v; }
+  mutF() { return optionOf(MUTATIONS, this.mut).v; }
   age(p) { return this.t - p.born; }
   adult(p) { return this.age(p) > ADULT_AGE; }
   emit(e) { this.events.push(e); if (this.events.length > 200) this.events.shift(); }
@@ -156,6 +171,11 @@ export class Sim {
   sound(name, extra) { this.emit({ type: 'sound', name, ...extra }); }
   sparkle(x, z, tier) { this.emit({ type: 'sparkle', x, z, tier }); }
   byId(id) { return this.pigeons.find(p => p.id === id); }
+  // A speech bubble for `secs` sim seconds.
+  speak(p, text, secs = 2.4) { if (p) { p.emote = { kind: 'say', text }; p.emoteUntil = this.t + secs; } }
+  // ...with a line from a pool (no quick repeats).
+  speakFrom(p, pool, secs) { this.speak(p, M.say(pool, this.said), secs); }
+  keepInPark(p) { p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2); }
 
   // ---------- geometry ----------
   // Keep a point (a walk target, spawn or drop spot) in the park and a comfortable step off the fountain.
@@ -177,7 +197,7 @@ export class Sim {
     let nx = c.qx - FOUNTAIN.x, nz = c.qz - FOUNTAIN.z, n = c.d;
     if (n < 1e-6) { nx = p.x - FOUNTAIN.x; nz = p.z - FOUNTAIN.z; n = Math.hypot(nx, nz) || 1; }
     p.x += nx / n * -c.gap; p.z += nz / n * -c.gap;
-    p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2);
+    this.keepInPark(p);
     return true;
   }
   // A random open spot. Spots inside the fountain are re-rolled (not pushed onto the rim — that sent one
@@ -203,9 +223,10 @@ export class Sim {
       dir: dir !== undefined ? dir : (rand() < .5 ? 0 : Math.PI),
       state: 'idle', stateUntil: this.t + .4 + rand() * 1.5, stateAt: this.t,
       emote: null, emoteUntil: 0, courting: false, flying: false, flyAt: 0, held: false,
-      breeds: M.matchBreeds(pheno),
+      breeds: null,
       lid: lid ?? this.lids++,
     };
+    p.breeds = this.breedsOf(p);
     if (!this.family[p.lid]) this.family[p.lid] = { n: name, g: M.encodeGenome(genome), a: accessory, ge: gen, par, how, ...(of ? { of } : {}) };
     this.keepOut(p);
     this.pigeons.push(p);
@@ -239,6 +260,8 @@ export class Sim {
         const q = this.spawn({ genome: sp.g, accessory: sp.a, name: sp.n, gen: sp.ge || 1, adult: true, quiet: true, x: sp.x, z: sp.z, lid: sp.l, how: 'unknown' });
         if (sp.d != null) q.dir = sp.d;
       });
+      // accessories already in the park / roost count as observed (field notes for them were added in v0.9)
+      for (const a of [...this.pigeons, ...this.roost].flatMap(b => M.accList(b.accessory))) this.discovered['acc:' + a] = 1;
       return;
     }
     for (let i = 0; i < 7; i++) {
@@ -254,11 +277,11 @@ export class Sim {
 
   walkTo(p, tx, tz, speed) {
     [tx, tz] = this.clampToPark(tx, tz);
-    p.tx = tx; p.tz = tz; p.v = speed;
+    p.tx = tx; p.tz = tz; p.v = speed * (GAIT_SPEED[p.pheno.e.gait] || 1);
     const d = Math.hypot(tx - p.x, tz - p.z);
     p.state = 'walk'; p.stateAt = this.t;
     p.stateUntil = this.t + Math.max(.4, d / speed);
-    if (d > .01) p.dir = Math.atan2(tz - p.z, tx - p.x);
+    if (d > .01) face(p, tx, tz);
   }
 
   fly(p, withToast) {
@@ -266,7 +289,7 @@ export class Sim {
     p.fdx = rand() < .5 ? -1 : 1;
     this.stats.flown++;
     this.sound('whoosh');
-    if (withToast) this.toast(M.pick(M.COPY.flyoff).replace('{n}', p.name));
+    if (withToast) this.toast(M.copy('flyoff', p.name));
     if (this.selId === p.id) { this.selId = null; this.emit({ type: 'deselect' }); }
   }
 
@@ -275,6 +298,7 @@ export class Sim {
   step() {
     const dt = FIXED_DT * this.speed;
     this.wall += FIXED_DT;
+    this.stats.playTime += FIXED_DT;
     this.t += dt;
     this.move(dt);
     this.thinkAcc += dt;
@@ -303,13 +327,13 @@ export class Sim {
         continue;
       }
       if (p.y > 0) p.y = Math.max(0, p.y - dt * 3);
-      if (p.state === 'walk' || p.state === 'roll' || p.state === 'blown' || p.state === 'moonwalk') {
+      if (MOVING.has(p.state)) {
         const x0 = p.x, z0 = p.z;
         const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz);
         const s = p.v * dt;
         if (d <= s) { p.x = p.tx; p.z = p.tz; if (!p.courting && (p.state === 'walk' || p.state === 'moonwalk')) p.state = 'idle'; }
         else { p.x += dx / d * s; p.z += dz / d * s; if (p.state === 'walk') p.dir = Math.atan2(dz, dx); else if (p.state === 'moonwalk') p.dir = Math.atan2(dz, dx) + Math.PI; }
-        p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2);
+        this.keepInPark(p);
         // sliding around the rim: face the way we actually moved, not into the stone
         if (this.keepOut(p) && p.state === 'walk') {
           const mx = p.x - x0, mz = p.z - z0;
@@ -324,7 +348,7 @@ export class Sim {
   // by share, capped), a few passes per step.
   // countStuck: once per sim step (the extra pass after a think tick doesn't count toward "stuck").
   separate(countStuck = true) {
-    const list = this._solid || (this._solid = []), cores = this._cores || (this._cores = []);
+    const list = this._solid || (this._solid = []), cores = this._cores || (this._cores = []), g = this._gap || (this._gap = {});
     list.length = 0;
     for (const p of this.pigeons) if (!p.flying && !p.held && p.state !== 'abducted' && p.y < .3) list.push(p);
     const n = list.length, C = this.court;
@@ -343,7 +367,7 @@ export class Sim {
           const B = cores[j], lim = A.reach + B.reach, dx = p.x - q.x, dz = p.z - q.z;
           if (dx * dx + dz * dz > lim * lim) continue;
           if (C && ((C.a === p.id && C.b === q.id) || (C.a === q.id && C.b === p.id))) continue; // a courting pair gets close on purpose
-          const g = segGap(A, B), over = A.r + B.r - SLOP - g.d;
+          segGap(A, B, g); const over = A.r + B.r - SLOP - g.d;
           if (over <= 0) continue;
           // a moving bird takes most of the correction (it steers round); a bird standing still is only nudged
           const mp = MOVING.has(p.state), mq = MOVING.has(q.state), sp = mp === mq ? .5 : mp ? MOVER_SHARE : 1 - MOVER_SHARE;
@@ -353,7 +377,7 @@ export class Sim {
         }
       }
       if (!moved) break;
-      for (const p of list) if (p.bump) { p.x = clamp(p.x, -PARK.w / 2, PARK.w / 2); p.z = clamp(p.z, -PARK.d / 2, PARK.d / 2); this.keepOut(p); p.blockedNow = true; p.bump = false; }
+      for (const p of list) if (p.bump) { this.keepInPark(p); this.keepOut(p); p.blockedNow = true; p.bump = false; }
     }
     // Stuck → hop somewhere quieter: a walker jostled without getting any closer to where it's going for
     // ~1 s (sliding round a neighbour is progress, not stuck), or a bird squeezed standing still for ~2.5 s.
@@ -380,38 +404,35 @@ export class Sim {
     for (let k = 0; k < 8; k++) {
       const [x, z] = this.randomSpot(), dd = Math.hypot(x - p.x, z - p.z);
       if (dd < 1.2) continue; // somewhere else, not next door
-      let gap = Infinity;
-      for (const q of this.pigeons) if (q !== p && !q.flying) gap = Math.min(gap, Math.hypot(q.x - x, q.z - z));
+      const gap = nearest(this.pigeons, x, z, Infinity, q => q !== p && !q.flying).d;
       if (gap > bestGap) { bestGap = gap; best = [x, z]; }
     }
     if (!best) return;
     const [tx, tz] = best, d = Math.hypot(tx - p.x, tz - p.z);
     p.state = 'hop'; p.courting = false;
     p.hop = { x0: p.x, z0: p.z, at: this.t, dur: .7 + d * .22, h: .35 + d * .1 };
-    p.tx = tx; p.tz = tz; p.dir = Math.atan2(tz - p.z, tx - p.x);
+    face(p, tx, tz); p.tx = tx; p.tz = tz;
     p.stateUntil = this.t + p.hop.dur + .5;
-    if (!p.emote && rand() < .4) { p.emote = { kind: 'say', text: M.say(M.BUMP_LINES, this.said) }; p.emoteUntil = this.t + 1.6; }
+    if (!p.emote && rand() < .4) this.speakFrom(p, M.BUMP_LINES, 1.6);
     this.sound('flap', { id: p.id });
   }
 
-
-
   think() {
-    const now = this.t, sp = SP, cap = this.cap;
+    const now = this.t, cap = this.cap;
     this.night = nightOf(this.phase());
     // remove flown
     this.pigeons = this.pigeons.filter(p => !(p.flying && now - p.flyAt > 1.5));
     const pop = this.pigeons.length;
     tickHappenings(this);
     // replies: a neighbour answers a thought a moment later
-    this.replies = this.replies.filter(r => { if (now < r.at) return true; const q = this.byId(r.id); if (q && !q.flying && !q.emote) { q.emote = { kind: 'say', text: r.text }; q.emoteUntil = now + 2.2; } return false; });
+    if (this.replies.length) this.replies = this.replies.filter(r => { if (now < r.at) return true; const q = this.byId(r.id); if (q && !q.flying && !q.emote) this.speak(q, r.text, 2.2); return false; });
     for (const p of this.pigeons) {
       if (p.flying || p.held) continue;
       if (p.emote && now > p.emoteUntil) p.emote = null;
       if (p.visitor && now > p.visitor.leaveAt && !p.busy) { this.fly(p, false); continue; }
       if (p.courting || p.busy || p.state === 'hop') continue;
       if (now >= p.stateUntil) {
-        const sleepy = this.night > .6, r = rand();
+        const sleepy = this.night > .6, r = rand(), gait = p.pheno.e.gait, pause = GAIT_PAUSE[gait] || 1;
         p.stateAt = now;
         if (sleepy && r < .55) { p.state = 'sleep'; p.stateUntil = now + 3 + rand() * 5; p.emote = { kind: 'zzz' }; p.emoteUntil = p.stateUntil; }
         else if (p.pheno.e.behavior === 'tumbler' && r < .08) { p.state = 'tumble'; p.stateUntil = now + .75; }
@@ -420,39 +441,39 @@ export class Sim {
           p.state = 'roll'; p.stateUntil = now + 1.1;
           [p.tx, p.tz] = this.clampToPark(p.x + Math.cos(p.dir) * .6, p.z + Math.sin(p.dir) * .6); p.v = .55;
         }
+        else if (gait === 'jumpy' && r < .14) { p.state = 'jump'; p.stateUntil = now + .55; }           // a startled little hop
+        else if (gait === 'twirly' && r < .1) { p.state = 'twirl'; p.stateUntil = now + .9; }           // an unprompted pirouette
+        else if (gait === 'sluggish' && r < .06) { p.state = 'sleep'; p.stateUntil = now + 4 + rand() * 4; p.emote = { kind: 'zzz' }; p.emoteUntil = p.stateUntil; } // dozes off by day
         else if (r < (sleepy ? .8 : .5)) {
           const [tx, tz] = this.randomSpot();
-          this.walkTo(p, tx, tz, 42 * PX * sp);
+          this.walkTo(p, tx, tz, 42 * PX * SP);
         }
-        else if (r < .8) { p.state = 'peck'; p.stateUntil = now + 1.2 + rand() * 1.8; }
-        else { p.state = 'idle'; p.stateUntil = now + .9 + rand() * 2.2; }
+        else if (r < .8) { p.state = 'peck'; p.stateUntil = now + (1.2 + rand() * 1.8) * pause; }
+        else { p.state = 'idle'; p.stateUntil = now + (.9 + rand() * 2.2) * pause; }
       }
       if (!p.emote && p.state !== 'sleep' && rand() < .004) {
-        p.emote = { kind: 'say', text: this.night > .5 && rand() < .4 ? M.say(M.NIGHT_THOUGHTS, this.said) : M.say(M.THOUGHTS, this.said) }; p.emoteUntil = now + 2.6;
+        this.speakFrom(p, this.night > .5 && rand() < .4 ? M.NIGHT_THOUGHTS : M.THOUGHTS, 2.6);
         if (rand() < .3) { // someone nearby has opinions
-          let best = null, bd = 1.6;
-          for (const q of this.pigeons) { if (q === p || q.flying || q.held) continue; const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < bd) { bd = d; best = q; } }
-          if (best) this.replies.push({ id: best.id, at: now + .9 + rand() * .6, text: M.say(M.REPLIES, this.said) });
+          const { q } = nearest(this.pigeons, p.x, p.z, 1.6, q => q !== p && !q.flying && !q.held);
+          if (q) this.replies.push({ id: q.id, at: now + .9 + rand() * .6, text: M.say(M.REPLIES, this.said) });
         }
       }
       // ambient cooing: about the same park-wide rate whether there are 8 birds or 45
       if (rand() < .012 * Math.min(1, 9 / pop)) this.sound('coo', { voice: p.pheno.e.voice, vol: .5, id: p.id });
     }
     // courtship
-    if (!this.court && pop >= 2 && pop < cap && rand() < (0.10 * (1 - pop / cap) + 0.02) * sp) {
+    if (!this.court && pop >= 2 && pop < cap && rand() < (0.10 * (1 - pop / cap) + 0.02) * SP) {
       const adults = this.pigeons.filter(p => this.adult(p) && !p.flying && !p.held && !p.busy && !p.visitor && p.state !== 'sleep' && p.state !== 'hop');
       if (adults.length >= 2) {
-        const a = adults[Math.floor(rand() * adults.length)];
-        let b = null, bd = 1e9;
-        for (const q of adults) { if (q === a) continue; const d = Math.hypot(q.x - a.x, q.z - a.z); if (d < bd) { bd = d; b = q; } }
+        const a = M.pick(adults), { q: b } = nearest(adults, a.x, a.z, Infinity, q => q !== a);
         if (b) {
           let [mx, mz] = this.clampToPark((a.x + b.x) / 2, (a.z + b.z) / 2);
           mx = clamp(mx, -PARK.w / 2 + .3, PARK.w / 2 - .3);
           this.court = { a: a.id, b: b.id, mx, mz, until: now + 12, eggAt: 0 };
           a.courting = b.courting = true;
-          this.walkTo(a, mx - .24, mz, 56 * PX * sp);
-          if (rand() < .45) { a.emote = { kind: 'say', text: M.say(M.COURT_LINES, this.said) }; a.emoteUntil = now + 2.4; }
-          this.walkTo(b, mx + .24, mz, 56 * PX * sp);
+          this.walkTo(a, mx - .24, mz, 56 * PX * SP);
+          if (rand() < .45) this.speakFrom(a, M.COURT_LINES, 2.4);
+          this.walkTo(b, mx + .24, mz, 56 * PX * SP);
         }
       }
     }
@@ -470,7 +491,8 @@ export class Sim {
           this.sound('coo', { voice: a.pheno.e.voice, vol: .8, id: a.id });
         }
         if (C.eggAt && now >= C.eggAt) {
-          const off = M.offspring(a.genome, b.genome, this.mutF());
+          const off = M.offspring(a.genome, b.genome, this.mutF(), this.season);
+          if (this.season && rand() < FESTIVE_HATCH) off.genome.outfit = [this.season, this.season]; // in season, some chicks hatch in costume
           this.eggs.push({ id: this.ids++, x: C.mx, z: C.mz + .12, genome: off.genome, gen: Math.max(a.gen, b.gen) + 1, laidAt: now, hatchAt: now + 6 + rand() * 3.5, parents: [a.lid, b.lid] });
           this.sound('pop');
           a.courting = b.courting = false; a.stateUntil = b.stateUntil = now; a.state = b.state = 'idle';
@@ -478,13 +500,14 @@ export class Sim {
         }
       }
     }
-    // eggs
-    for (const eg of [...this.eggs]) {
+    // eggs (hatched in laying order)
+    for (let i = 0; i < this.eggs.length; i++) {
+      const eg = this.eggs[i];
       if (now >= eg.hatchAt) {
-        this.eggs = this.eggs.filter(x => x !== eg);
+        this.eggs.splice(i--, 1);
         const acc = M.rollAccessory(0.02);
         const baby = this.spawn({ genome: eg.genome, accessory: acc, name: M.randomName(), gen: eg.gen, x: eg.x, z: eg.z, dir: Math.PI / 2, how: eg.golden ? 'golden' : 'hatch', par: eg.parents || null });
-        if (rand() < .6) { baby.emote = { kind: 'say', text: M.say(M.BABY_LINES, this.said) }; baby.emoteUntil = now + 2.6; }
+        if (rand() < .6) this.speakFrom(baby, M.BABY_LINES, 2.6);
         if (eg.golden) { this.sparkle(eg.x, eg.z, 3); this.toast('The golden egg hatched… something: ' + baby.pheno.label + (baby.breeds.length ? ' (' + baby.breeds.map(b => b.name).join(', ') + ')' : '') + '.', 'breed'); }
         this.stats.births++;
         this.sound('pop');
@@ -497,29 +520,35 @@ export class Sim {
     }
     // fly-offs: gentle pressure as the park fills, forced when over capacity
     const n = this.pigeons.length, over = n > cap;
-    if (n > 4 && (over ? rand() < .5 : rand() < 0.10 * Math.pow(n / cap, 3) * sp)) {
-      const cands = this.pigeons.filter(p => !p.flying && !p.held && !p.courting && !p.busy && !p.visitor && p.id !== this.selId && this.adult(p));
-      if (cands.length) this.fly(cands[Math.floor(rand() * cands.length)], rand() < .5);
+    if (n > 4 && (over ? rand() < .5 : rand() < 0.10 * Math.pow(n / cap, 3) * SP)) {
+      const cands = this.pigeons.filter(p => !p.flying && !p.held && !p.courting && !p.busy && !p.visitor && p.id !== this.selId && this.adult(p) && !M.accList(p.accessory).some(a => M.ACCESSORIES[a].stays)); // superfans never leave
+      if (cands.length) this.fly(M.pick(cands), rand() < .5);
     }
     // poop (cosmetic)
     if (this.poopEnabled && rand() < .05 && this.pigeons.length) {
-      const p = this.pigeons[Math.floor(rand() * this.pigeons.length)];
+      const p = M.pick(this.pigeons);
       if (!p.flying && !p.held) {
         this.poops.push({ id: this.ids++, x: p.x - Math.cos(p.dir) * .22, z: p.z - Math.sin(p.dir) * .22, at: now, r: rand() });
-        if (this.poops.length > 14) this.poops.shift();
+        if (this.poops.length > POOP.max) this.poops.shift();
       }
     }
-    this.poops = this.poops.filter(pp => now - pp.at < 30);
+    while (this.poops.length && now - this.poops[0].at >= POOP.life) this.poops.shift(); // oldest first
     checkAchievements(this);
+    if (!this.stats.jacob && this.stats.playTime >= JACOB_AFTER && this.alive() < this.cap && !this.happening) this.jacobArrives();
     if (now >= this.pruneAt) { this.pruneFamily(); this.pruneAt = now + 60; } // also on save; this keeps ?nosave runs bounded
   }
 
-  // Swap a bird's accessory (UFO gift): new phenotype, maybe new breeds; the view rebuilds on p.rev.
-  setAccessory(p, acc) {
-    p.accessory = acc; p.pheno = M.computePheno(p.genome, acc); p.breeds = M.matchBreeds(p.pheno);
-    if (this.family[p.lid]) this.family[p.lid].a = acc;
+  // After a bird's genes or accessories change: new phenotype, maybe new breeds; the view rebuilds on p.rev.
+  refresh(p) {
+    p.pheno = M.computePheno(p.genome, p.accessory); p.breeds = this.breedsOf(p);
     p.rev = (p.rev || 0) + 1;
     this.notice(p);
+  }
+  // Swap a bird's accessories (UFO / goddess gifts).
+  setAccessory(p, acc) {
+    p.accessory = acc;
+    if (this.family[p.lid]) this.family[p.lid].a = acc;
+    this.refresh(p);
   }
 
   // Call off the current courtship: both birds stop courting and pick something new to do.
@@ -529,40 +558,61 @@ export class Sim {
     this.court = null;
   }
 
+  // Pigeon Park Superfan #1: turns up once, after a good while of play, and stays.
+  jacobArrives() {
+    this.stats.jacob = 1;
+    const { genome, accessory } = M.breedGenome(M.BREEDS.find(b => b.id === 'jacob'));
+    const p = this.spawn({ genome, accessory, name: 'Jacob', gen: this.stats.maxGen, adult: true, x: -PARK.w / 2 + .6, z: PARK.d / 2 - .6, dir: -.6, how: 'superfan' });
+    this.speak(p, 'GO PIGEON PARK!!', 3.5);
+    this.sparkle(p.x, p.z, 3); this.sound('chime');
+    this.toast("Jacob has arrived. He's been here every day since opening. Pigeon Park Superfan #1!", 'breed');
+    return p;
+  }
+
+  // A bird's breeds: some depend on more than looks (the Omnipigeon needs generation 10 and The Anomaly first).
+  // Takes a bird, or any { pheno, gen } (a roost entry, an ancestor record).
+  breedsOf({ pheno, gen = 1 }) { return M.matchBreeds(pheno, { gen, found: this.breeds }); }
+
+  // Change a bird's genes in place (the goddess's mutations).
+  regene(p, genome) {
+    p.genome = M.normalizeGenome(genome);
+    if (this.family[p.lid]) this.family[p.lid].g = M.encodeGenome(p.genome);
+    this.refresh(p);
+  }
+
   // ---------- player actions ----------
   alive() { let n = 0; for (const p of this.pigeons) if (!p.flying) n++; return n; }
-  full() { if (this.alive() >= this.cap) { this.toast(M.pick(M.COPY.full)); return true; } return false; }
+  full() { if (this.alive() >= this.cap) { this.toast(M.copy('full')); return true; } return false; }
 
   clonePigeon(id) {
     const p = this.byId(id); if (!p || p.flying || this.full()) return null;
-    let nm = 'Also ' + p.name; if (nm.length > 30) nm = M.randomName();
-    const q = this.spawn({ genome: structuredClone(p.genome), accessory: p.accessory, name: nm, gen: p.gen, adult: true, x: p.x + .45, z: p.z + .15, dir: p.dir, how: 'clone', of: p.name, par: this.family[p.lid]?.par || null });
+    const q = this.spawn({ genome: structuredClone(p.genome), accessory: p.accessory, name: cloneName(p.name), gen: p.gen, adult: true, x: p.x + .45, z: p.z + .15, dir: p.dir, how: 'clone', of: p.name, par: this.family[p.lid]?.par || null });
     this.stats.births++;
     this.sparkle(q.x, q.z, 1);
     this.sound('pop');
-    this.toast(M.pick(M.COPY.clone).replace('{n}', p.name));
+    this.toast(M.copy('clone', p.name));
     return q;
   }
   dismissPigeon(id) {
     const p = this.byId(id); if (!p || p.flying) return;
     this.fly(p, false);
-    this.toast(M.pick(M.COPY.dismiss).replace('{n}', p.name));
+    this.toast(M.copy('dismiss', p.name));
   }
   roostAdd(id) {
     const p = this.byId(id); if (!p || p.flying) return false;
-    if (this.roost.length >= ROOST_SIZE) { this.toast(M.pick(M.COPY.roostFull)); return false; }
+    if (this.roost.length >= ROOST_SIZE) { this.toast(M.copy('roostFull')); return false; }
     this.roost.push({ name: p.name, genome: p.genome, accessory: p.accessory, gen: p.gen, lid: p.lid });
     this.pigeons = this.pigeons.filter(x => x.id !== id);
     if (this.court && (this.court.a === id || this.court.b === id)) this.endCourt(); // the partner goes back to its day
     if (this.selId === id) this.selId = null;
     this.emit({ type: 'roosted', x: p.x, z: p.z });
-    this.toast(M.pick(M.COPY.roosted).replace('{n}', p.name), 'note');
+    this.toast(M.copy('roosted', p.name), 'note');
     this.sound('coo', { voice: p.pheno.e.voice, vol: .7 });
     return true;
   }
   releaseRoost(i, keep) {
     const r = this.roost[i]; if (!r || this.full()) return null;
-    const p = this.spawn({ genome: structuredClone(r.genome), accessory: r.accessory, name: keep ? 'Also ' + r.name : r.name, gen: r.gen, adult: true,
+    const p = this.spawn({ genome: structuredClone(r.genome), accessory: r.accessory, name: keep ? cloneName(r.name) : r.name, gen: r.gen, adult: true,
       ...(keep ? { how: 'clone', of: r.name, par: this.family[r.lid]?.par || null } : { lid: r.lid, how: 'unknown' }) });
     if (keep) this.stats.births++;
     this.sparkle(p.x, p.z, 1);
@@ -570,6 +620,7 @@ export class Sim {
     if (!keep) this.roost.splice(i, 1);
     return p;
   }
+  roostPheno(r) { let ph = this._rp.get(r); if (!ph) this._rp.set(r, ph = M.computePheno(r.genome, r.accessory)); return ph; }
   removeRoost(i) {
     const r = this.roost[i]; if (!r) return;
     this.roost.splice(i, 1);
@@ -586,17 +637,21 @@ export class Sim {
     this.toast('One ' + b.name + ', made to order.', 'note');
     return p;
   }
-  summonLegends() {
-    const legends = [
-      { name: 'THE VOID PIGEON', g: pureGenome({ fantasy: 'void', glow: 'glow', eye: 'pearl' }) },
-      { name: 'THE GALAXY PIGEON', g: pureGenome({ sheen: 'galaxy', fpattern: 'stars', tail: 'fantail' }) },
-    ];
-    for (const L of legends) {
-      const p = this.spawn({ genome: L.g, name: L.name, gen: this.stats.maxGen, adult: true, x: (rand() - .5) * 2, z: 1 + rand(), how: 'summoned' });
+  // Secret-code birds: [name, genome overrides] each, at spot() → [x, z].
+  summon(list, spot, msg) {
+    for (const [name, over] of list) {
+      const [x, z] = spot();
+      const p = this.spawn({ genome: pureGenome(over), name, gen: this.stats.maxGen, adult: true, x, z, how: 'summoned' });
       this.sparkle(p.x, p.z, 3);
     }
     this.sound('chime');
-    this.toast('W rizz. The legends have descended.', 'breed');
+    this.toast(msg, 'breed');
+  }
+  summonLegends() {
+    this.summon([
+      ['THE VOID PIGEON', { fantasy: 'void', glow: 'glow', eye: 'pearl' }],
+      ['THE GALAXY PIGEON', { sheen: 'galaxy', fpattern: 'stars', tail: 'fantail' }],
+    ], () => [(rand() - .5) * 2, 1 + rand()], 'W rizz. The legends have descended.');
   }
   summonOres() {
     const ores = [
@@ -605,22 +660,19 @@ export class Sim {
       ['THE REDSTONE ORE PIGEON', 'redstoneore'], ['THE IRON ORE PIGEON', 'ironore'], ['THE LAPIS ORE PIGEON', 'lapisore'],
       ['THE MIXED GEMSTONE PIGEON', 'gemore'], ['THE COAL ORE PIGEON', 'coalore'],
     ];
-    for (const [name, f] of ores) {
-      const p = this.spawn({ genome: pureGenome({ fantasy: f }), name, gen: this.stats.maxGen, adult: true, x: (rand() - .5) * PARK.w * .7, z: (rand() - .5) * PARK.d * .5, how: 'summoned' });
-      this.sparkle(p.x, p.z, 3);
-    }
-    this.sound('chime');
-    this.toast('The mineshaft opens. Eleven ore pigeons surface.', 'breed');
+    this.summon(ores.map(([name, f]) => [name, { fantasy: f }]), () => [(rand() - .5) * PARK.w * .7, (rand() - .5) * PARK.d * .5],
+      'The mineshaft opens. Eleven ore pigeons surface.');
   }
 
   // ---------- drag (player carries a bird) ----------
   grab(id) {
     const p = this.byId(id); if (!p || p.flying) return null;
     p.held = true; p.courting = false; p.state = 'held'; p.busy = null;
-    p.emote = { kind: 'say', text: M.say(M.HELD_LINES, this.said) }; p.emoteUntil = this.t + 2.4;
+    this.speakFrom(p, M.HELD_LINES, 2.4);
     if (this.court && (this.court.a === id || this.court.b === id)) this.endCourt();
     return p;
   }
+  dropInPlace(id) { const p = this.byId(id); if (p) this.drop(id, p.x, p.z); } // let go of a carried bird where it is
   carry(id, x, z) { const p = this.byId(id); if (p && p.held) { p.x = x; p.z = z; p.y = .55; } }
   drop(id, x, z) {
     const p = this.byId(id); if (!p) return;

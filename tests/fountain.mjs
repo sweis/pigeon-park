@@ -1,6 +1,6 @@
 // Crowd the fountain (incl. very large birds) and shoot it: nobody should poke into the rim.
-import { startServer, launch, boot, shot, check, failures } from './lib.mjs';
-const srv = await startServer(); const br = await launch();
+import { setup, finish, boot, shot, check, checkNoErrors } from './lib.mjs';
+const { srv, br } = await setup();
 const { page, errors } = await boot(br, srv.url, 'nosave&seed=12&hour=16.5');
 const gaps = await page.evaluate(async () => {
   const pp = window.pp, g = window.__game, S = g.sim; pp.clearAll(); pp.freeze();
@@ -19,6 +19,5 @@ await page.evaluate(() => { window.pp.cam('fountain'); });
 console.log(await shot(page, 'fountain-crowd.png', { hud: false }));
 await page.evaluate(() => { window.pp.cam('hero-close', { x: -1.7, z: .9, y: .3, dist: 4.2, az: .05 }); });
 console.log(await shot(page, 'fountain-crowd-close.png', { hud: false }));
-check(errors.length === 0, 'no console errors');
-await br.close(); await srv.close();
-process.exit(failures() ? 1 : 0);
+checkNoErrors(errors);
+await finish(br, srv, 'fountain');

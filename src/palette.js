@@ -1,6 +1,6 @@
 // Pigeon Park — colour palettes per phenotype (ported from the prototype's sprites.js).
 
-export const STONE = { body: '#9b988f', wing: '#b6b3aa', head: '#84817a', pat: '#6b6862' };
+const STONE = { body: '#9b988f', wing: '#b6b3aa', head: '#84817a', pat: '#6b6862' };
 export const ORE_SPECKS = {
   goldore: ['#f2c94c'], diamondore: ['#7de8e4'], emeraldore: ['#3bd970'], redstoneore: ['#e8402f'],
   ironore: ['#dcae86'], lapisore: ['#2f55d4'], coalore: ['#33322f'],
@@ -39,7 +39,8 @@ export const PALETTES = {
   goldore: STONE, diamondore: STONE, emeraldore: STONE, redstoneore: STONE,
   ironore: STONE, lapisore: STONE, coalore: STONE, gemore: STONE,
 };
-export const W1 = '#f7f4ec', W2 = '#fbf9f4', LEG = '#cf6a5f';
+const W2 = '#fbf9f4';
+export const W1 = '#f7f4ec', LEG = '#cf6a5f';
 const DARK_HEADS = { blue: 1, blueS: 1, brown: 1, brownS: 1, void: 1, red: 1, indigoS: 1 };
 
 export function palette(pheno) {

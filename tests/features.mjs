@@ -1,12 +1,9 @@
 // New-feature checks through the real player path: trait finder (inspector chip + Pigeonpedia button),
 // family tree dialog, desktop WASD/QE camera. Real mouse + keyboard, getState() assertions, captures.
 // Run: node tests/features.mjs [--dist]
-import { startServer, launch, boot, frames, state, shot, check, failures } from './lib.mjs';
+import { setup, finish, boot, frames, state, shot, check, checkNoErrors, checkPrograms, clickSel, poll, screenOf, PHONE } from './lib.mjs';
 
-const dist = process.argv.includes('--dist');
-const srv = await startServer({ dist }); const br = await launch();
-const poll = async (page, fn, arg, ms = 20000) => { try { await page.waitForFunction(fn, arg, { timeout: ms, polling: 100 }); return true; } catch { return false; } };
-const clickSel = async (page, sel) => { const b = await page.locator(sel).first().boundingBox(); await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); };
+const { srv, br } = await setup();
 
 // ---------- trait finder ----------
 {
@@ -23,7 +20,7 @@ const clickSel = async (page, sel) => { const b = await page.locator(sel).first(
   });
   const show = ids.show[0];
   await page.evaluate((id) => { window.pp.teleport(id, 2.5, 1); window.pp.render(); }, show);
-  const p = await page.evaluate((id) => window.pp.screenOf(id), show);
+  const p = await screenOf(page, show);
   await page.mouse.click(p.x, p.y);
   await poll(page, () => !document.getElementById('inspector').classList.contains('hidden'));
   const chip = page.locator('#inspector [data-act="find"][data-arg="tail:fantail"]');
@@ -56,9 +53,8 @@ const clickSel = async (page, sel) => { const b = await page.locator(sel).first(
   await clickSel(page, '.grid.pedia [data-act="find"][data-arg="tail:fantail"]');
   s = await state(page);
   check(s.dialog === null && s.find === 'tail:fantail' && s.findMarks === 7, `Pigeonpedia Find closes the book and marks the park (${s.findMarks})`);
-  s = await state(page);
-  check(s.render.programs === s.render.programsAfterBoot, `finder adds no shader programs (${s.render.programsAfterBoot} → ${s.render.programs})`);
-  check(errors.length === 0, `no console errors (finder) ${errors.join(' | ')}`);
+  await checkPrograms(page, 'finder adds no shader programs');
+  checkNoErrors(errors, '(finder)');
   await page.context().close();
 }
 
@@ -68,10 +64,7 @@ const clickSel = async (page, sel) => { const b = await page.locator(sel).first(
   // let the park breed for ~15 sim-minutes (Frantic), then pick the bird with the deepest known ancestry
   await page.evaluate(() => { window.pp.setSpeed(2.5); window.pp.step(Math.round(900 / 2.5 * 30)); });
   const pick = await page.evaluate(() => {
-    const S = window.__game.sim, depth = (n) => !n ? 0 : 1 + Math.max(0, ...(n.par || []).map(depth));
-    let best = null, bd = 0;
-    for (const p of S.pigeons) { if (p.flying) continue; const d = depth(S.familyTree(p.lid).root); if (d > bd) { bd = d; best = p.id; } }
-    return { id: best, depth: bd };
+    return window.pp.deepestLineage();
   });
   check(pick.depth >= 3, `after breeding, some bird has grandparents on record (depth ${pick.depth})`);
   await page.evaluate((id) => { window.pp.teleport(id, 2.5, 1.2); window.pp.select(id); window.pp.cam('overview'); window.pp.setSpeed(1); }, pick.id);
@@ -92,12 +85,12 @@ const clickSel = async (page, sel) => { const b = await page.locator(sel).first(
     const want = s.pigeons.find(p => p.lid === lid);
     check(s.dialog === null && (want ? s.selId === want.id : true), `tapping a living relative selects it (lid ${lid})`);
   } else check(true, 'no living ancestor to tap (all flown off) — skipped');
-  check(errors.length === 0, `no console errors (family) ${errors.join(' | ')}`);
+  checkNoErrors(errors, '(family)');
   await page.context().close();
   // phone layout
-  const ph = await boot(br, srv.url, 'nosave&seed=42&hour=14', { viewport: { width: 390, height: 844 }, mobile: true });
+  const ph = await boot(br, srv.url, 'nosave&seed=42&hour=14', PHONE);
   await ph.page.evaluate(() => { window.pp.setSpeed(2.5); window.pp.step(Math.round(900 / 2.5 * 30)); });
-  await ph.page.evaluate(() => { const S = window.__game.sim, depth = (n) => !n ? 0 : 1 + Math.max(0, ...(n.par || []).map(depth)); const b = S.pigeons.filter(p => !p.flying).sort((a, b) => depth(S.familyTree(b.lid).root) - depth(S.familyTree(a.lid).root))[0]; window.pp.select(b.id); window.__game.ui.openFamily(b.lid); });
+  await ph.page.evaluate(() => { const { id } = window.pp.deepestLineage(), p = window.__game.sim.byId(id); window.pp.select(id); window.__game.ui.openFamily(p.lid); });
   await frames(ph.page, 2);
   await shot(ph.page, 'feat-family-phone.png');
   const over = await ph.page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
@@ -107,9 +100,9 @@ const clickSel = async (page, sel) => { const b = await page.locator(sel).first(
 
 // ---------- phone: toasts never cover the bird card ----------
 {
-  const { page, errors, ctx } = await boot(br, srv.url, 'nosave&seed=4&hour=15', { viewport: { width: 390, height: 844 }, mobile: true });
+  const { page, errors, ctx } = await boot(br, srv.url, 'nosave&seed=4&hour=15', PHONE);
   const id = await page.evaluate(() => { const p = window.__game.sim.pigeons[0]; window.pp.teleport(p.id, 0, 0); return p.id; });
-  const p = await page.evaluate((id) => window.pp.screenOf(id), id);
+  const p = await screenOf(page, id);
   await page.touchscreen.tap(p.x, p.y);
   await poll(page, () => !document.getElementById('inspector').classList.contains('hidden'));
   await page.evaluate(() => window.__game.ui.toast('A test toast that should float above the card.'));
@@ -120,7 +113,7 @@ const clickSel = async (page, sel) => { const b = await page.locator(sel).first(
   await page.evaluate(() => window.pp.select(null)); await page.evaluate(() => { window.__game.ui.introDone = true; window.__game.ui.refreshT = 0; }); await frames(page, 3);
   const b = await page.evaluate(() => document.getElementById('toasts').style.bottom);
   check(b === '', `toasts drop back to their usual spot when the card closes (${b || 'default'})`);
-  check(errors.length === 0, `no console errors (phone toasts) ${errors.join(' | ')}`);
+  checkNoErrors(errors, '(phone toasts)');
   await ctx.close();
 }
 
@@ -162,10 +155,8 @@ const clickSel = async (page, sel) => { const b = await page.locator(sel).first(
   // overview after spinning doesn't unwind: nearest equivalent angle
   await page.evaluate(() => { const g = window.__game; g.cam.cur.az = g.cam.want.az = 4 * Math.PI + .2; g.cam.shot('overview'); });
   check(Math.abs((await state(page)).camAz - 4 * Math.PI) < 1e-3, 'recentring after several turns takes the short way');
-  check(errors.length === 0, `no console errors (keyboard) ${errors.join(' | ')}`);
+  checkNoErrors(errors, '(keyboard)');
   await page.context().close();
 }
 
-await br.close(); await srv.close();
-console.log(failures() ? `\n${failures()} FAILED` : '\nall feature checks passed');
-process.exit(failures() ? 1 : 0);
+await finish(br, srv, 'feature');

@@ -9,11 +9,9 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { palette, PALETTES, ORE_SPECKS, W1, LEG } from './palette.js';
-import { phenoKey } from './genetics.js';
-
-const V = (x, y, z) => new THREE.Vector3(x, y, z);
-const col = (hex) => new THREE.Color(hex);
-const mix = (a, b, t) => a.clone().lerp(b, t);
+import { phenoKey, accList, ACCESSORIES, pureGenome, computePheno } from './genetics.js';
+import { V, col, hex, mix, trs, rel, alongY, basis } from './geom.js';
+import { hash3, vnoise3 as vnoise } from './noise.js';
 
 // ---------- skeleton ----------
 const BONES = ['root', 'body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR', 'spin'];
@@ -37,45 +35,16 @@ const PIVOT = {
   eyeL: EYE[0], eyeR: EYE[1], spin: V(H.x - .01, H.y + .14, 0),
 };
 
-// ---------- small maths helpers ----------
-function hash3(x, y, z, s) {
-  let h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + s * 17.3) * 43758.5453;
-  return h - Math.floor(h);
-}
-function vnoise(p, s) { // smooth-ish value noise
-  const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
-  const tx = p.x - fx, ty = p.y - fy, tz = p.z - fz;
-  const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty), sz = tz * tz * (3 - 2 * tz);
-  let r = 0;
-  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++) {
-    const w = (i ? sx : 1 - sx) * (j ? sy : 1 - sy) * (k ? sz : 1 - sz);
-    r += w * hash3(fx + i, fy + j, fz + k, s);
-  }
-  return r;
-}
 function strHash(str) { let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0; return (h >>> 0) % 1000; }
-
-function basis(n, hint) {
-  const z = n.clone().normalize();
-  const up = hint || (Math.abs(z.y) > .9 ? V(1, 0, 0) : V(0, 1, 0));
-  const x = new THREE.Vector3().crossVectors(up, z).normalize();
-  const y = new THREE.Vector3().crossVectors(z, x);
-  return new THREE.Matrix4().makeBasis(x, y, z);
-}
-function trs(pos, rot = [0, 0, 0], scl = [1, 1, 1]) {
-  const m = new THREE.Matrix4();
-  m.compose(pos, new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0], rot[1], rot[2], 'XYZ')), new THREE.Vector3(...scl));
-  return m;
-}
-// Matrix that maps a primitive's +Y axis onto `dir`, centred at `pos`.
-function alongY(pos, dir, scl = [1, 1, 1]) {
-  const q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), dir.clone().normalize());
-  return new THREE.Matrix4().compose(pos, q, new THREE.Vector3(...scl));
-}
+const UPY = V(0, 1, 0);
+const FLAT = new THREE.Matrix4().makeScale(1, 1, .35), TURN_X = new THREE.Matrix4().makeRotationX(Math.PI / 2); // squash a decal / stand a disc up
 
 // ---------- geometry builder ----------
+// seg: blob tessellation factor (lower for faceted gems and the far LOD). detail: 1 near, .5 far — scales the
+// segment counts of small primitives (n()), so ornaments shed triangles at a distance too.
 class Build {
-  constructor(seg) { this.geos = []; this.parts = []; this.seg = seg; this.fluff = 0; this.fluffSeed = 0; }
+  constructor(seg, detail = 1) { this.geos = []; this.parts = []; this.seg = seg; this.detail = detail; this.fluffSeed = 0; }
+  n(k, min = 3) { return Math.max(min, Math.round(k * this.detail)); }
   // Deformed sphere. `deform(u)` maps a unit-sphere point to local shape space;
   // `paint(u)` returns a THREE.Color from the unit-sphere point.
   blob(part, { ws = 24, hs = 16, deform, paint, color, matrix, fluff = 0 }) {
@@ -173,11 +142,10 @@ function materialKind(pheno) {
 
 // Standing height in bird units (before size scaling): used to frame photos and portraits.
 const TALL_TOP = { lace: .16, horn: .13, hood: .06, shell: .05, rose: .05, double: .06, peak: .06 };
-const TALL_HAT = { tophat: .16, chefhat: .16, partyhat: .16, crown: .1, propeller: .1, cowboy: .08 };
 export function birdHeight(pheno) {
   const e = pheno.e;
   let h = .6 + headOffset(e).y + (e.legs === 'long' ? LEG_LIFT : 0);
-  h += Math.max(TALL_TOP[e.crest] || 0, e.mane === 'hood' ? .06 : 0, TALL_HAT[pheno.accessory] || 0);
+  h += Math.max(TALL_TOP[e.crest] || 0, e.mane === 'hood' ? .06 : 0, OUTFITS[e.outfit]?.h || 0, ...accList(pheno.accessory).map(a => ACC[a]?.h || 0));
   if (e.tail === 'fantail') h = Math.max(h, .56);
   return h;
 }
@@ -186,20 +154,21 @@ export function sizeOf(pheno, jit = 1) {
   return ({ king: 1.42, dinky: .68, chonk: 1.1 }[pheno.e.size] || 1) * jit;
 }
 
-const geoCache = new Map();
-// lod 0 = full detail, 1 = far (overview distance): ~1/4 the triangles, same silhouette/colours.
-function pigeonGeometry(pheno, lod = 0) {
-  const key = phenoKey(pheno) + '|' + lod;
-  let g = geoCache.get(key);
-  if (!g) { g = buildGeometry(pheno, lod); geoCache.set(key, g); }
+const geoCache = new Map(); // phenoKey|lod → { geometry, kind }
+// lod 0 = full detail, 1 = far (overview distance): a third to half the triangles, same silhouette/colours.
+function pigeonGeometry(pheno, lod = 0, key = phenoKey(pheno)) {
+  const k = key + '|' + lod;
+  let g = geoCache.get(k);
+  if (!g) { g = buildGeometry(pheno, lod); geoCache.set(k, g); }
   return g;
 }
 export function geometryCacheSize() { return geoCache.size; }
-// Dispose cached geometries no live bird uses (a long idle session would otherwise keep every phenotype
-// ever hatched on the GPU). `inUse` holds the geometries currently on screen.
-export function pruneGeometryCache(inUse) {
+// Dispose cached geometries for looks no live bird has (a long idle session would otherwise keep every phenotype
+// ever hatched on the GPU). `liveKeys`: phenoKeys still in use — both LODs of each are kept, so zooming in
+// never has to rebuild a bird that's merely far away right now.
+export function pruneGeometryCache(liveKeys) {
   let n = 0;
-  for (const [k, v] of geoCache) if (!inUse.has(v.geometry)) { v.geometry.dispose(); geoCache.delete(k); n++; }
+  for (const [k, v] of geoCache) if (!liveKeys.has(k.slice(0, k.lastIndexOf('|')))) { v.geometry.dispose(); geoCache.delete(k); n++; }
   return n;
 }
 
@@ -209,27 +178,30 @@ export function statueGeometry(pheno) {
   for (const a of ['skinIndex', 'skinWeight', 'color']) g.deleteAttribute(a);
   return g;
 }
+// The plain feral as a statue (the fountain and most monuments), built once.
+let _wild = null;
+export const wildStatue = () => (_wild ||= statueGeometry(computePheno(pureGenome(), null))).clone();
 
 function buildGeometry(pheno, lod = 0) {
   const e = pheno.e, P = palette(pheno), key = phenoKey(pheno), seed = strHash(key);
   const kind = materialKind(pheno);
   const facet = kind === 'facet' || kind === 'gem';
-  const b = new Build((facet ? .42 : 1) * (lod ? .5 : 1));
+  const b = new Build((facet ? .42 : 1) * (lod ? .5 : 1), lod ? .5 : 1);
   const C = {
     body: col(P.body), wing: col(P.wing), head: col(P.head), tail: col(P.tail), pat: col(P.pat),
     beak: col(P.beak), eye: col(P.eye), curl: col(P.curl), white: col(W1), leg: col(LEG),
   };
   const noFantasy = e.fantasy === 'none';
   const galaxy = e.sheen === 'galaxy';
-  const GAL = [col('#2e2a5e'), col('#6a3f8f'), col('#35547e')];
+  const GAL = [hex('#2e2a5e'), hex('#6a3f8f'), hex('#35547e')];
   const galAt = (u) => { const t = (u.x + u.y + 2) / 4; return t < .5 ? mix(GAL[0], GAL[1], t * 2) : mix(GAL[1], GAL[2], (t - .5) * 2); };
   const splash = e.pied === 'splash' && noFantasy;
   const almond = pheno.colorKey === 'almond';
   // fantasy plumages painted procedurally (s varies per part so bands don't line up exactly)
-  const SUN = [col('#ffb36b'), col('#f07fa0'), col('#8d6ad0')], CRUST = col('#9c5a26'), INK = col('#232121');
+  const SUN = [hex('#ffb36b'), hex('#f07fa0'), hex('#8d6ad0')], CRUST = hex('#9c5a26'), INK = hex('#232121');
   const whimsy = {
     rainbow: (c, u, s) => new THREE.Color().setHSL((((u.x + 1) / 2) * .85 + s * .07) % 1, .78, .63),
-    toast: (c, u) => (u.y > .55 || Math.abs(u.z) > .88) ? mix(c, CRUST, .75) : vnoise(u.clone().multiplyScalar(14), 5) > .8 ? mix(c, col('#fff4dc'), .5) : c,
+    toast: (c, u) => (u.y > .55 || Math.abs(u.z) > .88) ? mix(c, CRUST, .75) : vnoise(u.clone().multiplyScalar(14), 5) > .8 ? mix(c, hex('#fff4dc'), .5) : c,
     zebra: (c, u, s) => Math.sin((u.x * 7 + u.y * 2.2 + s * .3) * Math.PI) > .15 ? INK : c,
     sunset: (c, u) => { const t = (u.y + 1) / 2; return t < .5 ? mix(SUN[0], SUN[1], t * 2) : mix(SUN[1], SUN[2], (t - .5) * 2); },
   }[pheno.colorKey];
@@ -246,6 +218,9 @@ function buildGeometry(pheno, lod = 0) {
     return r;
   };
 
+  // clothes (outfit mutation) repaint the body and wings over the natural plumage
+  const dress = OUTFITS[e.outfit] || null;
+
   // ---- body ----
   const bodyDef = (u) => {
     const back = Math.max(0, -u.x), t = 1 - .42 * Math.pow(back, 1.4);
@@ -261,7 +236,8 @@ function buildGeometry(pheno, lod = 0) {
       if (magpie && u.y < -.1) return C.white;
       if (u.y > .35) c = mix(c, C.head, (u.y - .35) * .35);   // darker back
       if (u.y < -.5) c = mix(c, C.white, (-.5 - u.y) * .12);  // pale belly
-      return tint(c, u, 1);
+      c = tint(c, u, 1);
+      return dress ? dress.body(u, c) : c;
     },
   });
   const bodyS = shape(bodyDef, bodyM);
@@ -278,7 +254,7 @@ function buildGeometry(pheno, lod = 0) {
       if ((bald && u.y > .15) || (beard && u.x > .1 && u.y > -.45)) return C.white;
       let c = capHead ? C.white : C.head;
       if (showSheen && u.y < .5 && u.y > -.85) {
-        const t = (u.y + .85) / 1.35, g = mix(col(sheen[0]), col(sheen[1]), t);
+        const t = (u.y + .85) / 1.35, g = mix(hex(sheen[0]), hex(sheen[1]), t);
         c = mix(c, g, sheen[2] * Math.sin(t * Math.PI));
       }
       return tint(c, u, 2);
@@ -295,7 +271,7 @@ function buildGeometry(pheno, lod = 0) {
     const bill = col('#f0a53a');
     b.blob('head', { ws: 16, hs: 8, color: bill, matrix: trs(V(H.x + .1, H.y - .01, 0), [0, 0, -.12]), deform: (u) => u.set(u.x * .072, u.y * .013, u.z * (.03 + .012 * Math.max(0, u.x))) });
     b.blob('head', { ws: 14, hs: 6, color: mix(bill, col('#b8702a'), .35), matrix: trs(V(H.x + .09, H.y - .03, 0), [0, 0, -.18]), deform: (u) => u.set(u.x * .06, u.y * .01, u.z * .028) });
-  } else b.prim('head', new THREE.ConeGeometry(br, bl, Math.max(6, Math.round(12 * b.seg))), C.beak,
+  } else b.prim('head', new THREE.ConeGeometry(br, bl, Math.max(6, Math.round(12 * b.seg))), C.beak, // (cone sides follow the blob detail)
     alongY(V(H.x + .085 + bl / 2 - .012, H.y - .012, 0), V(1, e.beak === 'long' ? -.2 : -.14, 0)));
   if (e.beak === 'stubby') b.ell('head', [.07, .06, .07], C.head, trs(V(H.x + .03, H.y + .03, 0)), 14, 10); // domed short-face forehead
   const wattled = e.wattle === 'large', wat = col('#e8dfcf');
@@ -314,7 +290,7 @@ function buildGeometry(pheno, lod = 0) {
       b.ell(part, [.017, .017, .008], col('#141414'), basis(out).setPosition(E.clone().addScaledVector(out, .036).add(V(.006, -.01, 0))), 12, 8);
       return;
     }
-    b.prim(part, new THREE.TorusGeometry(wattled ? .028 : .024, wattled ? .012 : .0055, 6, 18), wattled ? wat : ring, new THREE.Matrix4().makeBasis(...basisVecs(out)).setPosition(E.clone().addScaledVector(out, -.002)));
+    b.prim(part, new THREE.TorusGeometry(wattled ? .028 : .024, wattled ? .012 : .0055, b.n(6, 4), b.n(18, 8)), wattled ? wat : ring, basis(out, UPY).setPosition(E.clone().addScaledVector(out, -.002)));
     b.ell(part, [.021, .021, .011], C.eye, basis(out).setPosition(E));
     b.ell(part, [.0105, .0105, .006], col('#1d1b1a'), basis(out).setPosition(E.clone().addScaledVector(out, .008).add(V(.003, 0, 0))));
     b.ell(part, [.0038, .0038, .002], col('#ffffff'), basis(out).setPosition(E.clone().addScaledVector(out, .013).add(V(.006, .006, 0))), 6, 4);
@@ -335,7 +311,8 @@ function buildGeometry(pheno, lod = 0) {
         if (e.pied === 'shield' && noFantasy && u.x < -.42) return C.white;   // white flights around the coloured shield
         if (u.x < -.42) c = mix(c, C.pat, .42 + (-.42 - u.x) * .5);     // dark flight feathers
         else if (u.y > .55) c = mix(c, C.body, .4);                       // shoulder
-        return tint(c, u, 4 + s);
+        c = tint(c, u, 4 + s);
+        return dress ? dress.wing(u, c) : c;
       },
     });
     const ws = shape(wingDef, wm), side = (x, y) => V(x, y, s * Math.sqrt(Math.max(.02, 1 - x * x - y * y)));
@@ -355,8 +332,8 @@ function buildGeometry(pheno, lod = 0) {
       [[.45, .45], [.3, .55], [.52, .2], [.35, .3], [.2, .45], [.42, .6]].forEach(([x, y]) => b.ell(part, [.02, .018, .005], C.white, onSurface(ws, side(x, y), .002, 0, 1), 8, 5));
     }
     if (e.curl === 'curly') {
-      for (let i = 0; i < 9; i++) b.prim(part, new THREE.TorusGeometry(.026, .006, 5, 12, Math.PI * 1.4), mix(C.curl, C.wing, .45),
-        onSurface(ws, side(.5 - (i % 5) * .22, i < 5 ? .3 : -.25), .001, -.6 + i * .3, 1).multiply(new THREE.Matrix4().makeScale(1, 1, .35)));
+      for (let i = 0; i < 9; i++) b.prim(part, curlGeo(b), mix(C.curl, C.wing, .45),
+        onSurface(ws, side(.5 - (i % 5) * .22, i < 5 ? .3 : -.25), .001, -.6 + i * .3, 1).multiply(FLAT));
     }
     if (galaxy) for (let i = 0; i < 4; i++) b.ell(part, [.004, .004, .003], col('#ffffff'), onSurface(ws, side(.3 - i * .2, (i % 2 ? .3 : -.2)), .002, 0, 1), 6, 4);
   }
@@ -388,9 +365,9 @@ function buildGeometry(pheno, lod = 0) {
   for (const s of [-1, 1]) {
     const part = s > 0 ? 'legR' : 'legL', z = .056 * s;
     const legLen = .15 + (e.legs === 'long' ? LEG_LIFT : 0);
-    b.prim(part, new THREE.CylinderGeometry(.011, .013, legLen, 8), C.leg, trs(V(.02, .015 + legLen / 2, z)));
-    for (const a of [-.45, 0, .45]) b.prim(part, new THREE.CapsuleGeometry(.0065, .04, 2, 6), C.leg, trs(V(.045 + Math.cos(a) * .012, .01, z + Math.sin(a) * .018), [0, -a, -Math.PI / 2]));
-    b.prim(part, new THREE.CapsuleGeometry(.006, .025, 2, 6), C.leg, trs(V(.0, .01, z), [0, 0, Math.PI / 2]));
+    b.prim(part, new THREE.CylinderGeometry(.011, .013, legLen, b.n(8, 5)), C.leg, trs(V(.02, .015 + legLen / 2, z)));
+    for (const a of [-.45, 0, .45]) b.prim(part, new THREE.CapsuleGeometry(.0065, .04, 2, b.n(6, 4)), C.leg, trs(V(.045 + Math.cos(a) * .012, .01, z + Math.sin(a) * .018), [0, -a, -Math.PI / 2]));
+    b.prim(part, new THREE.CapsuleGeometry(.006, .025, 2, b.n(6, 4)), C.leg, trs(V(.0, .01, z), [0, 0, Math.PI / 2]));
     if (e.muffs === 'muffed') {
       [[.03, .035, 0, .042], [.06, .02, .012, .034], [.0, .025, -.01, .03], [.05, .05, -.006, .03]].forEach(([x, y, dz, r], i) =>
         b.ell(part, [r * 1.2, r * .9, r], i % 2 ? C.wing : C.body, trs(V(x, y, z + dz * s)), 10, 7));
@@ -414,8 +391,8 @@ function buildGeometry(pheno, lod = 0) {
     }
   }
   if (e.curl === 'curly') {
-    for (const s of [-1, 1]) for (let i = 0; i < 4; i++) b.prim('body', new THREE.TorusGeometry(.026, .006, 5, 12, Math.PI * 1.4), mix(C.curl, C.body, .45),
-      onSurface(bodyS, sideDir(.3 - i * .25, -.45 + (i % 2) * .15, s), .001, .4 + i, 1).multiply(new THREE.Matrix4().makeScale(1, 1, .35)));
+    for (const s of [-1, 1]) for (let i = 0; i < 4; i++) b.prim('body', curlGeo(b), mix(C.curl, C.body, .45),
+      onSurface(bodyS, sideDir(.3 - i * .25, -.45 + (i % 2) * .15, s), .001, .4 + i, 1).multiply(FLAT));
   }
   if (e.mane === 'cascade') {
     // Nicobar hackles: a metallic rainbow cape of long pointed feathers over shoulders and back
@@ -472,14 +449,14 @@ function buildGeometry(pheno, lod = 0) {
     for (let i = 0; i < 11; i++) {
       const a = (-68 + i * 13.6) * Math.PI / 180, dir = V(-.22, Math.cos(a), Math.sin(a)).normalize();
       b.prim('head', new THREE.CylinderGeometry(.0035, .0045, .14, 5), C.head, alongY(c0.clone().addScaledVector(dir, .07), dir));
-      b.ell('head', [.024, .016, .005], col('#f6f3ea'), alongY(c0.clone().addScaledVector(dir, .145), dir, [1, 1, 1]).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)), 10, 6);
+      b.ell('head', [.024, .016, .005], hex('#f6f3ea'), alongY(c0.clone().addScaledVector(dir, .145), dir).multiply(TURN_X), 10, 6);
     }
   }
 
   if (e.crest === 'horn') { // unicorn horn: pearly cone with a gold spiral
     const base = V(H.x + .04, H.y + .07, 0), dir = V(.4, 1, 0).normalize();
-    b.prim('head', new THREE.ConeGeometry(.018, .14, 12), col('#f3ecff'), alongY(base.clone().addScaledVector(dir, .07), dir));
-    [.02, .05, .08].forEach((d, i) => b.prim('head', new THREE.TorusGeometry(.016 - i * .004, .003, 5, 14), col('#e8b64c'), alongY(base.clone().addScaledVector(dir, d), dir).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2 + .3))));
+    b.prim('head', new THREE.ConeGeometry(.018, .14, b.n(12, 6)), hex('#f3ecff'), alongY(base.clone().addScaledVector(dir, .07), dir));
+    [.02, .05, .08].forEach((d, i) => b.prim('head', new THREE.TorusGeometry(.016 - i * .004, .003, b.n(5, 3), b.n(14, 6)), hex('#e8b64c'), alongY(base.clone().addScaledVector(dir, d), dir).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2 + .3))));
   }
   if (e.crest === 'double') { // second crest: a rosette on the nose
     const c0 = V(H.x + .075, H.y + .035, 0);
@@ -495,9 +472,9 @@ function buildGeometry(pheno, lod = 0) {
   const bleedingHeart = e.fpattern === 'hearts' && e.pied === 'white' && noFantasy;
   const heart = (sh, dir, scale, c, part = 'body') => {
     const m = onSurface(sh, dir, .006, Math.PI, scale);
-    b.ell(part, [.009, .009, .004], c, m.clone().multiply(trs(V(-.0075, .004, 0))), 8, 5);
-    b.ell(part, [.009, .009, .004], c, m.clone().multiply(trs(V(.0075, .004, 0))), 8, 5);
-    b.prim(part, new THREE.ConeGeometry(.0145, .018, 3), c, m.clone().multiply(trs(V(0, -.007, 0), [0, 0, Math.PI], [1, 1, .3])));
+    b.ell(part, [.009, .009, .004], c, rel(m, V(-.0075, .004, 0)), 8, 5);
+    b.ell(part, [.009, .009, .004], c, rel(m, V(.0075, .004, 0)), 8, 5);
+    b.prim(part, new THREE.ConeGeometry(.0145, .018, 3), c, rel(m, V(0, -.007, 0), [0, 0, Math.PI], [1, 1, .3]));
   };
   const star = (sh, dir, scale, c, part = 'body') => {
     const m = onSurface(sh, dir, .005, 0, scale);
@@ -531,124 +508,244 @@ function buildGeometry(pheno, lod = 0) {
     else star(bodyS, sideDir(.05, .15, 1), .9, sc);
   }
 
-  // ---- accessories ----
-  if (pheno.accessory) accessory(b, pheno.accessory, C);
+  // ---- clothes trimmings + accessories ----
+  const worn = accList(pheno.accessory), hatted = worn.some(a => ACCESSORIES[a].slot === 'head');
+  dress?.trim?.(b, bodyS, hatted);
+  for (const a of worn) ACC[a]?.build(b, bodyS);
 
   const HO = headOffset(e);
   if (HO.lengthSq()) b.shift(['head', 'eyeL', 'eyeR', 'spin'], HO); // noodle neck / pouter: head raised
   if (e.neck === 'noodle') { // bridge the gap with a long neck
     const a = V(.13, .36, 0), z = V(H.x - .03, H.y - .03, 0).add(HO), d = z.clone().sub(a);
     b.blob('body', { ws: 14, hs: 12, matrix: alongY(a.clone().addScaledVector(d, .5), d), deform: (u) => u.set(u.x * .058, u.y * d.length() * .62, u.z * .054),
-      paint: (u) => tint(showSheen && u.y < .2 ? mix(C.head, col(sheen[0]), .4) : C.head, u, 9) });
+      paint: (u) => tint(showSheen && u.y < .2 ? mix(C.head, hex(sheen[0]), .4) : C.head, u, 9) });
   }
   if (e.legs === 'long') b.lift(LEG_LIFT);
   return { geometry: b.done(), kind };
 }
 
-function basisVecs(n) {
-  const z = n.clone().normalize();
-  const x = new THREE.Vector3().crossVectors(V(0, 1, 0), z).normalize();
-  const y = new THREE.Vector3().crossVectors(z, x);
-  return [x, y, z];
+// A curly feather: an open little torus (frillbacks have dozens, so it sheds segments at a distance).
+const curlGeo = (b) => new THREE.TorusGeometry(.026, .006, b.n(5, 3), b.n(12, 6), Math.PI * 1.4);
+
+// ---------- clothes (the outfit mutation) ----------
+// body(u, c) / wing(u, c): repaint a unit-sphere point of that part (c: the natural colour there).
+// trim(b, bodyS, hatted): extra pieces (a hat-like trim is skipped when the bird already wears a hat).
+// h: how far the outfit rises above the head (birdHeight). One entry per `outfit` allele.
+const front = (u, w, x0 = .6) => Math.abs(u.z) < w && u.x > x0; // a strip down the chest (zip, placket, shirt)
+const OUTFITS = {
+  suit: {
+    body: (u) => (u.x > .58 && Math.abs(u.z) < .5 * (u.y + .85) && u.y > -.55) ? hex('#f4f1ea') : hex('#30343f'),   // jacket open over a white shirt
+    wing: () => hex('#363b48'),
+    trim(b, bodyS) {
+      b.ell('body', [.006, .056, .02], hex('#a8323a'), onSurface(bodyS, V(.96, -.12, 0), .004, 0, 1), 8, 6);       // tie
+      b.ell('body', [.012, .014, .02], hex('#8a2830'), onSurface(bodyS, V(.94, .2, 0), .006, 0, 1), 8, 6);         // knot
+      for (const s of [-1, 1]) b.ell('body', [.007, .05, .02], hex('#262a33'), onSurface(bodyS, V(.85, .05, .32 * s), .004, .5 * s, 1), 8, 6); // lapels
+    },
+  },
+  elvis: {
+    body: () => hex('#f7f3ea'),
+    wing: (u) => u.x < -.5 ? hex('#e8e2d2') : hex('#f7f3ea'),
+    trim(b, bodyS, hatted) {
+      const gold = hex('#e2b13c'), ink = hex('#18171c');
+      for (let i = 0; i < 5; i++) for (const s of [-1, 1]) b.ell('body', [.008, .008, .004], gold, onSurface(bodyS, V(.9, .35 - i * .16, (.08 + i * .07) * s), .004, 0, 1), 6, 4); // studded V
+      b.ell('body', [.01, .01, .005], hex('#c0392b'), onSurface(bodyS, V(.95, -.5, 0), .005, 0, 1), 8, 5);                                         // belt jewel
+      b.prim('body', new THREE.TorusGeometry(.082, .018, 6, b.n(16, 8), Math.PI * 1.25), hex('#fbf8f0'), trs(V(.1, .43, 0), [Math.PI / 2, 0, Math.PI * .87])); // high collar
+      if (!hatted) {
+        b.blob('head', { ws: 14, hs: 10, color: ink, matrix: trs(V(H.x - .005, H.y + .06, 0), [0, 0, -.2]), deform: (u) => u.set(u.x * .08, u.y * .04, u.z * .07) }); // slicked back
+        b.blob('head', { ws: 14, hs: 10, color: ink, matrix: trs(V(H.x + .05, H.y + .085, 0), [0, 0, .55]), deform: (u) => u.set(u.x * .055, u.y * .03, u.z * .05) }); // the quiff, up and forward
+        b.prim('head', new THREE.TorusGeometry(.022, .008, 6, b.n(12, 6), Math.PI * 1.3), ink, trs(V(H.x + .085, H.y + .075, 0), [0, 0, -.6]));                     // its curl
+      }
+      for (const s of [-1, 1]) b.ell('head', [.016, .03, .006], ink, trs(V(H.x + .005, H.y - .012, .074 * s)), 8, 6);                         // sideburns
+    },
+  },
+  punk: { h: .07, // mohawk
+    body: (u) => (front(u, .22, .7) && u.y > -.4) ? hex('#c8c2b8') : hex('#1f1e24'),                       // leather, a torn tee showing
+    wing: () => hex('#26252c'),
+    trim(b, bodyS, hatted) {
+      const stud = hex('#cfd3d8');
+      for (const s of [-1, 1]) for (let i = 0; i < 4; i++) b.prim('body', new THREE.ConeGeometry(.007, .014, 6), stud, onSurface(bodyS, V(.1 - i * .2, .6, .78 * s), .004, 0, 1).multiply(TURN_X));
+      if (!hatted) for (let i = 0; i < 6; i++) { // mohawk: a row of spikes over the crown, hot pink and green
+        const a = -.9 + i * .34, dir = V(Math.sin(a) * .5, 1, 0).normalize();
+        b.prim('head', new THREE.ConeGeometry(.014, .06 + Math.cos(a) * .02, 6), i % 2 ? hex('#e8408a') : hex('#7ad04a'), alongY(V(H.x - .01 + Math.sin(a) * .08, H.y + .075 + Math.cos(a) * .01, 0).addScaledVector(dir, .03), dir));
+      }
+    },
+  },
+  tracksuit: { // black with three white stripes down each wing and side
+    body: (u) => front(u, .05) ? hex('#9a9aa2') : (Math.abs(u.z) > .5 && [-.5, -.62, -.74].some(k => Math.abs(u.y - k) < .028)) ? hex('#f4f2ec') : hex('#22232a'),
+    wing: (u) => [.02, .22, .42].some(k => Math.abs(u.y - k) < .045) && u.x > -.5 ? hex('#f4f2ec') : hex('#26272e'),
+  },
+  hawaiian: { // teal with hibiscus flowers
+    body: (u) => hibiscus(u, 1),
+    wing: (u) => hibiscus(u, 2),
+  },
+  raincoat: {
+    body: (u) => front(u, .03) ? hex('#c9971a') : hex('#f2c230'),
+    wing: (u) => u.x < -.6 ? hex('#e0b021') : hex('#f2c230'),
+    trim(b, bodyS) { for (let i = 0; i < 3; i++) b.ell('body', [.011, .006, .012], hex('#6b4a2a'), onSurface(bodyS, V(.95, .2 - i * .24, .06), .006, 0, 1), 8, 5); }, // toggles
+  },
+  christmas: { h: .12, // Santa suit: red coat, white fur front and hem, black belt with a gold buckle, and the hat
+    body: (u) => (u.y < -.62 || front(u, .13, .55)) ? hex('#fbf8f2') : (u.y > -.34 && u.y < -.2 && u.x > -.2) ? hex('#1e1c1c') : hex('#c4302b'),
+    wing: (u) => u.x < -.62 ? hex('#fbf8f2') : hex('#b82a26'),
+    trim(b, bodyS, hatted) {
+      b.prim('body', new THREE.BoxGeometry(.034, .028, .012), hex('#e8b64c'), onSurface(bodyS, V(.94, -.28, 0), .006, 0, 1));
+      if (hatted) return;
+      const m = trs(V(H.x - .02, H.y + .07, 0), [0, 0, .55]);
+      b.prim('head', new THREE.ConeGeometry(.06, .15, b.n(16, 8)), hex('#c4302b'), rel(m, V(0, .06, 0)));
+      b.prim('head', new THREE.TorusGeometry(.058, .016, b.n(8, 4), b.n(20, 10)), hex('#fbf8f2'), rel(m, V(0, -.012, 0), [Math.PI / 2, 0, 0]));
+      b.ell('head', [.022, .022, .022], hex('#fbf8f2'), rel(m, V(0, .14, 0)), 10, 8);
+    },
+  },
+  easter: { h: .2, // bunny costume: pastel suit with painted eggs, long ears, a cotton tail
+    body: (u) => { const f = vnoise(u.clone().multiplyScalar(4.5), 77); return f > .8 ? hex('#f6b3c8') : f > .74 ? hex('#bfe6c6') : f < .14 ? hex('#ffe59a') : hex('#e7ddf6'); },
+    wing: () => hex('#ece4f8'),
+    trim(b, bodyS, hatted) {
+      b.ell('tail', [.05, .05, .05], hex('#fffdf8'), trs(V(-.25, .3, 0)), 12, 8); // cotton tail
+      if (hatted) return;
+      for (const s of [-1, 1]) {
+        const base = V(H.x - .03, H.y + .06, .035 * s), dir = V(-.25, 1, .22 * s).normalize();
+        b.ell('head', [.024, .1, .012], hex('#fbf8f2'), alongY(base.clone().addScaledVector(dir, .1), dir), 12, 8);
+        b.ell('head', [.013, .075, .006], hex('#f4a9bf'), alongY(base.clone().addScaledVector(dir, .1).add(V(.006, 0, 0)), dir), 10, 6);
+      }
+    },
+  },
+  halloween: { h: .06, // pumpkin costume: ribbed orange, a carved grin, a leafy stem
+    body: (u) => { const rib = .5 + .5 * Math.cos(Math.atan2(u.z, u.y) * 8); return mix(hex('#ec7d2a'), hex('#b9541a'), rib * .55); },
+    wing: (u) => u.x < -.55 ? hex('#b9541a') : hex('#de6f22'),
+    trim(b, bodyS, hatted) {
+      const ink = hex('#2a1a10'), carve = new THREE.Matrix4().makeScale(1, 1, .25);
+      for (const s of [-1, 1]) b.prim('body', new THREE.ConeGeometry(.022, .03, 3), ink, onSurface(bodyS, V(.92, .3, .2 * s), .004, 0, 1, UPY).multiply(carve));
+      for (let i = 0; i < 5; i++) b.prim('body', new THREE.ConeGeometry(.012, .018, 3), ink, onSurface(bodyS, V(.95, -.12 + (i % 2) * .04, (i - 2) * .085), .004, i % 2 ? Math.PI : 0, 1, UPY).multiply(carve));
+      if (hatted) return;
+      b.prim('head', new THREE.CylinderGeometry(.012, .016, .05, 8), hex('#4f6b2a'), trs(V(H.x - .01, H.y + .1, 0), [0, 0, .25]));
+      b.ell('head', [.035, .006, .018], hex('#6d9a3a'), trs(V(H.x - .035, H.y + .105, .02), [.3, 0, .4]), 10, 6);
+    },
+  },
+  jersey: { // Jacob's superfan jersey: park orange, cream sleeves, a big number 1
+    body: (u) => (u.y > .55 && u.x > .2) ? hex('#f5ead8') : hex('#c67139'),
+    wing: (u) => u.x < -.55 ? hex('#c67139') : hex('#f5ead8'),
+    trim(b, bodyS) {
+      const cream = hex('#fbf6ec'), m = onSurface(bodyS, V(.95, -.05, 0), .006, 0, 1, UPY);
+      b.prim('body', new THREE.BoxGeometry(.016, .085, .01), cream, m.clone());
+      b.prim('body', new THREE.BoxGeometry(.012, .03, .01), cream, rel(m, V(-.014, .03, 0), [0, 0, -.8]));
+      b.prim('body', new THREE.BoxGeometry(.04, .012, .01), cream, rel(m, V(0, -.043, 0)));
+    },
+  },
+};
+function hibiscus(u, s) {
+  const f = vnoise(u.clone().multiplyScalar(5.5).addScalar(s * 3.1), 40 + s);
+  return f > .78 ? hex('#f07aa0') : f > .72 ? hex('#ffd34d') : f < .16 ? hex('#f6f3ea') : hex('#2a9ca2');
 }
 
-function accessory(b, acc, C) {
-  const top = V(H.x - .005, H.y + .075, 0);
-  const dark = col('#2a2620'), rust = col('#a8453c'), olive = col('#7a8a5e'), goldc = col('#e8b64c');
-  switch (acc) {
-    case 'tophat': {
-      const m = trs(top, [0, 0, .14]);
-      b.prim('head', new THREE.CylinderGeometry(.088, .088, .012, 20), dark, m.clone().multiply(trs(V(0, 0, 0))));
-      b.prim('head', new THREE.CylinderGeometry(.056, .06, .11, 20), dark, m.clone().multiply(trs(V(0, .06, 0))));
-      b.prim('head', new THREE.CylinderGeometry(.0615, .0615, .024, 20), col('#c67139'), m.clone().multiply(trs(V(0, .022, 0))));
-      break;
+// ---------- accessories ----------
+// build(b, bodyS): adds the item's pieces. h: how far it rises above the head (birdHeight).
+// One entry per item in genetics' ACCESSORIES (a test checks), so adding a hat = a line there + a builder here.
+const TOP = V(H.x - .005, H.y + .075, 0);                 // crown of the head, where hats sit
+const top = (x = 0, y = 0, z = 0) => TOP.clone().add(V(x, y, z));
+const RUST = hex('#a8453c'), OLIVE = hex('#7a8a5e'), GOLD = hex('#e8b64c');
+const ACC = {
+  tophat: { h: .16, build(b) {
+    const m = trs(TOP, [0, 0, .14]), dark = hex('#2a2620');
+    b.prim('head', new THREE.CylinderGeometry(.088, .088, .012, b.n(20, 8)), dark, m.clone());
+    b.prim('head', new THREE.CylinderGeometry(.056, .06, .11, b.n(20, 8)), dark, rel(m, V(0, .06, 0)));
+    b.prim('head', new THREE.CylinderGeometry(.0615, .0615, .024, b.n(20, 8)), hex('#c67139'), rel(m, V(0, .022, 0)));
+  } },
+  beret: { build(b) {
+    b.ell('head', [.095, .032, .095], RUST, trs(top(0, -.005), [.25, 0, .12]), 16, 10);
+    b.prim('head', new THREE.CylinderGeometry(.005, .007, .025, 6), RUST, trs(top(0, .035, .008), [.25, 0, .12]));
+  } },
+  cowboy: { h: .08, build(b) {
+    const brown = hex('#a97b4a');
+    b.blob('head', { ws: 22, hs: 8, color: brown, matrix: trs(top(0, -.005), [0, 0, .1]), deform: (u) => u.set(u.x * .15, u.y * .012 + (u.z * u.z) * .03, u.z * .13) });
+    b.ell('head', [.068, .06, .058], brown, trs(top(0, .035), [0, 0, .1]), 16, 10);
+    b.prim('head', new THREE.CylinderGeometry(.064, .066, .016, b.n(18, 8)), hex('#6e4c28'), trs(top(0, .012), [0, 0, .1]));
+  } },
+  crown: { h: .1, build(b) {
+    const m = trs(TOP, [0, 0, .08], [1.35, 1.35, 1.35]);
+    b.prim('head', new THREE.CylinderGeometry(.052, .048, .045, b.n(20, 8), 1, true), GOLD, rel(m, V(0, .022, 0)));
+    b.prim('head', new THREE.CylinderGeometry(.047, .047, .01, b.n(20, 8)), hex('#8d3b32'), rel(m, V(0, .012, 0)));
+    for (let i = 0; i < 6; i++) {
+      const a = i / 6 * Math.PI * 2, x = Math.cos(a), z = Math.sin(a);
+      b.prim('head', new THREE.ConeGeometry(.015, .04, 4), GOLD, rel(m, V(x * .05, .062, z * .05)));
+      b.ell('head', [.005, .005, .005], GOLD, rel(m, V(x * .05, .085, z * .05)), 6, 4);
+      b.ell('head', [.008, .008, .006], i % 2 ? RUST : hex('#4f7fc0'), rel(m, V(x * .053, .024, z * .053)), 6, 4);
     }
-    case 'beret': {
-      b.ell('head', [.095, .032, .095], rust, trs(top.clone().add(V(0, -.005, 0)), [.25, 0, .12]), 16, 10);
-      b.prim('head', new THREE.CylinderGeometry(.005, .007, .025, 6), rust, trs(top.clone().add(V(0, .035, .008)), [.25, 0, .12]));
-      break;
+  } },
+  monocle: { build(b) {
+    const E = EYE[1], out = V(.35, .05, 1).normalize(), brass = hex('#b18f3e');
+    b.prim('eyeR', new THREE.TorusGeometry(.032, .005, 6, b.n(20, 10)), brass, basis(out, UPY).setPosition(E.clone().addScaledVector(out, .012)));
+    b.prim('head', new THREE.CylinderGeometry(.0018, .0018, .12, 4), brass, trs(E.clone().add(V(-.01, -.07, .02)), [0, 0, .25]));
+  } },
+  sunglasses: { build(b) {
+    const lens = hex('#23212b');
+    EYE.forEach((E, i) => {
+      const out = V(.35, .05, i ? 1 : -1).normalize();
+      b.prim(i ? 'eyeR' : 'eyeL', new THREE.CylinderGeometry(.03, .03, .006, b.n(16, 8)), lens, alongY(E.clone().addScaledVector(out, .012), out));
+    });
+    b.prim('head', new THREE.CylinderGeometry(.004, .004, .1, 6), lens, trs(V(H.x + .07, H.y + .03, 0), [Math.PI / 2, 0, 0]));
+  } },
+  bowtie: { build(b) {
+    const c0 = V(.215, .34, 0);
+    for (const s of [-1, 1]) b.prim('body', new THREE.ConeGeometry(.03, .05, 4), RUST, alongY(c0.clone().add(V(0, 0, .024 * s)), V(0, 0, -s), [1, 1, .5]));
+    b.ell('body', [.012, .012, .012], hex('#7c3129'), trs(c0), 8, 6);
+  } },
+  scarf: { build(b) {
+    b.prim('body', new THREE.TorusGeometry(.085, .032, b.n(10, 5), b.n(22, 10)), OLIVE, trs(V(.125, .385, 0), [Math.PI / 2, -.5, 0]));
+    b.blob('body', { ws: 10, hs: 8, color: OLIVE, matrix: trs(V(.16, .3, .085), [.3, 0, -.25]), deform: (u) => u.set(u.x * .03, u.y * .085, u.z * .014) });
+    for (const dz of [-.012, .012]) b.prim('body', new THREE.CylinderGeometry(.003, .003, .03, 4), hex('#56633f'), trs(V(.14, .21, .09 + dz), [.3, 0, -.25]));
+  } },
+  partyhat: { h: .16, build(b) {
+    const m = trs(top(-.005, .045), [0, 0, .25]), yellow = hex('#f2c94c');
+    b.prim('head', new THREE.ConeGeometry(.045, .12, b.n(16, 8)), hex('#e0508a'), m.clone());
+    for (let i = 0; i < 5; i++) b.ell('head', [.007, .007, .007], i % 2 ? hex('#7ac5e0') : yellow, rel(m, V(Math.cos(i * 2.4) * .026, -.03 + i * .014, Math.sin(i * 2.4) * .026)), 6, 4);
+    b.ell('head', [.016, .016, .016], yellow, rel(m, V(0, .065, 0)), 8, 6);
+  } },
+  chefhat: { h: .16, build(b) {
+    const w = hex('#fbfaf6');
+    b.prim('head', new THREE.CylinderGeometry(.056, .058, .06, b.n(18, 8)), w, trs(top(0, .02), [0, 0, .1]));
+    [[0, .09, 0, .05], [.035, .08, .03, .04], [-.035, .08, .03, .04], [.035, .08, -.03, .04], [-.035, .08, -.03, .04]].forEach(([x, y, z, r]) =>
+      b.ell('head', [r, r * .85, r], w, trs(top(x, y, z)), 12, 8));
+  } },
+  mustache: { build(b) {
+    const brown = hex('#3a2a20');
+    for (const s of [-1, 1]) {
+      b.blob('head', { ws: 12, hs: 8, color: brown, matrix: trs(V(H.x + .09, H.y - .032, .036 * s), [.5 * s, -.35 * s, -.15]), deform: (u) => u.set(u.x * .022, u.y * .016, u.z * .05) });
+      b.prim('head', new THREE.TorusGeometry(.016, .007, 6, b.n(12, 6), Math.PI * 1.4), brown, trs(V(H.x + .085, H.y - .02, .082 * s), [0, s > 0 ? -.4 : Math.PI + .4, 0]));
     }
-    case 'cowboy': {
-      const brown = col('#a97b4a');
-      b.blob('head', { ws: 22, hs: 8, color: brown, matrix: trs(top.clone().add(V(0, -.005, 0)), [0, 0, .1]),
-        deform: (u) => u.set(u.x * .15, u.y * .012 + (u.z * u.z) * .03, u.z * .13) });
-      b.ell('head', [.068, .06, .058], brown, trs(top.clone().add(V(0, .035, 0)), [0, 0, .1]), 16, 10);
-      b.prim('head', new THREE.CylinderGeometry(.064, .066, .016, 18), col('#6e4c28'), trs(top.clone().add(V(0, .012, 0)), [0, 0, .1]));
-      break;
+  } },
+  blackhat: { h: .1, build(b) { // a black fedora, worn level: wide brim, pinched crown, dark band
+    const ink = hex('#1b1a1f'), m = trs(top(0, -.006), [0, 0, .06]);
+    b.blob('head', { ws: 22, hs: 8, color: ink, matrix: m.clone(), deform: (u) => u.set(u.x * .115, u.y * .01 + (u.z * u.z) * .012, u.z * .108) });
+    b.prim('head', new THREE.CylinderGeometry(.05, .062, .075, b.n(18, 8)), ink, rel(m, V(0, .04, 0)));
+    b.ell('head', [.052, .012, .042], hex('#121115'), rel(m, V(0, .076, 0)), 12, 6); // the pinch on top
+    b.prim('head', new THREE.CylinderGeometry(.0625, .064, .016, b.n(18, 8)), hex('#3b3a42'), rel(m, V(0, .013, 0)));
+  } },
+  goldchain: { build(b, bodyS) { // a heavy rope chain hanging round the neck, with a big medallion
+    const g1 = hex('#f0c14b'), g2 = hex('#c9962e'), n = 26;
+    for (let i = 0; i < n; i++) {
+      const a = i / n * Math.PI * 2, fr = Math.max(0, Math.cos(a)); // fr: how far round the front (hangs lower there)
+      b.ell('body', [.013, .009, .009], i % 2 ? g1 : g2, trs(V(.13 + Math.cos(a) * (.095 + fr * .03), .395 - fr * .085, Math.sin(a) * .1), [a, 0, 0]), 8, 5);
     }
-    case 'crown': {
-      const m = trs(top.clone().add(V(0, .0, 0)), [0, 0, .08], [1.35, 1.35, 1.35]);
-      b.prim('head', new THREE.CylinderGeometry(.052, .048, .045, 20, 1, true), goldc, m.clone().multiply(trs(V(0, .022, 0))));
-      b.prim('head', new THREE.CylinderGeometry(.047, .047, .01, 20), col('#8d3b32'), m.clone().multiply(trs(V(0, .012, 0))));
-      for (let i = 0; i < 6; i++) {
-        const a = i / 6 * Math.PI * 2;
-        b.prim('head', new THREE.ConeGeometry(.015, .04, 4), goldc, m.clone().multiply(trs(V(Math.cos(a) * .05, .062, Math.sin(a) * .05))));
-        b.ell('head', [.005, .005, .005], goldc, m.clone().multiply(trs(V(Math.cos(a) * .05, .085, Math.sin(a) * .05))), 6, 4);
-        b.ell('head', [.008, .008, .006], i % 2 ? rust : col('#4f7fc0'), m.clone().multiply(trs(V(Math.cos(a) * .053, .024, Math.sin(a) * .053))), 6, 4);
-      }
-      break;
-    }
-    case 'monocle': {
-      const E = EYE[1], out = V(.35, .05, 1).normalize();
-      b.prim('eyeR', new THREE.TorusGeometry(.032, .005, 6, 20), col('#b18f3e'), new THREE.Matrix4().makeBasis(...basisVecs(out)).setPosition(E.clone().addScaledVector(out, .012)));
-      b.prim('head', new THREE.CylinderGeometry(.0018, .0018, .12, 4), col('#b18f3e'), trs(E.clone().add(V(-.01, -.07, .02)), [0, 0, .25]));
-      break;
-    }
-    case 'sunglasses': {
-      const lens = col('#23212b');
-      EYE.forEach((E, i) => {
-        const out = V(.35, .05, i ? 1 : -1).normalize();
-        b.prim(i ? 'eyeR' : 'eyeL', new THREE.CylinderGeometry(.03, .03, .006, 16), lens, alongY(E.clone().addScaledVector(out, .012), out));
-      });
-      b.prim('head', new THREE.CylinderGeometry(.004, .004, .1, 6), lens, trs(V(H.x + .07, H.y + .03, 0), [Math.PI / 2, 0, 0]));
-      break;
-    }
-    case 'bowtie': {
-      const c0 = V(.215, .34, 0);
-      for (const s of [-1, 1]) b.prim('body', new THREE.ConeGeometry(.03, .05, 4), rust, alongY(c0.clone().add(V(0, 0, .024 * s)), V(0, 0, -s), [1, 1, .5]));
-      b.ell('body', [.012, .012, .012], col('#7c3129'), trs(c0), 8, 6);
-      break;
-    }
-    case 'scarf': {
-      b.prim('body', new THREE.TorusGeometry(.085, .032, 10, 22), olive, trs(V(.125, .385, 0), [Math.PI / 2, -.5, 0]));
-      b.blob('body', { ws: 10, hs: 8, color: olive, matrix: trs(V(.16, .3, .085), [.3, 0, -.25]), deform: (u) => u.set(u.x * .03, u.y * .085, u.z * .014) });
-      for (const dz of [-.012, .012]) b.prim('body', new THREE.CylinderGeometry(.003, .003, .03, 4), col('#56633f'), trs(V(.14, .21, .09 + dz), [.3, 0, -.25]));
-      break;
-    }
-    case 'partyhat': {
-      const m = trs(top.clone().add(V(-.005, .045, 0)), [0, 0, .25]);
-      b.prim('head', new THREE.ConeGeometry(.045, .12, 16), col('#e0508a'), m.clone());
-      for (let i = 0; i < 5; i++) b.ell('head', [.007, .007, .007], i % 2 ? col('#7ac5e0') : col('#f2c94c'), m.clone().multiply(trs(V(Math.cos(i * 2.4) * .026, -.03 + i * .014, Math.sin(i * 2.4) * .026))), 6, 4);
-      b.ell('head', [.016, .016, .016], col('#f2c94c'), m.clone().multiply(trs(V(0, .065, 0))), 8, 6);
-      break;
-    }
-    case 'chefhat': {
-      const w = col('#fbfaf6');
-      b.prim('head', new THREE.CylinderGeometry(.056, .058, .06, 18), w, trs(top.clone().add(V(0, .02, 0)), [0, 0, .1]));
-      [[0, .09, 0, .05], [.035, .08, .03, .04], [-.035, .08, .03, .04], [.035, .08, -.03, .04], [-.035, .08, -.03, .04]].forEach(([x, y, z, r]) =>
-        b.ell('head', [r, r * .85, r], w, trs(top.clone().add(V(x, y, z))), 12, 8));
-      break;
-    }
-    case 'mustache': {
-      const brown = col('#3a2a20');
-      for (const s of [-1, 1]) {
-        b.blob('head', { ws: 12, hs: 8, color: brown, matrix: trs(V(H.x + .09, H.y - .032, .036 * s), [.5 * s, -.35 * s, -.15]), deform: (u) => u.set(u.x * .022, u.y * .016, u.z * .05) });
-        b.prim('head', new THREE.TorusGeometry(.016, .007, 6, 12, Math.PI * 1.4), brown, trs(V(H.x + .085, H.y - .02, .082 * s), [0, s > 0 ? -.4 : Math.PI + .4, 0]));
-      }
-      break;
-    }
-    case 'propeller': {
-      b.blob('head', { ws: 16, hs: 10, color: col('#c85b48'), matrix: trs(top.clone().add(V(0, -.012, 0))),
-        deform: (u) => u.set(u.x * .082, Math.max(0, u.y) * .06, u.z * .08) });
-      b.prim('head', new THREE.CylinderGeometry(.004, .004, .07, 6), col('#4a4640'), trs(top.clone().add(V(0, .06, 0))));
-      const sp = PIVOT.spin;
-      b.ell('spin', [.07, .006, .018], goldc, trs(sp.clone().add(V(.06, 0, 0))), 10, 6);
-      b.ell('spin', [.07, .006, .018], olive, trs(sp.clone().add(V(-.06, 0, 0))), 10, 6);
-      b.ell('spin', [.01, .01, .01], col('#4a4640'), trs(sp.clone()), 6, 4);
-      break;
-    }
-  }
-}
+    const m = onSurface(bodyS, V(.95, .12, 0), .008, 0, 1);
+    b.prim('body', new THREE.CylinderGeometry(.03, .03, .008, b.n(18, 8)), g1, m.clone().multiply(TURN_X));
+    b.prim('body', new THREE.TorusGeometry(.03, .004, 6, b.n(18, 8)), g2, rel(m, V(0, 0, .004)));
+  } },
+  fancap: { h: .05, build(b) { // a superfan's baseball cap: park orange crown, cream peak pointing forward, a button on top
+    const or = hex('#c67139'), cream = hex('#f5ead8');
+    b.blob('head', { ws: 16, hs: 10, color: or, matrix: trs(top(-.005, -.022)), deform: (u) => u.set(u.x * .088, Math.max(0, u.y) * .065, u.z * .084) });
+    b.blob('head', { ws: 14, hs: 6, color: cream, matrix: trs(top(.085, -.018), [0, 0, -.12]), deform: (u) => u.set(u.x * .06, u.y * .008, u.z * .07 * (1 - .3 * Math.max(0, u.x))) });
+    b.ell('head', [.01, .006, .01], cream, trs(top(-.005, .045)), 8, 5);
+  } },
+  propeller: { h: .1, build(b) {
+    const grey = hex('#4a4640'), sp = PIVOT.spin;
+    b.blob('head', { ws: 16, hs: 10, color: hex('#c85b48'), matrix: trs(top(0, -.012)), deform: (u) => u.set(u.x * .082, Math.max(0, u.y) * .06, u.z * .08) });
+    b.prim('head', new THREE.CylinderGeometry(.004, .004, .07, 6), grey, trs(top(0, .06)));
+    b.ell('spin', [.07, .006, .018], GOLD, trs(sp.clone().add(V(.06, 0, 0))), 10, 6);
+    b.ell('spin', [.07, .006, .018], OLIVE, trs(sp.clone().add(V(-.06, 0, 0))), 10, 6);
+    b.ell('spin', [.01, .01, .01], grey, trs(sp.clone()), 6, 4);
+  } },
+};
+export const ACCESSORY_BUILDERS = ACC; // (tests: every accessory has a builder)
+export const OUTFIT_LOOKS = OUTFITS;   // (tests: every outfit allele has a look)
 
 // ---------- materials (shared; created once so program count stays constant) ----------
 export function makeMaterials() {
@@ -666,8 +763,10 @@ export function makeMaterials() {
 const BIRD_BOUNDS = new THREE.Sphere(V(0, .4, 0), 1.0);
 
 export class PigeonRig {
-  constructor(pheno, materials, castShadow = true) {
-    const { geometry, kind } = pigeonGeometry(pheno);
+  // lod: start at this detail (a bird born far from the camera never builds its close-up geometry until needed).
+  constructor(pheno, materials, castShadow = true, lod = 0) {
+    this.key = phenoKey(pheno);
+    const { geometry, kind } = pigeonGeometry(pheno, lod, this.key);
     const bones = {}, list = [];
     for (const name of BONES) {
       const bone = new THREE.Bone(); bone.name = name;
@@ -682,7 +781,7 @@ export class PigeonRig {
     // upright breeds (croppers, Maltese, Scandaroon) stand tall: tilt the body, keep the head level
     this.restRot = Object.fromEntries(BONES.map(n => [n, new THREE.Euler()]));
     if (pheno.e.posture === 'upright') { this.restRot.body.z = .4; this.restRot.head.z = -.32; this.restRot.tail.z = -.22; }
-    this.pheno = pheno; this.lod = 0;
+    this.pheno = pheno; this.lod = lod;
     const mesh = new THREE.SkinnedMesh(geometry, materials[kind]);
     mesh.add(bones.root);
     mesh.updateMatrixWorld(true);
@@ -695,6 +794,6 @@ export class PigeonRig {
     this.mesh = mesh; this.bones = bones;
     this.group = new THREE.Group(); this.group.add(mesh);
   }
-  setLod(lod) { if (lod !== this.lod) { this.lod = lod; this.mesh.geometry = pigeonGeometry(this.pheno, lod).geometry; } }
+  setLod(lod) { if (lod !== this.lod) { this.lod = lod; this.mesh.geometry = pigeonGeometry(this.pheno, lod, this.key).geometry; } }
   dispose() { this.mesh.skeleton.dispose(); /* geometry is cached/shared */ }
 }

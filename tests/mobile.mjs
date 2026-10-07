@@ -1,10 +1,10 @@
 // Phone: every corner of the park (and a bird hidden behind the fountain) can be reached and selected
 // with phone gestures only — one-finger orbit, two-finger pan/pinch, tap. Real multi-touch via CDP
 // Input.dispatchTouchEvent (the browser's own input pipeline, not synthetic DOM events).
-import { startServer, launch, boot, frames, shot, state, check, failures } from './lib.mjs';
+import { setup, finish, boot, frames, shot, state, check, checkNoErrors, screenOf, PHONE } from './lib.mjs';
 
-const srv = await startServer({ dist: process.argv.includes('--dist') }); const br = await launch();
-const { page, errors } = await boot(br, srv.url, 'nosave&seed=21&hour=15', { viewport: { width: 390, height: 844 }, mobile: true });
+const { srv, br } = await setup();
+const { page, errors } = await boot(br, srv.url, 'nosave&seed=21&hour=15', PHONE);
 const cdp = await page.context().newCDPSession(page);
 const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], id) => ({ x, y, id })) });
 const wait = (ms) => page.waitForTimeout(ms);
@@ -20,7 +20,8 @@ async function drag1(x, y, dx, dy, steps = 10) {
   await touch('touchEnd', []); await settle();
 }
 const tap = async (x, y) => { await touch('touchStart', [[x, y]]); await wait(40); await touch('touchEnd', []); await settle(); };
-const scr = (id) => page.evaluate((id) => window.pp.screenOf(id), id);
+const scr = (id) => screenOf(page, id);
+const tapSel = async (sel) => { const b = await page.locator(sel).boundingBox(); await tap(b.x + b.width / 2, b.y + b.height / 2); };
 const recenter = async () => { await page.evaluate(() => window.pp.cam('overview')); await settle(); };
 
 // stage: birds in the four plaza corners + one behind the fountain (hidden from the default phone camera)
@@ -70,7 +71,7 @@ for (const [where, id] of Object.entries(targets)) {
 
 // every monument can be reached and tapped open with phone gestures (they sit in a ring beyond the plaza)
 {
-  await page.evaluate(() => { window.pp.win(); const S = window.__game.sim; S.stats.maxGen = 10; S.stats.births = 100; S.stats.happenings = 10; while (S.roost.length < 8) S.roost.push({ name: 'x', genome: S.pigeons[0].genome, accessory: null, gen: 1 }); window.pp.step(20); });
+  await page.evaluate(() => { window.pp.win({ all: true }); window.pp.step(20); });
   const ids = (await page.evaluate(() => window.pp.achievements())).built;
   const mon = (id) => page.evaluate((id) => { const r = window.pp.monumentScreen(id); return { ...r, on: r.x > 20 && r.x < 370 && r.y > 60 && r.y < 790 }; }, id);
   let reached = 0; const missed = [];
@@ -104,22 +105,22 @@ check(Math.abs(s1.x) + Math.abs(s1.z) > .4, `two-finger drag pans the camera (ta
 await page.evaluate(() => window.pp.render()); await wait(500); await page.evaluate(() => window.pp.render());
 const rb = await page.locator('#recenter');
 check(await rb.isVisible(), 'recenter button shows after moving the camera');
-const b = await rb.boundingBox(); await tap(b.x + b.width / 2, b.y + b.height / 2);
+await tapSel('#recenter');
 check((await page.evaluate(() => window.__game.cam.name)) === 'overview', 'recenter button returns to the overview');
 
 // secret codes on a phone: Settings → Secret code → type → Go
 {
-  const sb = await page.locator('#b-settings').boundingBox(); await tap(sb.x + sb.width / 2, sb.y + sb.height / 2);
+  await tapSel('#b-settings');
   await page.evaluate(() => window.pp.render());
-  const ib = await page.locator('#settings .code input').boundingBox(); await tap(ib.x + ib.width / 2, ib.y + ib.height / 2);
+  await tapSel('#settings .code input');
   await page.keyboard.type('boogie'); await page.keyboard.press('Enter'); await settle();
   check((await state(page)).happening === 'dance', 'phone: Secret code "boogie" in settings starts a disco');
-  await page.evaluate(() => { const S = window.__game.sim; S.happening = null; for (const p of S.pigeons) p.busy = null; });
-  await tap(sb.x + sb.width / 2, sb.y + sb.height / 2); await page.evaluate(() => window.pp.render());
-  const ib2 = await page.locator('#settings .code input').boundingBox(); await tap(ib2.x + ib2.width / 2, ib2.y + ib2.height / 2);
+  await page.evaluate(() => window.pp.endHappening());
+  await tapSel('#b-settings'); await page.evaluate(() => window.pp.render());
+  await tapSel('#settings .code input');
   await page.keyboard.type('bread'); await page.keyboard.press('Enter'); await settle();
   check((await state(page)).happening === 'bread', 'phone: Secret code "bread" drops a baguette');
-  await page.evaluate(() => { const S = window.__game.sim; S.happening = null; S.bread = null; for (const p of S.pigeons) p.busy = null; });
+  await page.evaluate(() => window.pp.endHappening());
 }
 
 // the page itself never zooms: viewport locked, controls use touch-action manipulation, and double-tapping
@@ -133,7 +134,7 @@ check((await page.evaluate(() => window.__game.cam.name)) === 'overview', 'recen
   await page.evaluate(() => { document.querySelector('#settings').classList.add('hidden'); window.__game.ui.closeDialog(); if (window.__game.paused) window.__game.togglePause(false); });
 }
 // compact layout: one-row top bar, sheet ≤ 40% of the screen
-await page.evaluate((id) => { window.pp.select(id); window.pp.render(); }, targets['near-right corner']);
+await page.evaluate(() => { const id = window.pp.spawn('founder', { x: 4, z: 2.5 }); window.pp.select(id); window.pp.render(); }); // (the monument check cleared the park)
 await wait(500); await page.evaluate(() => window.pp.render());
 const lay = await page.evaluate(() => {
   const r = (s) => document.querySelector(s).getBoundingClientRect();
@@ -141,9 +142,8 @@ const lay = await page.evaluate(() => {
   return { rows: Math.max(...mids) - Math.min(...mids) < 12 ? 1 : 2, bar: r('.topbar').bottom, sheet: r('#inspector').height / innerHeight, roost: r('#roost').height, overflow: document.documentElement.scrollWidth > innerWidth };
 });
 check(lay.rows === 1 && lay.bar < 50, `top bar is one row (${lay.bar.toFixed(0)} px tall)`);
-check(lay.sheet <= .4, `bird sheet ≤ 40% of the screen (${(lay.sheet * 100).toFixed(0)}%)`);
+check(lay.sheet > .1 && lay.sheet <= .4, `bird sheet open and ≤ 40% of the screen (${(lay.sheet * 100).toFixed(0)}%)`);
 check(lay.roost <= 46 && !lay.overflow, `slim roost bar (${lay.roost.toFixed(0)} px), no horizontal overflow`);
 await shot(page, 'phone-compact.png');
-check(errors.length === 0, 'no console errors ' + errors.join(' | '));
-await br.close(); await srv.close();
-process.exit(failures() ? 1 : 0);
+checkNoErrors(errors);
+await finish(br, srv, 'phone');

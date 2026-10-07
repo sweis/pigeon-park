@@ -1,19 +1,24 @@
-// Pigeon Park — renders sim state: animated pigeon rigs, eggs, poop, contact shadows, selection ring.
+// Pigeon Park — renders sim state: animated pigeon rigs (with LOD), contact shadows and glow halos, eggs, poop,
+// the selection ring, trait-finder markers, and the happenings' props (bread, UFO, goddess, rain).
 
 import * as THREE from 'three';
 import { PigeonRig, sizeOf, birdHeight, pruneGeometryCache } from './pigeon3d.js';
-import { traitStatus } from './genetics.js';
-import { damp, raySphere } from './util.js';
+import { traitStatus, computePheno, pureGenome } from './genetics.js';
+import { chickK, POOP } from './sim.js';
+import { damp, angDamp, raySphere } from './util.js';
+import { V, groundRing, pooled } from './geom.js';
 
 // Trait finder: 2 = shows the trait (green), 1 = carries it hidden (yellow).
 const FIND_COLORS = { 2: '#3fbf5f', 1: '#f2c230' }; // (the banner's dots in style.css match)
 const FIND_MAX = 50;
 
-const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const POSE_BONES = ['body', 'head', 'wingL', 'wingR', 'legL', 'legR', 'tail', 'eyeL', 'eyeR'];
 const _tgt = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
 const TAU = Math.PI * 2;
-function angDamp(a, b, k, dt) { let d = ((b - a + Math.PI) % TAU + TAU) % TAU - Math.PI; return a + d * (1 - Math.exp(-k * dt)); }
+// Level of detail: far birds (past LOD_AT × size from the camera) use the light geometry. A metre of
+// hysteresis so a bird pottering along the boundary doesn't flip back and forth.
+const LOD_AT = 7.5;
+function lodFor(dist, s, cur) { const at = LOD_AT * Math.max(1, s); return dist > at + (cur === 0 ? .5 : -.5) ? 1 : 0; }
 
 function radialTexture(inner, outer) {
   const c = document.createElement('canvas'); c.width = c.height = 64;
@@ -24,12 +29,9 @@ function radialTexture(inner, outer) {
   return t;
 }
 
-function chickScale(age) { return age < 9 ? .58 : age < 18 ? .78 : 1; }
-
 class PigeonView {
-  constructor(p, mats, castShadow) {
-    this.pid = p.id;
-    this.rig = new PigeonRig(p.pheno, mats, castShadow);
+  constructor(p, mats, castShadow, lod) {
+    this.rig = new PigeonRig(p.pheno, mats, castShadow, lod);
     this.g = this.rig.group;
     this.b = this.rig.bones; this.rest = this.rig.rest; this.restRot = this.rig.restRot;
     this.vis = V(p.x, p.y, p.z);
@@ -42,7 +44,7 @@ class PigeonView {
     this.baseSize = sizeOf(p.pheno, p.jit);
     this.height = birdHeight(p.pheno);
   }
-  size(p, simT) { return this.baseSize * chickScale(simT - p.born); }
+  size(p, simT) { return this.baseSize * chickK(simT - p.born); }
   update(p, simT, dt, t) {
     const b = this.b, R = this.rest;
     // position/heading smoothing (sim runs at 30 Hz, render at display rate)
@@ -57,11 +59,12 @@ class PigeonView {
     // reset pose
     for (const n of POSE_BONES) { b[n].position.copy(R[n]); b[n].rotation.copy(this.restRot[n]); b[n].scale.set(1, 1, 1); }
     b.root.rotation.set(0, 0, 0); b.root.position.set(0, 0, 0);
-    const headK = age < 9 ? 1.32 : age < 18 ? 1.16 : 1;
-    b.head.scale.setScalar(headK);
+    const ck = chickK(age); // chicks: big heads
+    b.head.scale.setScalar(ck === 1 ? 1 : ck < .7 ? 1.32 : 1.16);
 
     const st = p.state, moving = (st === 'walk' || st === 'moonwalk') && Math.hypot(p.tx - p.x, p.tz - p.z) > .005;
-    const breathe = Math.sin(t * 2.3 + this.seed) * .5 + .5;
+    const gait = p.pheno.e.gait, quick = gait === 'speedy' ? 1.6 : gait === 'sluggish' ? .55 : 1; // fidget tempo
+    const breathe = Math.sin(t * 2.3 * quick + this.seed) * .5 + .5;
     let eyesOpen = 1;
     if (p.flying) {
       const f = Math.sin(t * 24 + this.seed);
@@ -69,6 +72,17 @@ class PigeonView {
       b.legL.rotation.z = b.legR.rotation.z = -1.1;
       b.body.rotation.z = .25;
       b.tail.rotation.z = -.2;
+    } else if (st === 'jump') { // jumpy: a quick startled hop on the spot, wings flicking
+      const k = Math.min(1, (simT - p.stateAt) / .55), up = Math.sin(k * Math.PI);
+      b.root.position.y = up * .09;
+      b.wingL.rotation.x = up * .7; b.wingR.rotation.x = -up * .7;
+      b.legL.rotation.z = b.legR.rotation.z = -up * .5;
+      b.head.rotation.z += up * .2;
+    } else if (st === 'twirl') { // twirly: one neat pirouette, wings out for balance
+      const k = Math.min(1, (simT - p.stateAt) / .9), e = k * k * (3 - 2 * k);
+      b.root.rotation.y = e * TAU;
+      b.wingL.rotation.x = .35 * Math.sin(k * Math.PI); b.wingR.rotation.x = -.35 * Math.sin(k * Math.PI);
+      b.root.position.y = Math.sin(k * Math.PI) * .02;
     } else if (st === 'hop') { // a short flutter over the crowd: quick wingbeats, feet tucked, leaning into it
       const f = Math.sin(t * 30 + this.seed);
       b.wingL.rotation.x = .9 + f * .8; b.wingR.rotation.x = -(.9 + f * .8);
@@ -126,15 +140,16 @@ class PigeonView {
       b.legL.scale.y = b.legR.scale.y = .8;
       eyesOpen = 0;
     } else if (moving || st === 'walk' || st === 'moonwalk') {
-      if (moving) this.walkPh += dt * (p.v / .5) * 13 * (st === 'moonwalk' ? -1 : 1); // moonwalk: the legs run backwards
-      const ph = this.walkPh, sw = Math.sin(ph);
-      b.legL.rotation.z = sw * .6; b.legR.rotation.z = -sw * .6;
-      b.body.position.y += Math.abs(Math.cos(ph)) * .012;
-      b.body.rotation.x = sw * .05;
+      if (moving) this.walkPh += dt * (p.v / .5) * 13 * (st === 'moonwalk' ? -1 : 1) * (gait === 'strutter' ? .8 : 1); // moonwalk: the legs run backwards
+      const ph = this.walkPh, sw = Math.sin(ph), strut = gait === 'strutter';
+      b.legL.rotation.z = sw * (strut ? .95 : .6); b.legR.rotation.z = -sw * (strut ? .95 : .6); // strutters: high steps
+      b.body.position.y += Math.abs(Math.cos(ph)) * (strut ? .02 : .012);
+      b.body.rotation.x = sw * (strut ? .09 : .05);
+      if (strut) { b.body.rotation.z += .12; b.body.scale.set(1.04, 1.06, 1.06); } // chest out
       // the pigeon head-bob: thrust forward fast, hold while the body catches up
       const f = ((ph / Math.PI) % 1 + 1) % 1;
-      b.head.position.x += (f < .28 ? f / .28 : 1 - (f - .28) / .72) * .042 - .02;
-      b.tail.rotation.z = -Math.cos(ph) * .06;
+      b.head.position.x += ((f < .28 ? f / .28 : 1 - (f - .28) / .72) * .042 - .02) * (strut ? 1.6 : 1);
+      b.tail.rotation.z = -Math.cos(ph) * .06 + (strut ? -.15 : 0);
     } else if (st === 'peck') {
       const k = ((simT - p.stateAt) * 1.25 + this.seed) % 1;
       const dip = k < .25 ? k / .25 : k < .4 ? 1 : Math.max(0, 1 - (k - .4) / .3);
@@ -149,10 +164,10 @@ class PigeonView {
       b.tail.rotation.z = .25 + k * .1;
       b.wingL.rotation.x = .15 * k; b.wingR.rotation.x = -.15 * k;
       b.root.rotation.y = Math.sin(t * 1.3 + this.seed) * .25;
-    } else { // idle
+    } else { // idle (speedy birds glance about twice as fast; sluggish ones barely bother)
       b.body.scale.y = 1 + breathe * .02;
-      b.head.rotation.y = Math.sin(t * .6 + this.seed * 3) * .45 * Math.max(0, Math.sin(t * .23 + this.seed));
-      b.head.rotation.z = Math.sin(t * .9 + this.seed) * .06;
+      b.head.rotation.y = Math.sin(t * .6 * quick + this.seed * 3) * .45 * Math.max(0, Math.sin(t * .23 * quick + this.seed));
+      b.head.rotation.z = Math.sin(t * .9 * quick + this.seed) * .06 - (gait === 'sluggish' ? .12 : 0);
     }
     // blinks
     if (eyesOpen === 1) {
@@ -160,7 +175,7 @@ class PigeonView {
       if (this.blinkAt < 0) { this.blinkT = .13; this.blinkAt = 2 + Math.random() * 4; }
       if (this.blinkT > 0) { this.blinkT -= dt; eyesOpen = 0; }
     }
-    b.eyeL.scale.y = b.eyeR.scale.y = eyesOpen ? 1 : .12;
+    b.eyeL.scale.y = b.eyeR.scale.y = eyesOpen ? (gait === 'sluggish' && eyesOpen === 1 ? .55 : 1) : .12; // sluggish: heavy-lidded
     if (this.googly) { // loose pupils wobble with every step and thought
       const w = moving ? 3.2 : 1;
       b.eyeL.rotation.x = Math.sin(t * 9.3 + this.seed) * .5 * w; b.eyeL.rotation.y = Math.cos(t * 7.1) * .3 * w;
@@ -203,41 +218,50 @@ export class FlockView {
     this.breadLoaf = new THREE.Mesh(loaf, new THREE.MeshStandardMaterial({ color: '#d9a15a', roughness: .8 }));
     this.breadLoaf.position.y = .07; this.breadLoaf.castShadow = true;
     const scoreMat = new THREE.MeshStandardMaterial({ color: '#f1d6a2', roughness: .9 });
-    for (let i = 0; i < 4; i++) { const sc = new THREE.Mesh(new THREE.BoxGeometry(.03, .02, .1), scoreMat); sc.position.set(-.2 + i * .13, .07, 0); sc.rotation.y = .6; this.breadLoaf.add(sc); sc.position.y = .065; }
+    for (let i = 0; i < 4; i++) { const sc = new THREE.Mesh(new THREE.BoxGeometry(.03, .02, .1), scoreMat); sc.position.set(-.2 + i * .13, .065, 0); sc.rotation.y = .6; this.breadLoaf.add(sc); }
     this.bread.add(this.breadLoaf); this.bread.visible = false; scene.add(this.bread);
-    this.crumbs = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.018, 0), scoreMat, 24);
-    this.crumbs.frustumCulled = false; this.crumbs.count = 0; scene.add(this.crumbs);
+    this.crumbs = pooled(scene, new THREE.IcosahedronGeometry(.018, 0), scoreMat, 24);
     this.goldMat = new THREE.MeshStandardMaterial({ color: '#e8b64c', roughness: .22, metalness: .9, emissive: new THREE.Color('#5a3a00'), emissiveIntensity: .4 });
     // UFO (close-encounter happening): saucer, dome, rim lights and a tractor beam
     const ufo = this.ufo = new THREE.Group();
     const hull = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 14).scale(1.1, .22, 1.1), new THREE.MeshStandardMaterial({ color: '#b9c2cc', metalness: .8, roughness: .3 }));
     const dome = new THREE.Mesh(new THREE.SphereGeometry(.45, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#9fe0ff', roughness: .1, emissive: new THREE.Color('#3aa0c0'), emissiveIntensity: .6 }));
     dome.position.y = .12; ufo.add(hull, dome);
-    this.ufoLights = new THREE.MeshStandardMaterial({ color: '#fff3b0', emissive: new THREE.Color('#ffd84a'), emissiveIntensity: 1.5 });
-    for (let i = 0; i < 8; i++) { const l = new THREE.Mesh(new THREE.SphereGeometry(.06, 8, 6), this.ufoLights); l.position.set(Math.cos(i / 8 * Math.PI * 2) * 1.02, -.02, Math.sin(i / 8 * Math.PI * 2) * 1.02); ufo.add(l); }
+    const lights = new THREE.MeshStandardMaterial({ color: '#fff3b0', emissive: new THREE.Color('#ffd84a'), emissiveIntensity: 1.5 }), bulb = new THREE.SphereGeometry(.06, 8, 6);
+    for (let i = 0; i < 8; i++) { const l = new THREE.Mesh(bulb, lights); l.position.set(Math.cos(i / 8 * Math.PI * 2) * 1.02, -.02, Math.sin(i / 8 * Math.PI * 2) * 1.02); ufo.add(l); }
     this.beam = new THREE.Mesh(new THREE.CylinderGeometry(.25, 1.0, 1, 24, 1, true).translate(0, -.5, 0), new THREE.MeshBasicMaterial({ color: '#c8fbff', transparent: true, opacity: .3, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
     ufo.add(this.beam); ufo.visible = false; hull.castShadow = true; scene.add(ufo);
+    // the pigeon goddess (happening): a giant white lace-crowned fantail with a golden halo, a soft glow behind
+    // her and a golden beam to whoever she's blessing. Same material set-ups as the UFO / halos: no new programs.
+    const gp = computePheno(pureGenome({ pied: 'white', crest: 'lace', tail: 'fantail', glow: 'glow', eye: 'pearl', posture: 'upright' }), 'crown');
+    this.goddessRig = new PigeonRig(gp, mats, false);
+    const god = this.goddess = new THREE.Group(); god.add(this.goddessRig.group);
+    this.goddessRig.group.scale.setScalar(4.2);
+    const haloM = new THREE.MeshStandardMaterial({ color: '#fff3b0', emissive: new THREE.Color('#ffd24a'), emissiveIntensity: 1.5 });
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(.62, .05, 10, 40), haloM); halo.position.set(.75, 3.45, 0); halo.rotation.set(Math.PI / 2 - .25, 0, 0);
+    const aura = new THREE.Sprite(this.haloMat.clone()); aura.material.color.set('#ffe6a0'); aura.material.opacity = .55; aura.scale.setScalar(7); aura.position.set(0, 1.6, 0);
+    god.add(halo, aura); this.godHalo = halo; this.godAura = aura;
+    this.godBeam = new THREE.Mesh(new THREE.CylinderGeometry(.12, .5, 1, 20, 1, true).translate(0, -.5, 0), new THREE.MeshBasicMaterial({ color: '#ffe9a6', transparent: true, opacity: .35, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+    god.visible = false; this.godBeam.visible = false; scene.add(god, this.godBeam);
+
     // rain streaks
     this.rainN = 420;
-    this.rainMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(.012, .35, .012), new THREE.MeshBasicMaterial({ color: '#dbe8f2', transparent: true, opacity: .55, depthWrite: false }), this.rainN);
-    this.rainMesh.frustumCulled = false; this.rainMesh.count = 0; scene.add(this.rainMesh);
+    this.rainMesh = pooled(scene, new THREE.BoxGeometry(.012, .35, .012), new THREE.MeshBasicMaterial({ color: '#dbe8f2', transparent: true, opacity: .55, depthWrite: false }), this.rainN);
     this.rainData = Array.from({ length: this.rainN }, () => [Math.random(), Math.random(), Math.random()]);
     // poop
-    this.poop = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 5).scale(.05, .012, .04), new THREE.MeshStandardMaterial({ color: '#f1ece0', roughness: .7 }), 16);
-    this.poop.frustumCulled = false; this.poop.receiveShadow = true;
-    scene.add(this.poop);
+    this.poop = pooled(scene, new THREE.SphereGeometry(1, 8, 5).scale(.05, .012, .04), new THREE.MeshStandardMaterial({ color: '#f1ece0', roughness: .7 }), POOP.max);
+    this.poop.receiveShadow = true;
     // selection ring
-    this.sel = new THREE.Mesh(new THREE.RingGeometry(.3, .34, 40, 1).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: '#c67139', transparent: true, opacity: .9, depthWrite: false }));
-    const dash = new THREE.Mesh(new THREE.RingGeometry(.37, .39, 40, 1, 0, Math.PI * 1.6).rotateX(-Math.PI / 2), this.sel.material);
+    this.sel = new THREE.Mesh(groundRing(.3, .34, 40), new THREE.MeshBasicMaterial({ color: '#c67139', transparent: true, opacity: .9, depthWrite: false }));
+    const dash = new THREE.Mesh(groundRing(.37, .39, 40, Math.PI * 1.6), this.sel.material);
     this.sel.add(dash); this.selDash = dash;
     this.sel.visible = false; this.sel.renderOrder = 2;
     scene.add(this.sel);
     // trait-finder markers: a bobbing gem over each matching bird + a ring at its feet (2 instanced draws).
     // Same material setup as the sparkles (basic, untonemapped, instance colours) so no new shader program.
-    const mk = (geo) => { const m = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ toneMapped: false }), FIND_MAX); m.frustumCulled = false; m.count = 0; m.setColorAt(0, new THREE.Color()); scene.add(m); return m; };
+    const mk = (geo) => pooled(scene, geo, new THREE.MeshBasicMaterial({ toneMapped: false }), FIND_MAX, { colors: true });
     this.findGems = mk(new THREE.OctahedronGeometry(1, 0));
-    this.findRings = mk(new THREE.RingGeometry(.33, .4, 32, 1).rotateX(-Math.PI / 2));
+    this.findRings = mk(groundRing(.33, .4, 32));
     this.findRings.renderOrder = 2;
     this.findMeshes = [this.findGems, this.findRings];
     this._fc = { 1: new THREE.Color(FIND_COLORS[1]), 2: new THREE.Color(FIND_COLORS[2]) };
@@ -254,9 +278,12 @@ export class FlockView {
       seen.add(p.id);
       let v = this.views.get(p.id);
       if (v && v.rev !== (p.rev || 0)) { this.root.remove(v.g); v.dispose(); this.views.delete(p.id); v = null; } // phenotype changed (new hat)
-      if (!v) { v = new PigeonView(p, this.mats, this.q.birdShadows); this.views.set(p.id, v); this.root.add(v.g); }
+      if (!v) {
+        const lod = camPos ? lodFor(camPos.distanceTo(_p.set(p.x, p.y, p.z)), sizeOf(p.pheno, p.jit) * chickK(sim.t - p.born), -1) : 0;
+        v = new PigeonView(p, this.mats, this.q.birdShadows, lod); this.views.set(p.id, v); this.root.add(v.g);
+      }
       const s = v.update(p, sim.t, dt, t);
-      if (camPos) v.rig.setLod(camPos.distanceTo(v.vis) > 7.5 * Math.max(1, s) ? 1 : 0);
+      if (camPos) v.rig.setLod(lodFor(camPos.distanceTo(v.vis), s, v.rig.lod));
       // contact shadow shrinks + fades with height
       const h = v.vis.y, ss = s * .62 * Math.max(.3, 1 - h * .5);
       m.compose(_p.set(v.vis.x + .02 * s, .004, v.vis.z), q, _s.set(ss * 1.2, 1, ss));
@@ -273,17 +300,18 @@ export class FlockView {
     this.haloMat.opacity = .12 + sim.night * .7;
     for (let i = hi; i < this.halos.length; i++) this.halos[i].visible = false;
     for (const [id, v] of this.views) if (!seen.has(id)) { this.root.remove(v.g); v.dispose(); this.views.delete(id); }
-    if ((this.pruneT = (this.pruneT || 0) + dt) > 20) { // every ~20 s: drop geometry for phenotypes no longer in the park
+    if ((this.pruneT = (this.pruneT || 0) + dt) > 20) { // every ~20 s: drop geometry for looks no longer in the park
       this.pruneT = 0;
-      pruneGeometryCache(new Set([...this.views.values()].map(v => v.rig.mesh.geometry)));
+      const live = new Set([this.goddessRig.key]); for (const v of this.views.values()) live.add(v.rig.key);
+      pruneGeometryCache(live);
     }
     this.mats.glow.emissiveIntensity = .08 + sim.night * 1.2;
     this.mats.voidglow.emissiveIntensity = .15 + sim.night * .6;
 
     // eggs
-    const eseen = seen; eseen.clear();
+    seen.clear(); // (reused for eggs)
     for (const eg of sim.eggs) {
-      eseen.add(eg.id);
+      seen.add(eg.id);
       let ev = this.eggViews.get(eg.id);
       if (!ev) {
         ev = this.eggPool.pop() || this.makeEgg();
@@ -296,7 +324,7 @@ export class FlockView {
       ev.children[1].rotation.set(wob * .6, 0, wob);
       ev.scale.setScalar(Math.min(1, (sim.t - eg.laidAt) * 4 + .2));
     }
-    for (const [id, ev] of this.eggViews) if (!eseen.has(id)) { ev.visible = false; this.eggPool.push(ev); this.eggViews.delete(id); }
+    for (const [id, ev] of this.eggViews) if (!seen.has(id)) { ev.visible = false; this.eggPool.push(ev); this.eggViews.delete(id); }
 
     // UFO
     const U = sim.ufo;
@@ -306,13 +334,30 @@ export class FlockView {
       this.beam.visible = U.beam > 0; this.beam.scale.set(1, U.y, 1);
       this.beam.material.opacity = .22 + Math.sin(t * 9) * .08;
     }
+    // the goddess: hovering, wings spread and slowly beating, facing the park
+    const G = sim.goddess;
+    this.goddess.visible = !!G;
+    if (G) {
+      this.goddess.position.set(G.x, G.y, G.z); this.goddess.rotation.y = -Math.PI / 2 + Math.sin(t * .4) * .2; // faces +z, toward the default camera
+      const gb = this.goddessRig.bones, f = Math.sin(t * 2.2);
+      gb.wingL.rotation.x = 1.25 + f * .25; gb.wingR.rotation.x = -(1.25 + f * .25);
+      gb.legL.rotation.z = gb.legR.rotation.z = -.6; gb.tail.rotation.z = -.1;
+      this.godHalo.rotation.z = t * .6; this.godAura.material.opacity = .4 + Math.sin(t * 1.7) * .1;
+      const B = G.beam, beam = this.godBeam; beam.visible = !!B;
+      if (B) { // from her chest down to the blessed bird
+        _p.set(G.x, G.y + 1.3, G.z); _tgt.set(B.x - _p.x, .05 - _p.y, B.z - _p.z);
+        const len = _tgt.length(); beam.position.copy(_p);
+        beam.quaternion.setFromUnitVectors(_s.set(0, -1, 0), _tgt.normalize()); beam.scale.set(1, len, 1);
+        beam.material.opacity = .3 + Math.sin(t * 11) * .08;
+      }
+    } else this.godBeam.visible = false;
+
     // rain around the park
-    this.rainAmt = (this.rainAmt || 0) + ((sim.rain ? 1 : 0) - (this.rainAmt || 0)) * Math.min(1, dt * 1.5);
+    this.rainAmt = damp(this.rainAmt || 0, sim.rain ? 1 : 0, 1.5, dt);
     const rn = Math.floor(this.rainN * this.rainAmt);
     for (let i = 0; i < rn; i++) {
       const d = this.rainData[i], y = 9 - ((t * (7 + d[2] * 3) + d[2] * 9) % 9);
-      m.compose(_p.set((d[0] - .5) * 18, y, (d[1] - .5) * 13), q.identity(), _s.set(1, 1, 1));
-      this.rainMesh.setMatrixAt(i, m);
+      this.rainMesh.setMatrixAt(i, m.makeTranslation((d[0] - .5) * 18, y, (d[1] - .5) * 13));
     }
     this.rainMesh.count = rn; if (rn) this.rainMesh.instanceMatrix.needsUpdate = true;
 
@@ -334,11 +379,11 @@ export class FlockView {
     // poop
     let pi = 0;
     for (const pp of sim.poops) {
-      const fade = Math.max(.05, 1 - (sim.t - pp.at) / 30);
+      const fade = Math.max(.05, 1 - (sim.t - pp.at) / POOP.life);
       m.compose(_p.set(pp.x, .002, pp.z), q.setFromAxisAngle(UP, pp.r * 6), _s.set(fade, 1, fade));
       this.poop.setMatrixAt(pi++, m);
     }
-    this.poop.count = pi; this.poop.instanceMatrix.needsUpdate = true;
+    if (pi || this.poop.count) { this.poop.count = pi; this.poop.instanceMatrix.needsUpdate = true; }
 
     // selection ring
     const sp = sim.selId != null ? sim.byId(sim.selId) : null, sv = sp && this.views.get(sp.id);

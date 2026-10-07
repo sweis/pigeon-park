@@ -1,18 +1,46 @@
 // Pigeon Park — random "happenings": short, weird park events. Pure sim logic (seeded RNG, no DOM).
-// Each happening: { label, blurb, when(sim) → eligible?, start(sim) → data | null, tick(sim, h, now) → keep going?, end(sim, h) }.
-// Birds taking part get p.busy = kind so their normal think() decisions are skipped until end().
+// Each happening: { label, blurb, when(sim) → eligible?, start(sim) → data | null, tick(sim, h, now) → keep going?,
+// end(sim, h)? }. Birds taking part get p.busy = kind so their normal think() decisions are skipped until end().
+// A happening with its own music: add a song with `mood: <kind>` to SONGS in audio.js.
 
 import * as M from './genetics.js';
 import { rand } from './rng.js';
-import { PARK, FOUNTAIN, pureGenome } from './sim.js';
+import { PARK, FOUNTAIN, face } from './sim.js';
 
 const pick = M.pick;
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const free = (S) => S.pigeons.filter(p => !p.flying && !p.held && !p.courting && !p.busy && !p.visitor);
-const say = (S, p, text, secs = 2.4) => { if (p) { p.emote = { kind: 'say', text }; p.emoteUntil = S.t + secs; } };
+const needFree = (n) => (S) => free(S).length >= n;
+const say = (S, p, text, secs) => S.speak(p, text, secs);
 function enlist(S, list, kind) { for (const p of list) { p.busy = kind; p.stateAt = S.t; } return list.map(p => p.id); }
 function release(S, ids) { for (const id of ids || []) { const p = S.byId(id); if (p) { p.busy = null; p.state = 'idle'; p.stateUntil = S.t + .3 + rand(); } } }
 const live = (S, ids) => ids.map(id => S.byId(id)).filter(p => p && !p.flying && !p.held && p.busy);
+// Everyone still taking part holds a pose this tick.
+const hold = (S, h, state) => { const birds = live(S, h.ids); for (const p of birds) p.state = state; return birds; };
+// Send birds to evenly spaced spots on an ellipse round (cx, cz).
+const ring = (S, birds, cx, cz, rx, rz, speed) => birds.forEach((p, i) => { const a = i / birds.length * Math.PI * 2; S.walkTo(p, cx + Math.cos(a) * rx, cz + Math.sin(a) * rz, speed); });
+
+// The pigeon goddess's gifts: an accessory for a free slot, or a mutation (a random mutation-only allele;
+// usually expressed, sometimes only carried — a gift for the next generation).
+function bless(S, p) {
+  const slots = M.freeSlots(p.accessory);
+  if (slots.length && rand() < .45) {
+    const item = M.rollAccessory(1, slots);
+    S.setAccessory(p, M.withAccessory(p.accessory, item));
+    return `${M.ACCESSORIES[item].label.toLowerCase()}`;
+  }
+  if (S.season && !p.genome.outfit.includes(S.season) && rand() < .35) { // in season she favours the holiday costume
+    S.regene(p, { ...structuredClone(p.genome), outfit: [S.season, S.season] });
+    return M.ALLELE_META['outfit:' + S.season].label.toLowerCase();
+  }
+  const pool = M.MUT_ONLY.filter(([loc, a]) => !p.genome[loc].includes(a));
+  if (!pool.length) return null;
+  const [loc, al] = pick(pool), g = structuredClone(p.genome), shown = rand() < .7;
+  g[loc] = shown ? [al, al] : [g[loc][0], al];
+  S.regene(p, g);
+  const label = M.ALLELE_META[loc + ':' + al]?.label || al;
+  return shown ? label.toLowerCase() : `a hidden gift (carries ${label.toLowerCase()})`;
+}
 
 export const HAPPENINGS = {
   bread: {
@@ -22,7 +50,8 @@ export const HAPPENINGS = {
       S.bread = { x, z, hp: 1, a: rand() * Math.PI };
       const birds = free(S).slice(0, 18);
       S.toast(pick(['A tourist dropped an entire baguette. Chaos is imminent.', 'BREAD. ON THE GROUND. THIS IS NOT A DRILL.', 'A baguette has entered the chat.']), 'event');
-      birds.forEach((p, i) => { const a = i / birds.length * Math.PI * 2; S.walkTo(p, x + Math.cos(a) * .45, z + Math.sin(a) * .3, .9); p.state = 'walk'; say(S, p, pick(['BREAD', 'mine', 'MINE', 'crumb!!', 'go go go']), 1.5); });
+      ring(S, birds, x, z, .45, .3, .9);
+      for (const p of birds) say(S, p, pick(['BREAD', 'mine', 'MINE', 'crumb!!', 'go go go']), 1.5);
       return { ids: enlist(S, birds, 'bread'), until: S.t + 40 };
     },
     tick(S, h, now) {
@@ -30,7 +59,7 @@ export const HAPPENINGS = {
       let pecking = 0;
       for (const p of birds) {
         const d = Math.hypot(p.x - B.x, p.z - B.z);
-        if (d < .75) { if (p.state !== 'peck') { p.state = 'peck'; p.stateAt = now; p.dir = Math.atan2(B.z - p.z, B.x - p.x); } pecking++; }
+        if (d < .75) { if (p.state !== 'peck') { p.state = 'peck'; p.stateAt = now; face(p, B.x, B.z); } pecking++; }
       }
       B.hp -= pecking * .012;
       if (rand() < .15 && birds.length) say(S, pick(birds), pick(['nom', 'crunch', 'this is my bread now', 'carbs!!', 'mmf']), 1.4);
@@ -62,9 +91,7 @@ export const HAPPENINGS = {
       const parents = S.pigeons.filter(p => !p.flying); if (!parents.length) return null;
       const off = M.offspring(pick(parents).genome, pick(parents).genome, 3).genome;
       // guarantee one expressed oddity: a random mutation-only allele, made homozygous
-      const odd = [];
-      for (const l of M.LOCI) for (const a of Object.keys(l.mutOnly || {})) odd.push([l.id, a]);
-      const [loc, al] = pick(odd); off[loc] = [al, al];
+      const [loc, al] = pick(M.MUT_ONLY); off[loc] = [al, al];
       const [x, z] = S.clampToPark((rand() - .5) * PARK.w * .7, (rand() - .5) * PARK.d * .6);
       S.eggs.push({ id: S.ids++, x, z, genome: off, gen: S.stats.maxGen + 1, laidAt: S.t, hatchAt: S.t + 10, golden: true });
       S.sparkle(x, z, 3);
@@ -72,12 +99,11 @@ export const HAPPENINGS = {
       return { until: S.t + 11 };
     },
     tick(S, h, now) { return now < h.until; },
-    end() {},
   },
 
   conga: {
     label: 'Conga line', blurb: 'Nobody knows who started it.',
-    when: (S) => free(S).length >= 5,
+    when: needFree(5),
     start(S) {
       const birds = shuffle(free(S)).slice(0, 7);
       const w = PARK.w / 2 - .8, d = PARK.d / 2 - .6;
@@ -122,23 +148,23 @@ export const HAPPENINGS = {
       S.toast(`${p.name} is practising for statue duty. Do not disturb.`, 'event');
       return { ids: enlist(S, [p], 'statue'), until: S.t + 14 };
     },
-    tick(S, h, now) { const [p] = live(S, h.ids); if (p) p.state = 'statue'; return !!p && now < h.until; },
+    tick(S, h, now) { const [p] = hold(S, h, 'statue'); return !!p && now < h.until; },
     end(S, h) { const p = S.byId(h.ids[0]); say(S, p, pick(['ok that was hard', 'nailed it', 'my legs are asleep']), 2); release(S, h.ids); },
   },
 
   parliament: {
     label: 'Pigeon parliament', blurb: 'The flock convenes at the fountain to vote on bread.',
-    when: (S) => free(S).length >= 6,
+    when: needFree(6),
     start(S) {
       const birds = shuffle(free(S)).slice(0, 14), R = FOUNTAIN.lip + .75;
-      birds.forEach((p, i) => { const a = i / birds.length * Math.PI * 2; S.walkTo(p, FOUNTAIN.x + Math.cos(a) * R, FOUNTAIN.z + Math.sin(a) * R, .55); });
+      ring(S, birds, FOUNTAIN.x, FOUNTAIN.z, R, R, .55);
       const motion = pick(['more bread', 'ban the seagulls', 'declare the fountain a sea', 'rename Tuesday to Crumbday', 'impeach the statue', 'mandatory naps', 'Gerald for president']);
       S.toast(`The pigeon parliament is now in session. Motion: ${motion}.`, 'event');
-      return { ids: enlist(S, birds, 'parliament'), speaker: birds[0].id, motion, phase: 0, until: S.t + 22, voteAt: S.t + 13 };
+      return { ids: enlist(S, birds, 'parliament'), speaker: birds[0].id, motion, until: S.t + 22, voteAt: S.t + 13 };
     },
     tick(S, h, now) {
       const birds = live(S, h.ids); if (birds.length < 3) return false;
-      for (const p of birds) if (p.state === 'idle' || (p.state === 'walk' && Math.hypot(p.tx - p.x, p.tz - p.z) < .02)) { p.state = 'idle'; p.dir = Math.atan2(FOUNTAIN.z - p.z, FOUNTAIN.x - p.x); }
+      for (const p of birds) if (p.state === 'idle' || (p.state === 'walk' && Math.hypot(p.tx - p.x, p.tz - p.z) < .02)) { p.state = 'idle'; face(p, FOUNTAIN.x, FOUNTAIN.z); }
       const sp = S.byId(h.speaker);
       if (sp && now < h.voteAt && rand() < .35) say(S, sp, pick(['order! ORDER!', 'the motion is: ' + h.motion, 'i yield my time to crumbs', 'point of order: coo', 'hear hear']), 2.2);
       if (now >= h.voteAt && !h.voted) {
@@ -163,7 +189,7 @@ export const HAPPENINGS = {
       S.toast('An existential moment passes over the park.', 'event');
       return { ids: enlist(S, birds, 'crisis'), until: S.t + 6 };
     },
-    tick(S, h, now) { for (const p of live(S, h.ids)) p.state = 'look'; return now < h.until; },
+    tick(S, h, now) { hold(S, h, 'look'); return now < h.until; },
     end(S, h) { release(S, h.ids); S.toast('The moment has passed. Everyone agrees not to talk about it.'); },
   },
 
@@ -176,8 +202,7 @@ export const HAPPENINGS = {
       return { ids: enlist(S, birds, 'dance'), until: S.t + 12 };
     },
     tick(S, h, now) {
-      const birds = live(S, h.ids);
-      for (const p of birds) p.state = 'dance';
+      const birds = hold(S, h, 'dance');
       if (rand() < .5 && birds.length) { const p = pick(birds); S.sparkle(p.x, p.z, 2); }
       if (rand() < .25 && birds.length) say(S, pick(birds), pick(['♪', 'woo!', 'this slaps', 'feel the beat', 'my jam', '♪ ♫ ♪']), 1.4);
       if (rand() < .3) S.sound('chime');
@@ -200,14 +225,12 @@ export const HAPPENINGS = {
     tick(S, h, now) { const [p] = live(S, h.ids); if (p && Math.hypot(p.tx - p.x, p.tz - p.z) > .05) p.state = 'moonwalk'; return !!p && now < h.until && p.state === 'moonwalk'; },
     end(S, h) { release(S, h.ids); },
   },
-};
 
-Object.assign(HAPPENINGS, {
   seagull: {
     label: 'Seagull sighting', blurb: 'A "seagull" swaggers in. It is a large white pigeon in disguise. The flock panics anyway.',
     start(S) {
       if (S.alive() >= S.cap) return null;
-      const g = pureGenome({ pied: 'white', size: 'king', beak: 'long', eye: 'pearl' });
+      const g = M.pureGenome({ pied: 'white', size: 'king', beak: 'long', eye: 'pearl' });
       const p = S.spawn({ genome: g, name: 'Definitely A Seagull', adult: true, quiet: true, x: PARK.w / 2 - .6, z: 0, dir: Math.PI, how: 'visitor' });
       p.y = 3; p.visitor = { leaveAt: S.t + 24 }; p.busy = 'seagull';
       say(S, p, 'MINE', 2.5);
@@ -243,7 +266,7 @@ Object.assign(HAPPENINGS, {
       const [p] = live(S, h.ids); if (!p) return false;
       h.a += .9; const R = FOUNTAIN.lip + .8;
       S.walkTo(p, FOUNTAIN.x + Math.cos(h.a) * R, FOUNTAIN.z + Math.sin(h.a) * R, 2.2);
-      if (rand() < .15) say(S, p, pick(['NYOOM', 'wheee', 'lap ' + Math.ceil((now - h.until + 9) / 1.5)]), 1);
+      if (rand() < .15) say(S, p, pick(['NYOOM', 'wheee', 'lap ' + Math.ceil((now - h.at) / 1.5)]), 1);
       return now < h.until;
     },
     end(S, h) { const p = S.byId(h.ids[0]); say(S, p, pick(['phew', 'i have no regrets', 'dizzy']), 2); release(S, h.ids); },
@@ -251,19 +274,19 @@ Object.assign(HAPPENINGS, {
 
   staring: {
     label: 'Staring contest', blurb: 'Two pigeons lock eyes. A crowd gathers. Somebody will blink.',
-    when: (S) => free(S).length >= 4,
+    when: needFree(4),
     start(S) {
       const [a, b, ...rest] = shuffle(free(S));
       const [cx, cz] = S.clampToPark((a.x + b.x) / 2, (a.z + b.z) / 2);
       S.walkTo(a, cx - .3, cz, .6); S.walkTo(b, cx + .3, cz, .6);
       const crowd = rest.slice(0, 7);
-      crowd.forEach((p, i) => { const t = i / crowd.length * Math.PI * 2; S.walkTo(p, cx + Math.cos(t) * 1.3, cz + Math.sin(t) * 1.1, .6); });
+      ring(S, crowd, cx, cz, 1.3, 1.1, .6);
       S.toast(`Staring contest: ${a.name} vs ${b.name}. Do not blink.`, 'event');
-      return { ids: enlist(S, [a, b, ...crowd], 'staring'), a: a.id, b: b.id, cx, cz, at: S.t, until: S.t + 14 };
+      return { ids: enlist(S, [a, b, ...crowd], 'staring'), a: a.id, b: b.id, cx, cz, until: S.t + 14 };
     },
     tick(S, h, now) {
       const birds = live(S, h.ids), a = S.byId(h.a), b = S.byId(h.b); if (!a || !b || !a.busy || !b.busy) return false;
-      for (const p of birds) if (p.state === 'idle') p.dir = Math.atan2(h.cz - p.z, h.cx - p.x);
+      for (const p of birds) if (p.state === 'idle') face(p, h.cx, h.cz);
       if (now - h.at > 3) { a.state = b.state = 'stare'; a.dir = 0; b.dir = Math.PI; }
       if (rand() < .15) say(S, pick(birds.filter(p => p !== a && p !== b)) || a, pick(['ooh', 'intense', 'my money is on the left one', 'dont blink', '…']), 1.3);
       return now < h.until;
@@ -283,7 +306,7 @@ Object.assign(HAPPENINGS, {
       S.toast('Synchronised pecking. They have clearly been practising.', 'event');
       return { ids: enlist(S, birds, 'synchro'), t0: S.t, until: S.t + 9 };
     },
-    tick(S, h, now) { for (const p of live(S, h.ids)) { p.state = 'sync'; p.stateAt = h.t0; } if (rand() < .2) S.sound('pop'); return now < h.until; },
+    tick(S, h, now) { for (const p of hold(S, h, 'sync')) p.stateAt = h.t0; if (rand() < .2) S.sound('pop'); return now < h.until; },
     end(S, h) { release(S, h.ids); S.toast('The judges award it a 9.4.'); },
   },
 
@@ -294,20 +317,20 @@ Object.assign(HAPPENINGS, {
       S.ufo = { x: p.x, z: p.z, y: 9, beam: 0 };
       p.state = 'abducted'; p.ty = 0;
       S.toast(pick(['A flying saucer is hovering over the park. Stay calm.', 'UFO! Everyone look busy.']), 'event');
-      return { ids: enlist(S, [p], 'ufo'), at: S.t, until: S.t + 13 };
+      return { ids: enlist(S, [p], 'ufo'), until: S.t + 13 };
     },
     tick(S, h, now) {
       const [p] = live(S, h.ids), U = S.ufo, k = now - h.at; if (!p || !U) return false;
       U.y = Math.max(3.2, 9 - k * 3); U.x += (p.x - U.x) * .3; U.z += (p.z - U.z) * .3;
       U.beam = k > 2 && k < 11 ? 1 : 0;
       p.state = 'abducted';
-      if (k < 2) p.ty = 0; else if (k < 6) p.ty = 2.6; else if (k < 7.5) { p.ty = 2.6; if (!h.hat) { h.hat = 1; const acc = pick(Object.keys(M.ACCESSORIES).filter(a => a !== p.accessory)); S.setAccessory(p, acc); } } else p.ty = 0;
+      if (k < 2) p.ty = 0; else if (k < 6) p.ty = 2.6; else if (k < 7.5) { p.ty = 2.6; if (!h.hat) { h.hat = pick(Object.keys(M.ACCESSORIES).filter(a => M.giftable(a) && !M.accList(p.accessory).includes(a))); S.setAccessory(p, M.withAccessory(p.accessory, h.hat)); } } else p.ty = 0;
       if (k > 3 && k < 4) say(S, p, pick(['take me to your breadder', 'wheeeee', 'hello?']), 1.5);
       return now < h.until;
     },
     end(S, h) {
       const p = S.byId(h.ids[0]); S.ufo = null;
-      if (p) { p.ty = 0; say(S, p, pick(['i have seen things', 'they were nice actually', 'do not ask']), 3); S.toast(`${p.name} is back, wearing a ${M.ACCESSORIES[p.accessory]?.label.toLowerCase() || 'new look'}. It will not discuss it.`, 'breed'); }
+      if (p) { p.ty = 0; say(S, p, pick(['i have seen things', 'they were nice actually', 'do not ask']), 3); S.toast(`${p.name} is back, wearing a ${M.ACCESSORIES[h.hat]?.label.toLowerCase() || 'new look'}. It will not discuss it.`, 'breed'); }
       release(S, h.ids);
     },
   },
@@ -321,18 +344,18 @@ Object.assign(HAPPENINGS, {
       S.toast('A light drizzle. Everyone becomes a loaf.', 'event');
       return { ids: enlist(S, birds, 'rain'), until: S.t + 18 };
     },
-    tick(S, h, now) { for (const p of live(S, h.ids)) p.state = 'loaf'; if (rand() < .08) say(S, pick(live(S, h.ids)), pick(['i am a loaf', 'wet', 'this is fine', 'i hate this']), 1.6); return now < h.until; },
+    tick(S, h, now) { const birds = hold(S, h, 'loaf'); if (rand() < .08) say(S, pick(birds), pick(['i am a loaf', 'wet', 'this is fine', 'i hate this']), 1.6); return now < h.until; },
     end(S, h) { S.rain = 0; release(S, h.ids); S.toast('The sun is back. Everyone pretends nothing happened.'); },
   },
 
   runway: {
     label: 'Pigeon Fashion Week', blurb: 'The best-dressed birds strut a runway down the middle of the plaza.',
-    when: (S) => free(S).length >= 3,
+    when: needFree(3),
     start(S) {
       const birds = free(S).sort((a, b) => (b.pheno.traits.length + (b.accessory ? 3 : 0)) - (a.pheno.traits.length + (a.accessory ? 3 : 0))).slice(0, 5);
       birds.forEach((p, i) => { S.walkTo(p, -PARK.w / 2 + .6, -PARK.d / 2 + .8 + i * .15, .7); });
       S.toast('Pigeon Fashion Week begins. Strike a pose.', 'event');
-      return { ids: enlist(S, birds, 'runway'), at: S.t, until: S.t + 26 };
+      return { ids: enlist(S, birds, 'runway'), until: S.t + 26 };
     },
     tick(S, h, now) {
       const birds = h.ids.map(id => S.byId(id)); const k = now - h.at;
@@ -347,8 +370,44 @@ Object.assign(HAPPENINGS, {
     },
     end(S, h) { release(S, h.ids); S.toast('Fashion Week is over. The judges are still crying.'); },
   },
-});
 
+  goddess: {
+    label: 'Pigeon goddess', blurb: 'A radiant pigeon goddess descends, and a few lucky birds are blessed with mutations or finery.',
+    when: needFree(3),
+    start(S) {
+      const all = free(S), chosen = shuffle([...all]).slice(0, 3 + Math.floor(rand() * 4));
+      S.goddess = { x: 1.6, z: -1.5, y: 14, beam: null }; // beside the fountain, facing the park
+      for (const p of all) p.state = 'look';
+      S.toast(pick(['The sky opens. A pigeon goddess descends. Everyone is very quiet.', 'A radiant pigeon goddess appears above the fountain. Blessings are imminent.']), 'event');
+      S.sound('chime');
+      return { ids: enlist(S, all, 'goddess'), chosen: chosen.map(p => p.id), next: S.t + 3.4, i: 0, until: S.t + 17 };
+    },
+    tick(S, h, now) {
+      const G = S.goddess; if (!G) return false;
+      const k = now - h.at, left = h.until - now, ease = (x) => x * x * (3 - 2 * x);
+      const hover = 1.1;
+      G.y = k < 3 ? 14 - (14 - hover) * ease(k / 3) : left < 2.5 ? hover + (14 - hover) * ease(1 - left / 2.5) : hover + Math.sin(k * 1.3) * .15;
+      const birds = live(S, h.ids);
+      for (const p of birds) { if (p.state !== 'jump') p.state = 'look'; face(p, G.x, G.z); }
+      if (G.beam && now > G.beam.until) G.beam = null;
+      if (now >= h.next && h.i < h.chosen.length && left > 3) {
+        const p = S.byId(h.chosen[h.i++]); h.next = now + 1.6;
+        if (p && !p.flying && !p.held) {
+          const gift = bless(S, p);
+          G.beam = { x: p.x, z: p.z, until: now + 1.2 };
+          S.sparkle(p.x, p.z, 3); S.sound('chime');
+          if (gift) { S.toast(`The goddess blesses ${p.name} with ${gift}.`, 'breed'); say(S, p, pick(['i feel different', 'ooh', 'blessed', 'thank u mother', 'sparkly', 'i am chosen']), 2.4); }
+        }
+      }
+      if (rand() < .12) say(S, pick(birds), pick(['ooh', 'mother?', 'so shiny', 'pick me', 'is that god', 'aaaah (choir)']), 1.6);
+      return now < h.until;
+    },
+    end(S, h) { S.goddess = null; release(S, h.ids); S.toast(pick(['The goddess ascends. The park smells faintly of bread.', 'The goddess is gone. The blessed are insufferable already.'])); },
+  },
+};
+
+// A settings option by id, or the default (the middle one).
+export const optionOf = (list, id, i = 1) => list.find(o => o.id === id) || list[i];
 export const WHIMSY = [
   { id: 'off', label: 'Off', gap: Infinity },
   { id: 'some', label: 'Some', gap: 1 },
@@ -360,17 +419,21 @@ export function tickHappenings(S) {
   const now = S.t, H = S.happening;
   if (H) {
     let keep = false;
-    try { keep = HAPPENINGS[H.kind].tick(S, H, now); } catch (e) { keep = false; }
-    if (!keep) { HAPPENINGS[H.kind].end(S, H); S.happening = null; S.nextHappeningAt = now + gapFor(S); }
+    try { keep = HAPPENINGS[H.kind].tick(S, H, now); } catch (e) { console.error('happening', H.kind, e); keep = false; } // end it, but say why
+    if (!keep) { endHappening(S); S.nextHappeningAt = now + gapFor(S); }
     return;
   }
   if (now < S.nextHappeningAt || S.alive() < 3) return;
   const kinds = Object.keys(HAPPENINGS).filter(k => !HAPPENINGS[k].when || HAPPENINGS[k].when(S));
   startHappening(S, pick(kinds));
 }
+// Wrap up the current happening now (its end() releases the birds and clears its props).
+export function endHappening(S) {
+  if (S.happening) { HAPPENINGS[S.happening.kind].end?.(S, S.happening); S.happening = null; }
+}
 export function startHappening(S, kind) {
   if (!HAPPENINGS[kind]) return false;
-  if (S.happening) { HAPPENINGS[S.happening.kind].end(S, S.happening); S.happening = null; }
+  endHappening(S);
   const data = HAPPENINGS[kind].start(S);
   S.nextHappeningAt = S.t + gapFor(S);
   if (!data) return false;
@@ -380,6 +443,6 @@ export function startHappening(S, kind) {
   return true;
 }
 export function gapFor(S) {
-  const g = (WHIMSY.find(w => w.id === S.whimsy) || WHIMSY[1]).gap;
+  const g = optionOf(WHIMSY, S.whimsy).gap;
   return g === Infinity ? Infinity : (70 + rand() * 70) * g;
 }

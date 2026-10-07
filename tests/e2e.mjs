@@ -1,10 +1,8 @@
 // End-to-end checks through the real player path: real mouse/touch/keyboard, getState() assertions,
 // composited screenshots. Run: node tests/e2e.mjs  (add --dist to test the production build)
-import { startServer, launch, boot, frames, state, shot, frameStats, check, failures } from './lib.mjs';
+import { setup, finish, boot, frames, state, shot, frameStats, check, checkNoErrors, checkPrograms, clickSel, poll, reload, screenOf, PHONE } from './lib.mjs';
 
-const dist = process.argv.includes('--dist');
-const srv = await startServer({ dist }); const br = await launch();
-const poll = async (page, fn, arg, ms = 15000) => { try { await page.waitForFunction(fn, arg, { timeout: ms, polling: 100 }); return true; } catch { return false; } };
+const { srv, br } = await setup();
 const shots = [];
 
 // ---------- 1. cold boot: cleared storage, no dev flags ----------
@@ -14,9 +12,9 @@ const shots = [];
   await page.waitForTimeout(10000);
   const s1 = await state(page);
   check(s1.t > s0.t + 1, `sim time advances on cold boot (${s0.t} → ${s1.t})`); // +1: software-GPU frames are slow
-  check(errors.length === 0, `no console errors on cold boot ${errors.join(' | ')}`);
+  checkNoErrors(errors, 'on cold boot');
   check(s1.pop >= 5, `founder flock present (${s1.pop})`);
-  check(s1.render.programs === s1.render.programsAfterBoot, `shader programs constant after boot (${s1.render.programsAfterBoot} → ${s1.render.programs})`);
+  await checkPrograms(page, 'shader programs constant after boot');
   check(!s1.render.contextLost && !s1.render.lastShaderError, 'no context loss / shader errors');
   const hit = await page.evaluate(() => [[.5, .5], [.12, .45], [.88, .45], [.5, .3]].map(([x, y]) => document.elementFromPoint(innerWidth * x, innerHeight * y)?.id));
   check(hit.every(h => h === 'c'), `canvas receives input at centre/sides (${hit})`);
@@ -53,7 +51,7 @@ const shots = [];
   // stage a bird in open plaza so the click target is unambiguous
   // park every other bird in a row along the back edge, so the staged spots are unambiguous whatever the flock
   const id = await page.evaluate(() => { const S = window.__game.sim, id = S.pigeons[0].id; S.pigeons.forEach((p, i) => { if (i) window.pp.teleport(p.id, -4.6 + i * .95, -2.9); }); window.pp.teleport(id, 2.2, .8); return id; });
-  const p = await page.evaluate((id) => window.pp.screenOf(id), id);
+  const p = await screenOf(page, id);
   await page.mouse.click(p.x, p.y);
   let s = await state(page);
   check(s.selId === id, `click on a bird selects it (sel ${s.selId}, want ${id})`);
@@ -65,14 +63,13 @@ const shots = [];
 
   // Clone via the real button
   const pop0 = s.pop;
-  const cb = await page.locator('#inspector [data-act="clone"]').boundingBox();
-  await page.mouse.click(cb.x + cb.width / 2, cb.y + cb.height / 2);
+  await clickSel(page, '#inspector [data-act="clone"]');
   s = await state(page);
   check(s.pop === pop0 + 1, `Clone button adds a bird (${pop0} → ${s.pop})`);
 
   // Drag the selected bird onto the roost
   await page.evaluate(() => window.pp.render());
-  const q = await page.evaluate((id) => window.pp.screenOf(id), s.selId);
+  const q = await screenOf(page, s.selId);
   const rb = await page.locator('#roost').boundingBox();
   const target = { x: rb.x + rb.width * .45, y: rb.y + rb.height / 2 };
   const dragId = s.selId;
@@ -87,8 +84,7 @@ const shots = [];
   check(await page.locator('#roost .perch img').count() === 1, 'roost perch shows a portrait');
   // Clone is always the leftmost action, for park birds and roost birds alike
   {
-    const perch = await page.locator('#roost .perch img').first().boundingBox();
-    await page.mouse.click(perch.x + perch.width / 2, perch.y + perch.height / 2);
+    await clickSel(page, '#roost .perch img');
     await page.evaluate(() => window.pp.render());
     const roostFirst = await page.locator('#inspector .actions .btn').first().getAttribute('data-act');
     const pid = (await state(page)).pigeons.find(b => !b.flying).id;
@@ -100,7 +96,7 @@ const shots = [];
   // Drag a bird across the plaza (not onto roost) → it lands where dropped
   const other = s.pigeons.find(b => !b.flying).id;
   await page.evaluate((id) => window.pp.teleport(id, -3.5, 1.5), other);
-  const o = await page.evaluate((id) => window.pp.screenOf(id), other);
+  const o = await screenOf(page, other);
   const dest = await page.evaluate(() => window.pp.screenOfWorld(3.5, 0, -1));
   await page.mouse.move(o.x, o.y); await page.mouse.down();
   for (let i = 1; i <= 10; i++) await page.mouse.move(o.x + (dest.x - o.x) * i / 10, o.y + (dest.y - o.y) * i / 10);
@@ -124,8 +120,7 @@ const shots = [];
   await page.evaluate(() => window.pp.cam('overview'));
 
   // Dialogs: Breeds button, Escape, '?' help
-  const bb = await page.locator('#b-breeds').boundingBox();
-  await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2);
+  await clickSel(page, '#b-breeds');
   check(await page.locator('.dialog .dlg-title').textContent() === 'Breed Registry', 'Breeds button opens the registry');
   { const nb = (await state(page)).breedsTotal; const cnt = await page.locator('.grid.breeds .entry').count(); check(cnt >= 55 && (nb == null || cnt === nb), `registry lists every breed (${cnt})`); }
   shots.push(await shot(page, 'e2e-registry.png'));
@@ -138,15 +133,12 @@ const shots = [];
 
   // Start over: gear → tap "Start over" → wait for the panel to re-render → tap again
   {
-    const gb = await page.locator('#b-settings').boundingBox();
-    await page.mouse.click(gb.x + gb.width / 2, gb.y + gb.height / 2);
+    await clickSel(page, '#b-settings');
     await page.evaluate(() => window.pp.render());
-    const rb1 = await page.locator('#settings [data-act="reset"]').boundingBox();
-    await page.mouse.click(rb1.x + rb1.width / 2, rb1.y + rb1.height / 2);
+    await clickSel(page, '#settings [data-act="reset"]');
     await page.evaluate(() => { window.pp.resume(); }); await page.waitForTimeout(900); await page.evaluate(() => window.pp.freeze());
     check((await page.locator('#settings [data-act="reset"]').textContent()).startsWith('Really'), 'first tap arms Start over (survives panel re-render)');
-    const rb2 = await page.locator('#settings [data-act="reset"]').boundingBox();
-    await page.mouse.click(rb2.x + rb2.width / 2, rb2.y + rb2.height / 2);
+    await clickSel(page, '#settings [data-act="reset"]');
     const r = await state(page);
     check(r.roost.length === 0 && r.stats.births === 0 && r.pop === 7 && r.breedsFound.length === 0, `second tap starts over (pop ${r.pop}, roost ${r.roost.length}, births ${r.stats.births})`);
     const views = await page.evaluate(() => { const g = window.__game; g.render(0); return [...g.flock.views.keys()].every(id => g.sim.byId(id)) && g.flock.views.size === g.sim.pigeons.length; });
@@ -162,8 +154,7 @@ const shots = [];
     await page.mouse.click(off.x, off.y);
     check(!(await page.locator('#settings').isVisible()), 'clicking the park closes settings');
     for (const btn of ['[data-act="help"]', '#b-breeds', '#b-pedia']) {
-      const b = await page.locator('#hud ' + btn).first().boundingBox();
-      await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+      await clickSel(page, '#hud ' + btn);
       const dlg = await page.locator('.dialog').boundingBox();
       await page.mouse.click(Math.max(5, dlg.x - 12), dlg.y + dlg.height / 2);
       check(await page.locator('#dialog').evaluate(e => e.classList.contains('hidden')), `clicking outside closes ${btn}`);
@@ -179,7 +170,7 @@ const shots = [];
   check((await state(page)).happening === 'bread', 'typing "bread" drops a baguette');
   await page.keyboard.type('boogie');
   check((await state(page)).happening === 'dance', 'typing "boogie" starts a disco');
-  await page.evaluate(() => { const S = window.__game.sim; S.happening = null; S.bread = null; for (const p of S.pigeons) p.busy = null; });
+  await page.evaluate(() => window.pp.endHappening());
   // Trees fade when they stand between the camera and the park
   await page.evaluate(() => window.pp.cam('hero-close', { x: 0, z: 0, y: .3, dist: 16, az: -Math.PI / 2 }));
   await page.evaluate(() => { window.pp.render(); for (let i = 0; i < 40; i++) window.__game.world.updateOcclusion(window.__game.cam.cam.position, window.__game.cam.cur.target, .05); window.pp.render(); });
@@ -199,7 +190,7 @@ const shots = [];
   check(s.pigeons.filter(b => /^THE .*(ORE|DIAMOND|EMERALD|GOLD|GEMSTONE) PIGEON$/.test(b.name)).length === 11, 'typing "ore" summons 11 ore pigeons');
   await page.evaluate(() => { window.pp.step(3); window.pp.cam('overview'); });
   shots.push(await shot(page, 'e2e-cheats.png'));
-  check(errors.length === 0, `no console errors during interaction ${errors.join(' | ')}`);
+  checkNoErrors(errors, 'during interaction');
   await page.context().close();
 }
 
@@ -208,8 +199,7 @@ const shots = [];
   const { page, ctx } = await boot(br, srv.url, 'seed=31&hour=10');
   await page.evaluate(() => { const g = window.__game; g.sim.roostAdd(g.sim.pigeons[0].id); window.pp.step(30); g.save(); });
   const a = await state(page);
-  await page.reload();
-  await page.waitForFunction(() => window.ppReady === true);
+  await reload(page);
   const b = await state(page);
   check(b.pop === a.pop, `reload keeps the flock (${a.pop} → ${b.pop})`);
   check(b.roost.length === 1 && b.roost[0] === a.roost[0], 'reload keeps the roost');
@@ -250,18 +240,17 @@ const shots = [];
     check(fs.mean > 12 && fs.std > 6, `hour ${h}: frame not blank (luma ${fs.mean.toFixed(0)}, std ${fs.std.toFixed(0)})`);
     shots.push(await shot(page, `e2e-hour-${String(h).replace('.', '_')}.png`, { hud: false }));
   }
-  const s = await state(page);
-  check(s.render.programs === s.render.programsAfterBoot, `no shader recompiles across day/night (${s.render.programs})`);
-  check(errors.length === 0, 'no console errors in sweep');
+  await checkPrograms(page, 'no shader recompiles across day/night');
+  checkNoErrors(errors, 'in sweep');
   await ctx.close();
 }
 
 // ---------- 8. phone: touch tap selects, layout fits ----------
 {
-  const { page, ctx, errors } = await boot(br, srv.url, 'nosave&seed=21&hour=16', { viewport: { width: 390, height: 844 }, mobile: true });
+  const { page, ctx, errors } = await boot(br, srv.url, 'nosave&seed=21&hour=16', PHONE);
   await page.evaluate(() => { window.pp.freeze(); const id = window.__game.sim.pigeons[0].id; window.pp.teleport(id, 1, .5); });
   const id = await page.evaluate(() => window.__game.sim.pigeons[0].id);
-  const p = await page.evaluate((id) => window.pp.screenOf(id), id);
+  const p = await screenOf(page, id);
   check(p.onScreen, 'bird on screen on a phone');
   await page.touchscreen.tap(p.x, p.y);
   check((await state(page)).selId === id, 'touch tap selects a bird');
@@ -269,11 +258,9 @@ const shots = [];
   const over = await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
   check(over, 'no horizontal overflow on phone');
   shots.push(await shot(page, 'e2e-phone.png'));
-  check(errors.length === 0, 'no console errors on phone');
+  checkNoErrors(errors, 'on phone');
   await ctx.close();
 }
 
-await br.close(); await srv.close();
 console.log('\ncaptures:\n  ' + shots.join('\n  '));
-console.log(failures() ? `\n${failures()} FAILED` : '\nall e2e checks passed');
-process.exit(failures() ? 1 : 0);
+await finish(br, srv, 'e2e');

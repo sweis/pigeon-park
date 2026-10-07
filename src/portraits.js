@@ -9,23 +9,22 @@ export class Portraits {
   constructor(renderer, lowQ) {
     // Own material instances: sharing materials between scenes with different light rigs leaves
     // three.js's per-material light/uniform cache stale (birds rendered invisible in the park).
-    this.r = renderer; this.mats = makeMaterials();
+    this.r = renderer; this.mats = makeMaterials(); this.samples = lowQ ? 0 : 4; // no MSAA targets on phones
     this.size = 176;
-    this.rt = new THREE.WebGLRenderTarget(this.size, this.size, { samples: lowQ ? 0 : 4 });
+    this.rt = new THREE.WebGLRenderTarget(this.size, this.size, { samples: this.samples });
     this.rt.texture.colorSpace = THREE.SRGBColorSpace;
     this.scene = new THREE.Scene();
     this.scene.add(new THREE.HemisphereLight('#dfe8f4', '#8a7458', 1.1));
     const key = new THREE.DirectionalLight('#fff0dc', 2.1); key.position.set(2, 3, 2.5); this.scene.add(key);
-    this.scene.environment = null;
     this.cam = new THREE.PerspectiveCamera(30, 1, .05, 20);
     this.cache = new Map();
     this.buf = new Uint8Array(this.size * this.size * 4);
     this.canvas = document.createElement('canvas'); this.canvas.width = this.canvas.height = this.size;
     this.ctx = this.canvas.getContext('2d');
   }
-  // High-res studio render (transparent background) for photo mode; a temporary MSAA target, one read-back.
+  // High-res studio render (transparent background) for photo mode; a temporary target, one read-back.
   studio(pheno, size) {
-    const rt = new THREE.WebGLRenderTarget(size, size, { samples: 4 }); rt.texture.colorSpace = THREE.SRGBColorSpace;
+    const rt = new THREE.WebGLRenderTarget(size, size, { samples: this.samples }); rt.texture.colorSpace = THREE.SRGBColorSpace;
     const buf = new Uint8Array(size * size * 4), canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;
     this.draw(pheno, rt, buf, size);

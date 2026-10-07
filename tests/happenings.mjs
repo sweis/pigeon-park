@@ -1,6 +1,6 @@
 // Capture each happening in the real game (dev server), check it starts/ends and shaders never recompile.
-import { startServer, launch, boot, frames, shot, state, check, failures } from './lib.mjs';
-const srv = await startServer(); const br = await launch();
+import { setup, finish, boot, shot, state, check, checkNoErrors, checkPrograms, clickSel, poll } from './lib.mjs';
+const { srv, br } = await setup();
 const { page, errors } = await boot(br, srv.url, 'nosave&seed=8&hour=16.5');
 await page.evaluate(() => { for (let i = 0; i < 12; i++) window.pp.spawn('founder'); window.pp.setSpeed(1); });
 const kinds = await page.evaluate(() => window.pp.happenings());
@@ -14,22 +14,19 @@ for (const k of kinds) {
   out.push(await shot(page, `happen-${k}.png`));
   // let it run out on its own, at Frantic speed so long ones (visitor: 50 sim-s) finish on slow machines too
   await page.evaluate(() => { const g = window.__game; if (g.sim.happening) { g.sim.nextHappeningAt = Infinity; g.sim.speed = 2.5; } });
-  await page.waitForFunction(() => !window.__game.sim.happening, null, { timeout: 120000, polling: 250 }).catch(() => {});
+  await poll(page, () => !window.__game.sim.happening, null, 120000);
   await page.evaluate(() => { window.__game.sim.speed = 1; });
   check(!(await state(page)).happening, `${k} ends`);
 }
 // pause: real button, sim time stops, resumes
-const pb = await page.locator('#b-pause').boundingBox();
-await page.mouse.click(pb.x + pb.width / 2, pb.y + pb.height / 2);
+await clickSel(page, '#b-pause');
 const t0 = (await state(page)).t; await page.waitForTimeout(1500); const t1 = (await state(page)).t;
 check((await state(page)).paused && t1 === t0, `pause button stops the park (t ${t0} → ${t1})`);
 out.push(await shot(page, 'paused.png'));
 await page.keyboard.press('p');
-await page.waitForFunction((t1) => window.pp.getState().t > t1, t1, { timeout: 15000, polling: 100 }).catch(() => {});
+await poll(page, (t1) => window.pp.getState().t > t1, t1, 15000);
 check(!(await state(page)).paused && (await state(page)).t > t1, 'P resumes the park');
-const s = await state(page);
-check(s.render.programs === s.render.programsAfterBoot, `no shader recompiles across all happenings (${s.render.programs})`);
-check(errors.length === 0, 'no console errors ' + errors.join(' | '));
+await checkPrograms(page, 'no shader recompiles across all happenings');
+checkNoErrors(errors);
 console.log(out.join('\n'));
-await br.close(); await srv.close();
-process.exit(failures() ? 1 : 0);
+await finish(br, srv, 'happening');

@@ -2,6 +2,8 @@
 import { createServer, preview } from 'vite';
 import { chromium } from 'playwright';
 import fs from 'node:fs';
+import { check, failures } from './assert.mjs';
+export { check, failures };
 
 export async function startServer({ dist = false } = {}) {
   const server = dist ? await preview({ preview: { port: 4174, strictPort: true }, logLevel: 'error' })
@@ -57,6 +59,33 @@ export async function frameStats(page) {
   }, buf.toString('base64'));
 }
 
-let fails = 0;
-export function check(cond, msg) { console.log((cond ? 'PASS ' : 'FAIL ') + msg); if (!cond) fails++; return cond; }
-export const failures = () => fails;
+
+// ---------- suite plumbing ----------
+export const dist = process.argv.includes('--dist');           // test the production build (docs/) instead of the dev server
+export const PHONE = { viewport: { width: 390, height: 844 }, mobile: true }; // boot() options for a phone
+// A server (dev, or the build with --dist) + a browser.
+export async function setup() { return { srv: await startServer({ dist }), br: await launch() }; }
+// Close everything, print the tally and exit with the failure count's sign.
+export async function finish(br, srv, name = 'suite') {
+  await br.close(); await srv.close();
+  const n = failures();
+  console.log(n ? `\n${n} FAILED` : `\nall ${name} checks passed`);
+  process.exit(n ? 1 : 0);
+}
+// Wait for fn (page side) to turn truthy. Never throws: returns whether it did within ms.
+export const poll = (page, fn, arg, ms = 20000) => page.waitForFunction(fn, arg, { timeout: ms, polling: 100 }).then(() => true, () => false);
+export const reload = async (page) => { await page.reload({ waitUntil: 'commit' }); await page.waitForFunction(() => window.ppReady === true, null, { timeout: 60000 }); };
+// Real input at the centre of an element (mouse click, or a finger tap).
+export async function clickSel(page, sel, { touch = false } = {}) {
+  const b = await page.locator(sel).first().boundingBox();
+  const x = b.x + b.width / 2, y = b.y + b.height / 2;
+  if (touch) await page.touchscreen.tap(x, y); else await page.mouse.click(x, y);
+}
+// Where a bird is on screen (its body centre), for real clicks / taps.
+export const screenOf = (page, id) => page.evaluate((id) => window.pp.screenOf(id), id);
+export const checkNoErrors = (errors, what = '') => check(errors.length === 0, `no console errors${what ? ' ' + what : ''}${errors.length ? ': ' + errors.slice(0, 4).join(' | ') : ''}`);
+// The shader program count never changes after boot (no mid-game compiles).
+export async function checkPrograms(page, what = 'no new shader programs') {
+  const r = (await state(page)).render;
+  return check(r.programs === r.programsAfterBoot, `${what} (${r.programs})`);
+}
