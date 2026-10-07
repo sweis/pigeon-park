@@ -420,16 +420,20 @@ export function tickHappenings(S) {
   if (H) {
     let keep = false;
     try { keep = HAPPENINGS[H.kind].tick(S, H, now); } catch (e) { console.error('happening', H.kind, e); keep = false; } // end it, but say why
-    if (!keep) { HAPPENINGS[H.kind].end?.(S, H); S.happening = null; S.nextHappeningAt = now + gapFor(S); }
+    if (!keep) { endHappening(S); S.nextHappeningAt = now + gapFor(S); }
     return;
   }
   if (now < S.nextHappeningAt || S.alive() < 3) return;
   const kinds = Object.keys(HAPPENINGS).filter(k => !HAPPENINGS[k].when || HAPPENINGS[k].when(S));
   startHappening(S, pick(kinds));
 }
+// Wrap up the current happening now (its end() releases the birds and clears its props).
+export function endHappening(S) {
+  if (S.happening) { HAPPENINGS[S.happening.kind].end?.(S, S.happening); S.happening = null; }
+}
 export function startHappening(S, kind) {
   if (!HAPPENINGS[kind]) return false;
-  if (S.happening) { HAPPENINGS[S.happening.kind].end?.(S, S.happening); S.happening = null; }
+  endHappening(S);
   const data = HAPPENINGS[kind].start(S);
   S.nextHappeningAt = S.t + gapFor(S);
   if (!data) return false;

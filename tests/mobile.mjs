@@ -134,7 +134,7 @@ check((await page.evaluate(() => window.__game.cam.name)) === 'overview', 'recen
   await page.evaluate(() => { document.querySelector('#settings').classList.add('hidden'); window.__game.ui.closeDialog(); if (window.__game.paused) window.__game.togglePause(false); });
 }
 // compact layout: one-row top bar, sheet ≤ 40% of the screen
-await page.evaluate((id) => { window.pp.select(id); window.pp.render(); }, targets['near-right corner']);
+await page.evaluate(() => { const id = window.pp.spawn('founder', { x: 4, z: 2.5 }); window.pp.select(id); window.pp.render(); }); // (the monument check cleared the park)
 await wait(500); await page.evaluate(() => window.pp.render());
 const lay = await page.evaluate(() => {
   const r = (s) => document.querySelector(s).getBoundingClientRect();
@@ -142,7 +142,7 @@ const lay = await page.evaluate(() => {
   return { rows: Math.max(...mids) - Math.min(...mids) < 12 ? 1 : 2, bar: r('.topbar').bottom, sheet: r('#inspector').height / innerHeight, roost: r('#roost').height, overflow: document.documentElement.scrollWidth > innerWidth };
 });
 check(lay.rows === 1 && lay.bar < 50, `top bar is one row (${lay.bar.toFixed(0)} px tall)`);
-check(lay.sheet <= .4, `bird sheet ≤ 40% of the screen (${(lay.sheet * 100).toFixed(0)}%)`);
+check(lay.sheet > .1 && lay.sheet <= .4, `bird sheet open and ≤ 40% of the screen (${(lay.sheet * 100).toFixed(0)}%)`);
 check(lay.roost <= 46 && !lay.overflow, `slim roost bar (${lay.roost.toFixed(0)} px), no horizontal overflow`);
 await shot(page, 'phone-compact.png');
 checkNoErrors(errors);

@@ -144,6 +144,11 @@ export class UI {
     `;
     this.$ = (id) => document.getElementById(id);
     this.renderRoost(); this.renderSound(); this.renderPause();
+    // the bottom sheets change height as their content (portrait, chips) settles: re-place the toasts then
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => { this._toastSig = null; this.placeToasts(); });
+      for (const id of ['inspector', 'intro']) ro.observe(this.$(id));
+    }
     // volume sliders (live while dragging; the settings panel is not rebuilt underneath them)
     this.root.addEventListener('input', (e) => {
       const a = e.target.closest('[data-act]'); if (!a) return;

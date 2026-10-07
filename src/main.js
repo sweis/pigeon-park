@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import * as M from './genetics.js';
 import { setSeed, isSeeded, rngState, restoreRng } from './rng.js';
-import { Sim, FIXED_DT, PARK, JACOB_AFTER, migrateLegacy } from './sim.js';
+import { Sim, FIXED_DT, PARK, JACOB_AFTER, ROOST_SIZE, migrateLegacy } from './sim.js';
 import { World } from './world.js';
 import { FlockView } from './view.js';
 import { makeMaterials, PigeonRig, geometryCacheSize } from './pigeon3d.js';
@@ -13,7 +13,7 @@ import { Audio, SONGS, PLAYLISTS, renderMusic } from './audio.js';
 import { Portraits } from './portraits.js';
 import { UI } from './ui.js';
 import { Diagnostics } from './debug.js';
-import { startHappening, HAPPENINGS } from './happenings.js';
+import { startHappening, endHappening, HAPPENINGS } from './happenings.js';
 import { Monuments } from './monuments.js';
 import { ACHIEVEMENTS, checkAchievements } from './achievements.js';
 import { toScreen, percentile, pickUnseeded, fileSlug, loadFonts, store, BRAND } from './util.js';
@@ -584,7 +584,7 @@ function makeDebugApi(g) {
       genome = typeof kind === 'object' ? M.pureGenome(kind) : M.founderGenome();
       return S.spawn({ genome, accessory: pos.accessory || null, name: M.randomName(), adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id;
     },
-    clearAll() { S.pigeons.length = 0; S.eggs.length = 0; S.poops.length = 0; S.court = null; S.selId = null; S.events.length = 0; g.fx.parts.length = 0; g.fx.rings.forEach(r => { r.userData.t = 1; }); g.render(0); },
+    clearAll() { S.pigeons.length = 0; S.eggs.length = 0; S.poops.length = 0; S.court = null; S.selId = null; api.clearFx(); g.render(0); },
     teleport(id, x, z) { const p = S.byId(id); if (p) { [p.x, p.z] = S.clampToPark(x, z); p.tx = p.x; p.tz = p.z; p.state = 'idle'; } g.render(0); },
     select(id) { g.select(id); g.render(0); },
     cam(name, opts) { g.cam.shot(name, opts); g.render(0); return g.cam.name; },
@@ -597,7 +597,22 @@ function makeDebugApi(g) {
     pickAt(x, y) { return g.pickAt(x, y); },
     find(key) { g.findTrait(key); g.render(0); return g.flock.findGems.count; },
     family(id) { const p = S.byId(id); return p ? S.familyTree(p.lid) : null; },
-    win() { for (const b of M.BREEDS) S.breeds[b.id] ||= { by: 'debug', at: Date.now() }; for (const k of Object.keys(M.PEDIA)) S.discovered[k] = 1; },
+    // every breed + field note; all: also every other milestone (deep line, hatches, happenings, full roost)
+    win({ all = false } = {}) {
+      for (const b of M.BREEDS) S.breeds[b.id] ||= { by: 'debug', at: Date.now() }; for (const k of Object.keys(M.PEDIA)) S.discovered[k] = 1;
+      if (!all) return;
+      Object.assign(S.stats, { maxGen: Math.max(S.stats.maxGen, 10), births: Math.max(S.stats.births, 100), happenings: Math.max(S.stats.happenings || 0, 10) });
+      while (S.roost.length < ROOST_SIZE) S.roost.push({ name: 'Perch ' + (S.roost.length + 1), genome: M.pureGenome(), accessory: null, gen: 1, lid: null });
+    },
+    endHappening() { endHappening(S); g.render(0); },
+    clearFx() { S.events.length = 0; g.fx.parts.length = 0; g.fx.rings.forEach(r => { r.userData.t = 1; }); g.fx.update(0); },
+    // the park bird with the most generations of recorded ancestry → { id, depth }
+    deepestLineage() {
+      const depth = (n) => !n ? 0 : 1 + Math.max(0, ...(n.par || []).map(depth));
+      let id = null, best = 0;
+      for (const p of S.pigeons) { if (p.flying) continue; const d = depth(S.familyTree(p.lid).root); if (d > best) { best = d; id = p.id; } }
+      return { id, depth: best };
+    },
     lose() { api.clearAll(); S.roost.length = 0; },
     render() { g.render(0); },
     async photo(id) { const r = await g.photo({ id }); return r && { w: r.w, h: r.h, size: r.blob.size, file: r.file }; },
