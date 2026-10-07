@@ -164,6 +164,15 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 - Verified: sim suite + new checks (registries, seeded season, same-spot push, jersey, LOD, prune), browser suites,
   before/after overview captures (identical to 0.03 % of pixels). Not verified: real devices.
 
+## v0.9.3 — roost bar fix, Pigeonpedia sections
+- The roost bar was centred with `left: 50%` + translate, which caps an absolutely positioned box's width at half the
+  window: on desktops narrower than ~1500 px the tip text squeezed to one word per line, the bar grew ~190 px tall
+  and toasts (at a fixed offset) drew over it. Now centred with auto margins (`width: max-content`); the tip hides
+  below 900 px. Toast placement also measures the roost bar (ResizeObserver on the bar and the phone sheets), so
+  toasts always sit above it. features.mjs checks 1440/1280/1024/900 px with a full roost.
+- Pigeonpedia tabs: All · Looks · Behaviour (temperament, voice, gait) · Outfits · Accessories, each with seen/total;
+  entries in a section carry its tag. features.mjs checks the Behaviour tab.
+
 ## Next
 - Try Clip on a real iPhone + Android (MP4 path, filming time); fall back to 720×1280 on phones if slow. Add a Cancel button to filming.
 - Listen to the new songs; tune levels/instruments by ear.

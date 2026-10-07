@@ -68,6 +68,15 @@ const SETTINGS = [
 ];
 // Dialogs with a "new" dot on their top-bar button: how many things they hold right now.
 const COUNTS = { pedia: (S) => Object.keys(S.discovered).length, breeds: (S) => Object.keys(S.breeds).length };
+// Pigeonpedia sections: which kind of field note a trait key is (by its gene, or 'acc:' for accessories).
+const PEDIA_CATS = [
+  { id: 'all', label: 'All' },
+  { id: 'look', label: 'Looks' },
+  { id: 'behaviour', label: 'Behaviour', loci: ['behavior', 'voice', 'gait'] },
+  { id: 'outfit', label: 'Outfits', loci: ['outfit'] },
+  { id: 'accessory', label: 'Accessories', loci: ['acc'] },
+];
+const pediaCat = (key) => { const loc = key.split(':')[0]; return PEDIA_CATS.find(c => c.loci?.includes(loc))?.id || 'look'; };
 const canShareFile = (f) => !!(navigator.canShare && navigator.canShare({ files: [f] }));
 function fmtAge(s) { if (s < 20) return 'freshly hatched'; if (s < 60) return 'a chick'; const m = Math.floor(s / 60); return m < 60 ? m + 'm in the park' : Math.floor(m / 60) + 'h in the park'; }
 function fmtHour(h) { const hh = Math.floor(h), mm = Math.floor((h - hh) * 60 / 15) * 15; const ap = hh >= 12 ? 'pm' : 'am'; return ((hh + 11) % 12 + 1) + ':' + String(mm).padStart(2, '0') + ' ' + ap; }
@@ -147,7 +156,7 @@ export class UI {
     // the bottom sheets change height as their content (portrait, chips) settles: re-place the toasts then
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() => { this._toastSig = null; this.placeToasts(); });
-      for (const id of ['inspector', 'intro']) ro.observe(this.$(id));
+      for (const id of ['inspector', 'intro', 'roost']) ro.observe(this.$(id));
     }
     // volume sliders (live while dragging; the settings panel is not rebuilt underneath them)
     this.root.addEventListener('input', (e) => {
@@ -175,20 +184,22 @@ export class UI {
     this.placeToasts();
     setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 4200);
   }
-  // Toasts sit above the roost bar; on phones the bird card / intro are bottom sheets over that spot,
-  // so lift the toasts to just above whichever sheet is open (they never draw over the UI).
-  // Measuring forces a layout, so only re-measure when a sheet opens, closes or changes, or the window resizes.
+  // Toasts sit above the roost bar; on phones the bird card / intro are bottom sheets over that spot, so lift the
+  // toasts to just above whichever is open (they never draw over the UI). Also if the roost bar is ever taller
+  // than the stylesheet expects. Measuring forces a layout, so only when a sheet / the bar / the window changes.
   placeToasts() {
-    const sig = PHONE.matches ? [this._insKey, this.$('intro').classList.contains('hidden'), innerWidth, innerHeight].join('|') : '';
+    const ids = PHONE.matches ? ['roost', 'inspector', 'intro'] : ['roost'];
+    const sig = [this._insKey, this.$('intro').classList.contains('hidden'), innerWidth, innerHeight].join('|'); // (resizes: see the ResizeObserver)
     if (sig === this._toastSig) return; this._toastSig = sig;
-    const box = this.$('toasts'); let bottom = '';
-    if (PHONE.matches) for (const id of ['inspector', 'intro']) {
+    const box = this.$('toasts'), H = this.root.clientHeight; // #hud fills the viewport; #toasts is positioned inside it
+    box.style.bottom = ''; const usual = parseFloat(getComputedStyle(box).bottom) || 0;
+    let lift = 0;
+    for (const id of ids) {
       const el = this.$(id); if (el.classList.contains('hidden')) continue;
       // layout box (offsetTop/Height), not the on-screen rect: the card slides in with a transform
-      const H = this.root.clientHeight; // #hud fills the viewport; #toasts is positioned inside it
-      if (el.offsetTop + el.offsetHeight > H - 140) bottom = Math.max(parseFloat(bottom) || 0, H - el.offsetTop + 8) + 'px';
+      if (el.offsetTop + el.offsetHeight > H - 140) lift = Math.max(lift, H - el.offsetTop + 8);
     }
-    if (box.style.bottom !== bottom) box.style.bottom = bottom;
+    if (lift > usual) box.style.bottom = lift + 'px';
   }
   onClick(e) {
     if (this.suppressClick) { this.suppressClick = false; return; } // the click finishing a click-off press
@@ -227,6 +238,7 @@ export class UI {
       case 'let-go': S.removeRoost(+arg); this.roostSel = null; break;
       case 'clone-breed': { const p = S.cloneBreed(arg); if (p) { this.closeDialog(); g.select(p.id); } break; }
       case 'find': this.closeDialog(); g.findTrait(arg); break;
+      case 'pedia-cat': this.pediaCat = arg; this.showDialog('pedia', this.dlg_pedia()); break;
       case 'find-off': g.findTrait(null); break;
       case 'family': this.openFamily(+arg); break;
       case 'ft-go': { // jump to a relative who is still around
@@ -476,15 +488,22 @@ export class UI {
   }
   dlgHead(title, tag) { return `<div class="dlg-head"><div class="dlg-title">${title}</div>${tag}<span class="spacer"></span><button class="btn icon" data-act="close" aria-label="Close">${I.x}</button></div>`; }
   dlg_pedia() {
-    const S = this.sim, keys = Object.keys(M.PEDIA);
+    const S = this.sim, keys = Object.keys(M.PEDIA), cur = this.pediaCat || 'all';
+    const NOT_YET = { look: 'Not yet observed in your park.', behaviour: 'A behaviour not yet seen in your park.', outfit: 'An outfit not yet seen in your park.', accessory: 'An accessory not yet seen in your park.' };
     const items = keys.map(k => {
-      const acc = k.startsWith('acc:'), meta = M.ALLELE_META[k] || (acc ? { label: traitLabel(k), tier: 2 } : { label: k, tier: 1 }), got = !!S.discovered[k];
-      return { k, got, acc, tier: meta.tier, title: got ? meta.label : '???', note: got ? M.PEDIA[k] : acc ? 'An accessory not yet seen in your park.' : 'Not yet observed in your park.' };
+      const cat = pediaCat(k), meta = M.ALLELE_META[k] || { label: traitLabel(k), tier: 2 }, got = !!S.discovered[k];
+      return { k, got, cat, tier: meta.tier, title: got ? meta.label : '???', note: got ? M.PEDIA[k] : NOT_YET[cat] };
     }).sort((a, b) => (b.got - a.got) || (a.tier - b.tier) || (a.title > b.title ? 1 : -1));
-    const n = keys.filter(k => S.discovered[k]).length;
+    const n = items.filter(i => i.got).length;
+    // section tabs, each with how many of its notes are filled in
+    const tabs = PEDIA_CATS.map(c => { const of = c.id === 'all' ? items : items.filter(i => i.cat === c.id), got = of.filter(i => i.got).length;
+      return `<button class="${c.id === cur ? 'on' : ''}" data-act="pedia-cat" data-arg="${c.id}">${c.label} <span class="tab-n">${got}/${of.length}</span></button>`; }).join('');
+    const shown = cur === 'all' ? items : items.filter(i => i.cat === cur);
+    const tag = (i) => i.cat === 'look' ? `<span class="chip ${chip(i.tier)} tiny">${TIER_NAME[i.tier] || 'odd'}</span>` : `<span class="chip chip-breed tiny">${i.cat}</span>`;
     return this.dlgHead('The Pigeonpedia', `<span class="chip chip-t1">${n} / ${keys.length} observed</span>`) +
-      `<div class="grid pedia">${items.map(i => `<div class="entry ${i.got ? '' : 'dim'}"><div class="entry-top"><b>${esc(i.title)}</b><span class="chip ${i.acc ? 'chip-breed' : chip(i.tier)} tiny">${i.acc ? 'accessory' : TIER_NAME[i.tier] || 'odd'}</span></div><div class="note">${esc(i.note)}</div>${i.got ? `<button class="btn small ghost find" data-act="find" data-arg="${esc(i.k)}">${I.search} Find in park</button>` : ''}</div>`).join('')}</div>
-       <div class="foot">Field notes are written the first time a trait hatches in your park. <b>Find in park</b> marks birds that show a trait in green and hidden carriers in yellow.</div>`;
+      `<div class="seg pedia-tabs">${tabs}</div>` +
+      `<div class="grid pedia">${shown.map(i => `<div class="entry ${i.got ? '' : 'dim'}"><div class="entry-top"><b>${esc(i.title)}</b>${tag(i)}</div><div class="note">${esc(i.note)}</div>${i.got ? `<button class="btn small ghost find" data-act="find" data-arg="${esc(i.k)}">${I.search} Find in park</button>` : ''}</div>`).join('')}</div>
+       <div class="foot">Field notes are written the first time a trait hatches in your park. <b>Behaviour</b> covers how a bird moves and sounds. <b>Find in park</b> marks birds that show a trait in green and hidden carriers in yellow.</div>`;
   }
   // Trait groups a breed needs that the player hasn't observed yet (each group: any one allele counts).
   missingTraits(b) {
