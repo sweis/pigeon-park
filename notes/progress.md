@@ -173,6 +173,11 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 - Pigeonpedia tabs: All · Looks · Behaviour (temperament, voice, gait) · Outfits · Accessories, each with seen/total;
   entries in a section carry its tag. features.mjs checks the Behaviour tab.
 
+## v0.9.4 — registry clones keep the panel open
+- "Clone into park" in the Breed Registry no longer closes the registry: the button says "Added to the park" for a
+  moment, the newest clone is selected for when the panel closes, and toasts now draw above dialog backdrops
+  (z-index 25), so "made to order" / "park is full" are visible. features.mjs checks two clones in a row.
+
 ## Next
 - Try Clip on a real iPhone + Android (MP4 path, filming time); fall back to 720×1280 on phones if slow. Add a Cancel button to filming.
 - Listen to the new songs; tune levels/instruments by ear.

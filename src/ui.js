@@ -236,7 +236,13 @@ export class UI {
       case 'release': { const p = S.releaseRoost(+arg, false); if (p) { this.roostSel = null; g.select(p.id); } break; }
       case 'clone-out': { const p = S.releaseRoost(+arg, true); if (p) g.select(p.id); break; }
       case 'let-go': S.removeRoost(+arg); this.roostSel = null; break;
-      case 'clone-breed': { const p = S.cloneBreed(arg); if (p) { this.closeDialog(); g.select(p.id); } break; }
+      case 'clone-breed': { // the registry stays open (clone a few in a row); the button confirms, the newest is selected
+        const p = S.cloneBreed(arg); if (!p) break;
+        g.select(p.id);
+        const lbl = a.querySelector('span'); a.classList.add('done'); lbl.textContent = 'Added to the park';
+        clearTimeout(a._t); a._t = setTimeout(() => { a.classList.remove('done'); lbl.textContent = 'Clone into park'; }, 1600);
+        break;
+      }
       case 'find': this.closeDialog(); g.findTrait(arg); break;
       case 'pedia-cat': this.pediaCat = arg; this.showDialog('pedia', this.dlg_pedia()); break;
       case 'find-off': g.findTrait(null); break;
@@ -541,7 +547,7 @@ export class UI {
           <span class="chip tiny ${kcls}">${klabel}</span>
           <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : b.special ? 'Turns up on his own, if you spend long enough in the park.' : missing ? `Recipe unknown — needs ${missing} trait${missing > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'}${!got && b.seasonal ? ` Far more likely around ${M.SEASONS[b.seasonal].label}.` : ''}</div>
           ${recipe.length ? `<div class="chips recipe">${recipe.map(k => findChip(k, 'chip-t1', I.search + ' ' + esc(traitLabel(k)))).join('')}</div>` : ''}
-          ${got ? `<div class="by">first bred by ${esc(got.by)}</div><button class="btn small" data-act="clone-breed" data-arg="${b.id}">${I.clone} Clone into park</button>` : ''}
+          ${got ? `<div class="by">first bred by ${esc(got.by)}</div><button class="btn small" data-act="clone-breed" data-arg="${b.id}">${I.clone} <span>Clone into park</span></button>` : ''}
         </div>`; }).join('')}</div>
        <div class="foot">Match a real fancy-pigeon breed to register it. The cryptids are your problem. Tap a recipe trait to find birds that show or carry it.</div>`;
   }
