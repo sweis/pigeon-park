@@ -280,8 +280,18 @@ const SONGS = {
       if (s === 6 || s === 12) m.pizz(t, NOTE(c[s === 6 ? 0 : 2] - 24), .2); // tumbao: anticipate the bar
     },
   },
+  goddess: { // Heavenly Coo: a slow choir of "aah"s over harp arpeggios and temple bells
+    title: 'Heavenly Coo', bpm: 66, steps: 12, swing: 0, vol: .9, event: 1,
+    bars: [[53, 57, 60, 64], [57, 60, 64, 67], [58, 62, 65, 69], [48, 52, 55, 58]],
+    lead: { inst: 'choir', scale: MAJOR, root: 72, p: .9, amp: .045, rhythms: [[0, 6], [0], [0, 4, 8]] },
+    beat(m, s, t, d, c) {
+      if (s % 2 === 0) m.harp(t, NOTE(c[(s / 2) % c.length] + (s >= 6 ? 12 : 0)), .05);
+      if (s === 0) { m.pad(t, c.map(n => NOTE(n)), d * 12, .016); m.pizz(t, NOTE(c[0] - 24), .1); }
+      if (s === 0 && m.bar % 2 === 0) m.bell(t, NOTE(c[2] + 24), .03);
+    },
+  },
 };
-const PLAYLISTS = { day: ['strut', 'waltz', 'shuffle'], night: ['night', 'lullaby'], dance: ['disco'], conga: ['conga'], ufo: ['ufo'] };
+const PLAYLISTS = { day: ['strut', 'waltz', 'shuffle'], night: ['night', 'lullaby'], dance: ['disco'], conga: ['conga'], ufo: ['ufo'], goddess: ['goddess'] };
 const BARS_PER_SONG = 16;
 
 class Music {
@@ -351,6 +361,7 @@ class Music {
     if (inst === 'theremin') return this.theremin(t, f, dur, amp);
     if (inst === 'strings') return this.stab(t, [f], amp, 'strings', dur);
     if (inst === 'brass') return this.stab(t, [f], amp, 'brass', dur * .8);
+    if (inst === 'choir') return this.choir(t, f, dur, amp);
   }
   // one note's envelope into the music bus (scaled by the song's level)
   out(dur, peak, t, attack = .01) { this.notes++; return this.a.env(dur, peak * 2.5 * (this.vol ?? 1), this.a.mus, t, attack); }
@@ -388,6 +399,17 @@ class Music {
     const fl = this.lp(type === 'sawtooth' ? 900 : 1600); fl.connect(g); g.connect(this.a.mus); this.notes++;
     fs.forEach((f, i) => { for (const det of [-4, 4]) { const o = this.osc(type, f, t, t + dur + .05); o.detune.value = det + i; o.connect(fl); } });
   }
+  choir(t, f, dur, amp) { // an "aah": two detuned saws through vowel formants, slow swell, gentle vibrato
+    const e = this.out(dur + .5, amp, t, Math.min(.35, dur * .4)), vib = this.osc('sine', 5, t, t + dur + .6), vg = this.ac.createGain();
+    vg.gain.value = f * .008; vib.connect(vg);
+    for (const [fq, q, g] of [[800, 6, 1], [1150, 8, .6]]) {
+      const bp = this.ac.createBiquadFilter(), gg = this.ac.createGain(); bp.type = 'bandpass'; bp.frequency.value = fq; bp.Q.value = q; gg.gain.value = g;
+      for (const det of [-6, 6]) { const o = this.osc('sawtooth', f, t, t + dur + .6); o.detune.value = det; vg.connect(o.frequency); o.connect(bp); }
+      bp.connect(gg); gg.connect(e);
+    }
+  }
+  harp(t, f, amp) { const e = this.out(1.1, amp, t, .002); this.osc('triangle', f, t, t + 1.15).connect(e); const h = this.ac.createGain(); h.gain.value = .2; this.osc('sine', f * 2, t, t + .5).connect(h); h.connect(e); }
+  bell(t, f, amp) { const e = this.out(2.2, amp, t, .002); for (const [r, g] of [[1, 1], [2.76, .4], [5.4, .2]]) { const gg = this.ac.createGain(); gg.gain.value = g; this.osc('sine', f * r, t, t + 2.3).connect(gg); gg.connect(e); } }
   pizz(t, f, amp) { const o = this.osc('triangle', f, t, t + .3), fl = this.lp(600); o.connect(fl); fl.connect(this.out(.25, amp, t, .005)); }
   bass(t, f, dur, amp) { const o = this.osc('sawtooth', f, t, t + dur + .05), fl = this.lp(420, 2); o.connect(fl); fl.connect(this.out(dur, amp, t, .005)); }
   throb(t, f, dur, amp) { const o = this.osc('sine', f, t, t + dur + .05); o.frequency.exponentialRampToValueAtTime(f * .985, t + dur); o.connect(this.out(dur, amp, t, .02)); }
@@ -415,6 +437,7 @@ class Music {
   sting(id, t) {
     if (id === 'ufo') { const o = this.osc('sine', 1400, t, t + 1.1), v = this.osc('sine', 9, t, t + 1.1), vg = this.ac.createGain(); vg.gain.value = 60; v.connect(vg); vg.connect(o.frequency); o.frequency.exponentialRampToValueAtTime(180, t + 1); o.connect(this.out(1.05, .07, t, .05)); }
     else if (id === 'disco') { this.noiseHit(t, .25, .12, 'bandpass', 900, 2.5); this.swoop(t, .04); } // needle drop
+    else if (id === 'goddess') { for (let i = 0; i < 10; i++) this.harp(t + i * .045, NOTE(60 + [0, 4, 7, 11, 12, 16, 19, 23, 24, 28][i]), .04); } // harp glissando
     else if (id === 'conga') { const o = this.osc('sine', 2600, t, t + .5), v = this.osc('square', 28, t, t + .5), vg = this.ac.createGain(); vg.gain.value = 220; v.connect(vg); vg.connect(o.frequency); o.connect(this.out(.45, .05, t, .01)); } // whistle
   }
 }

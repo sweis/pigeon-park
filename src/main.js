@@ -119,6 +119,7 @@ class Game {
     this.sim.eggs.push({ id: -1, x: 0, z: 2, laidAt: 0, hatchAt: 1, genome: null }, { id: -2, x: .5, z: 2, laidAt: 0, hatchAt: 1, genome: null, golden: true });
     this.sim.bread = { x: 0, z: 2.5, hp: .5, a: 0 }; // bread happening props
     this.sim.ufo = { x: 0, z: 0, y: 4, beam: 1 }; this.sim.rain = 1; this.flock.rainAmt = 1;
+    this.sim.goddess = { x: 0, z: -1, y: 4, beam: { x: 0, z: 1 } };
     this.fx.burst(0, .5, 2, 3);
     const rs = rngState(); // the warm-up bird must not advance the seeded stream
     this.sim.spawn({ genome: pureGenome({}), name: 'warm-up', adult: true, quiet: true, x: 0, z: 1, dir: 0 }); // a finder marker target
@@ -131,7 +132,7 @@ class Game {
     this.renderer.compile(this.scene, this.cam.cam);
     this.renderer.render(this.scene, this.cam.cam);
     rigs.forEach(r => { this.scene.remove(r.group); r.dispose(); });
-    this.sim.eggs.length = 0; this.sim.bread = null; this.sim.ufo = null; this.sim.rain = 0; this.flock.rainAmt = 0;
+    this.sim.eggs.length = 0; this.sim.bread = null; this.sim.ufo = null; this.sim.goddess = null; this.sim.rain = 0; this.flock.rainAmt = 0;
     this.flock.update(this.sim, 0, 0);
     this.fx.parts.length = 0; this.fx.update(0);
   }
@@ -482,7 +483,7 @@ class Game {
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
 const FIND_MS = 30000;
 const COO_PITCH = { king: .78, dinky: 1.32, chonk: .84 }; // big birds low, small birds high
-const EVENT_MUSIC = { dance: 'dance', conga: 'conga', ufo: 'ufo' }; // happenings with their own song
+const EVENT_MUSIC = { dance: 'dance', conga: 'conga', ufo: 'ufo', goddess: 'goddess' }; // happenings with their own song
 // Desktop camera keys by physical position (works on AZERTY too): [forward, right, rotate].
 const CAM_KEYS = {
   KeyW: [1, 0, 0], ArrowUp: [1, 0, 0], KeyS: [-1, 0, 0], ArrowDown: [-1, 0, 0],
@@ -494,6 +495,7 @@ const CODES = {
   ore: (S) => S.summonOres(),
   bread: (S) => startHappening(S, 'bread'),
   boogie: (S) => startHappening(S, 'dance'),
+  pray: (S) => startHappening(S, 'goddess'),
 };
 
 // Photo card: the picture on top, a caption band with name / colour / breeds and a small footer.

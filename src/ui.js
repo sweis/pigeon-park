@@ -507,7 +507,7 @@ export class UI {
         <div class="entry breed">
           <img src="${P.get(M.breedSample(b))}" class="${got ? '' : 'silhouette'}" alt="">
           <b>${got ? esc(b.name) : '???'}</b>
-          <span class="chip tiny ${b.legend ? 'chip-breed' : b.real ? 'chip-t1' : 'chip-t3'}">${b.legend ? 'legendary' : b.real ? (b.exotic ? 'exotic' : 'real breed') : 'cryptid'}</span>
+          <span class="chip tiny ${b.legend ? 'chip-breed' : b.real ? 'chip-t1' : b.fashion ? 'chip-t2' : 'chip-t3'}">${b.legend ? 'legendary' : b.real ? (b.exotic ? 'exotic' : 'real breed') : b.fashion ? 'fashion' : 'cryptid'}</span>
           <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : missing ? `Recipe unknown — needs ${missing} trait${missing > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'}</div>
           ${recipe.length ? `<div class="chips recipe">${recipe.map(k => findChip(k, 'chip-t1', I.search + ' ' + esc(traitLabel(k)))).join('')}</div>` : ''}
           ${got ? `<div class="by">first bred by ${esc(got.by)}</div><button class="btn small" data-act="clone-breed" data-arg="${b.id}">${I.clone} Clone into park</button>` : ''}

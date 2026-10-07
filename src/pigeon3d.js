@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { palette, PALETTES, ORE_SPECKS, W1, LEG } from './palette.js';
-import { phenoKey } from './genetics.js';
+import { phenoKey, accList, ACCESSORIES } from './genetics.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const col = (hex) => new THREE.Color(hex);
@@ -173,11 +173,11 @@ function materialKind(pheno) {
 
 // Standing height in bird units (before size scaling): used to frame photos and portraits.
 const TALL_TOP = { lace: .16, horn: .13, hood: .06, shell: .05, rose: .05, double: .06, peak: .06 };
-const TALL_HAT = { tophat: .16, chefhat: .16, partyhat: .16, crown: .1, propeller: .1, cowboy: .08 };
+const TALL_HAT = { tophat: .16, chefhat: .16, partyhat: .16, crown: .1, propeller: .1, cowboy: .08, blackhat: .1 };
 export function birdHeight(pheno) {
   const e = pheno.e;
   let h = .6 + headOffset(e).y + (e.legs === 'long' ? LEG_LIFT : 0);
-  h += Math.max(TALL_TOP[e.crest] || 0, e.mane === 'hood' ? .06 : 0, TALL_HAT[pheno.accessory] || 0);
+  h += Math.max(TALL_TOP[e.crest] || 0, e.mane === 'hood' ? .06 : 0, e.outfit === 'punk' ? .07 : 0, ...accList(pheno.accessory).map(a => TALL_HAT[a] || 0));
   if (e.tail === 'fantail') h = Math.max(h, .56);
   return h;
 }
@@ -246,6 +246,9 @@ function buildGeometry(pheno, lod = 0) {
     return r;
   };
 
+  // clothes (outfit mutation) repaint the body and wings over the natural plumage
+  const dress = OUTFITS[e.outfit] || null;
+
   // ---- body ----
   const bodyDef = (u) => {
     const back = Math.max(0, -u.x), t = 1 - .42 * Math.pow(back, 1.4);
@@ -261,7 +264,8 @@ function buildGeometry(pheno, lod = 0) {
       if (magpie && u.y < -.1) return C.white;
       if (u.y > .35) c = mix(c, C.head, (u.y - .35) * .35);   // darker back
       if (u.y < -.5) c = mix(c, C.white, (-.5 - u.y) * .12);  // pale belly
-      return tint(c, u, 1);
+      c = tint(c, u, 1);
+      return dress ? dress.body(u, c) : c;
     },
   });
   const bodyS = shape(bodyDef, bodyM);
@@ -335,7 +339,8 @@ function buildGeometry(pheno, lod = 0) {
         if (e.pied === 'shield' && noFantasy && u.x < -.42) return C.white;   // white flights around the coloured shield
         if (u.x < -.42) c = mix(c, C.pat, .42 + (-.42 - u.x) * .5);     // dark flight feathers
         else if (u.y > .55) c = mix(c, C.body, .4);                       // shoulder
-        return tint(c, u, 4 + s);
+        c = tint(c, u, 4 + s);
+        return dress ? dress.wing(u, c) : c;
       },
     });
     const ws = shape(wingDef, wm), side = (x, y) => V(x, y, s * Math.sqrt(Math.max(.02, 1 - x * x - y * y)));
@@ -531,8 +536,10 @@ function buildGeometry(pheno, lod = 0) {
     else star(bodyS, sideDir(.05, .15, 1), .9, sc);
   }
 
-  // ---- accessories ----
-  if (pheno.accessory) accessory(b, pheno.accessory, C);
+  // ---- clothes trimmings + accessories ----
+  const worn = accList(pheno.accessory), hatted = worn.some(a => ACCESSORIES[a].slot === 'head');
+  if (dress) dress.trim?.(b, bodyS, headS, { hatted, wingShape: null });
+  for (const a of worn) accessory(b, a, C, bodyS);
 
   const HO = headOffset(e);
   if (HO.lengthSq()) b.shift(['head', 'eyeL', 'eyeR', 'spin'], HO); // noodle neck / pouter: head raised
@@ -552,7 +559,68 @@ function basisVecs(n) {
   return [x, y, z];
 }
 
-function accessory(b, acc, C) {
+// ---------- clothes (the outfit mutation) ----------
+// body(u, c) / wing(u, c) repaint a unit-sphere point of that part; trim(b, bodyS, headS, opts) adds details.
+const OC = (h) => col(h);
+const OUTFITS = {
+  suit: {
+    body: (u, c) => (u.x > .58 && Math.abs(u.z) < .5 * (u.y + .85) && u.y > -.55) ? OC('#f4f1ea') : OC('#30343f'),   // jacket open over a white shirt
+    wing: () => OC('#363b48'),
+    trim(b, bodyS) {
+      const red = OC('#a8323a');
+      b.ell('body', [.006, .056, .02], red, onSurface(bodyS, V(.96, -.12, 0), .004, 0, 1), 8, 6);              // tie
+      b.ell('body', [.012, .014, .02], OC('#8a2830'), onSurface(bodyS, V(.94, .2, 0), .006, 0, 1), 8, 6);      // knot
+      for (const s of [-1, 1]) b.ell('body', [.007, .05, .02], OC('#262a33'), onSurface(bodyS, V(.85, .05, .32 * s), .004, .5 * s, 1), 8, 6); // lapels
+    },
+  },
+  elvis: {
+    body: (u, c) => OC('#f7f3ea'),
+    wing: (u) => u.x < -.5 ? OC('#e8e2d2') : OC('#f7f3ea'),
+    trim(b, bodyS, headS, { hatted }) {
+      const gold = OC('#e2b13c'), ink = OC('#18171c');
+      for (let i = 0; i < 5; i++) for (const s of [-1, 1]) b.ell('body', [.008, .008, .004], gold, onSurface(bodyS, V(.9, .35 - i * .16, (.08 + i * .07) * s), .004, 0, 1), 6, 4); // studded V
+      b.ell('body', [.01, .01, .005], OC('#c0392b'), onSurface(bodyS, V(.95, -.5, 0), .005, 0, 1), 8, 5);                                         // belt jewel
+      b.prim('body', new THREE.TorusGeometry(.082, .018, 6, 16, Math.PI * 1.25), OC('#fbf8f0'), trs(V(.1, .43, 0), [Math.PI / 2, 0, Math.PI * .87]));     // high collar
+      if (!hatted) {
+        b.blob('head', { ws: 14, hs: 10, color: ink, matrix: trs(V(H.x - .005, H.y + .06, 0), [0, 0, -.2]), deform: (u) => u.set(u.x * .08, u.y * .04, u.z * .07) });          // slicked back
+        b.blob('head', { ws: 14, hs: 10, color: ink, matrix: trs(V(H.x + .05, H.y + .085, 0), [0, 0, .55]), deform: (u) => u.set(u.x * .055, u.y * .03, u.z * .05) });          // the quiff, up and forward
+        b.prim('head', new THREE.TorusGeometry(.022, .008, 6, 12, Math.PI * 1.3), ink, trs(V(H.x + .085, H.y + .075, 0), [0, 0, -.6]));                                        // its curl
+      }
+      for (const s of [-1, 1]) b.ell('head', [.016, .03, .006], ink, trs(V(H.x + .005, H.y - .012, .074 * s)), 8, 6);                         // sideburns
+    },
+  },
+  punk: {
+    body: (u, c) => (u.x > .7 && Math.abs(u.z) < .22 && u.y > -.4) ? OC('#c8c2b8') : OC('#1f1e24'),                       // leather, a torn tee showing
+    wing: () => OC('#26252c'),
+    trim(b, bodyS, headS, { hatted }) {
+      const stud = OC('#cfd3d8');
+      for (const s of [-1, 1]) for (let i = 0; i < 4; i++) b.prim('body', new THREE.ConeGeometry(.007, .014, 6), stud, onSurface(bodyS, V(.1 - i * .2, .6, .78 * s), .004, 0, 1).multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)));
+      if (!hatted) for (let i = 0; i < 6; i++) { // mohawk: a row of spikes over the crown, hot pink and green
+        const a = -.9 + i * .34, dir = V(Math.sin(a) * .5, 1, 0).normalize();
+        b.prim('head', new THREE.ConeGeometry(.014, .06 + Math.cos(a) * .02, 6), i % 2 ? OC('#e8408a') : OC('#7ad04a'), alongY(V(H.x - .01 + Math.sin(a) * .08, H.y + .075 + Math.cos(a) * .01, 0).addScaledVector(dir, .03), dir));
+      }
+    },
+  },
+  tracksuit: { // black with three white stripes down each wing and side
+    body: (u, c) => (Math.abs(u.z) < .05 && u.x > .6) ? OC('#9a9aa2') : (Math.abs(u.z) > .5 && [-.5, -.62, -.74].some(k => Math.abs(u.y - k) < .028)) ? OC('#f4f2ec') : OC('#22232a'),
+    wing: (u) => [.02, .22, .42].some(k => Math.abs(u.y - k) < .045) && u.x > -.5 ? OC('#f4f2ec') : OC('#26272e'),
+  },
+  hawaiian: { // teal with hibiscus flowers
+    body: (u) => hibiscus(u, 1),
+    wing: (u) => hibiscus(u, 2),
+  },
+  raincoat: {
+    body: (u, c) => (Math.abs(u.z) < .03 && u.x > .6) ? OC('#c9971a') : OC('#f2c230'),
+    wing: (u) => u.x < -.6 ? OC('#e0b021') : OC('#f2c230'),
+    trim(b, bodyS) { for (let i = 0; i < 3; i++) b.ell('body', [.011, .006, .012], OC('#6b4a2a'), onSurface(bodyS, V(.95, .2 - i * .24, .06), .006, 0, 1), 8, 5); }, // toggles
+  },
+};
+function hibiscus(u, s) {
+  const f = vnoise(u.clone().multiplyScalar(5.5).addScalar(s * 3.1), 40 + s);
+  return f > .78 ? OC('#f07aa0') : f > .72 ? OC('#ffd34d') : f < .16 ? OC('#f6f3ea') : OC('#2a9ca2');
+}
+
+function accessory(b, acc, C, bodyS) {
   const top = V(H.x - .005, H.y + .075, 0);
   const dark = col('#2a2620'), rust = col('#a8453c'), olive = col('#7a8a5e'), goldc = col('#e8b64c');
   switch (acc) {
@@ -634,6 +702,28 @@ function accessory(b, acc, C) {
       for (const s of [-1, 1]) {
         b.blob('head', { ws: 12, hs: 8, color: brown, matrix: trs(V(H.x + .09, H.y - .032, .036 * s), [.5 * s, -.35 * s, -.15]), deform: (u) => u.set(u.x * .022, u.y * .016, u.z * .05) });
         b.prim('head', new THREE.TorusGeometry(.016, .007, 6, 12, Math.PI * 1.4), brown, trs(V(H.x + .085, H.y - .02, .082 * s), [0, s > 0 ? -.4 : Math.PI + .4, 0]));
+      }
+      break;
+    }
+    case 'blackhat': { // a black fedora, worn level: wide brim, pinched crown, dark band
+      const ink = col('#1b1a1f'), band = col('#3b3a42'), m = trs(top.clone().add(V(0, -.006, 0)), [0, 0, .06]);
+      b.blob('head', { ws: 22, hs: 8, color: ink, matrix: m.clone(), deform: (u) => u.set(u.x * .115, u.y * .01 + (u.z * u.z) * .012, u.z * .108) });
+      b.prim('head', new THREE.CylinderGeometry(.05, .062, .075, 18), ink, m.clone().multiply(trs(V(0, .04, 0))));
+      b.ell('head', [.052, .012, .042], col('#121115'), m.clone().multiply(trs(V(0, .076, 0))), 12, 6); // the pinch on top
+      b.prim('head', new THREE.CylinderGeometry(.0625, .064, .016, 18), band, m.clone().multiply(trs(V(0, .013, 0))));
+      break;
+    }
+    case 'goldchain': { // a heavy rope chain hanging round the neck, with a big medallion
+      const g1 = col('#f0c14b'), g2 = col('#c9962e'), n = 26;
+      for (let i = 0; i < n; i++) {
+        const a = i / n * Math.PI * 2, fr = Math.max(0, Math.cos(a)); // fr: how far round the front (hangs lower there)
+        const p = V(.13 + Math.cos(a) * (.095 + fr * .03), .395 - fr * .085, Math.sin(a) * .1);
+        b.ell('body', [.013, .009, .009], i % 2 ? g1 : g2, trs(p, [a, 0, 0]), 8, 5);
+      }
+      if (bodyS) {
+        const m = onSurface(bodyS, V(.95, .12, 0), .008, 0, 1);
+        b.prim('body', new THREE.CylinderGeometry(.03, .03, .008, 18), g1, m.clone().multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2)));
+        b.prim('body', new THREE.TorusGeometry(.03, .004, 6, 18), g2, m.clone().multiply(trs(V(0, 0, .004))));
       }
       break;
     }

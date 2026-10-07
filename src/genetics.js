@@ -33,6 +33,9 @@ export const LOCI = [
   { id: 'feather',  alleles: ['normal', 'silky'] },
   { id: 'behavior', alleles: ['steady', 'tumbler', 'parlor'] },
   { id: 'voice',    alleles: ['coo', 'trumpet', 'laugher'] },
+  // mutation-only quirks (added in v0.9; appended so older saves / encoded genomes still line up)
+  { id: 'gait',     alleles: ['normal', 'speedy', 'sluggish', 'jumpy', 'strutter', 'twirly'], mutOnly: { speedy: 1, sluggish: 1, jumpy: 1, strutter: 1, twirly: 1 } },
+  { id: 'outfit',   alleles: ['none', 'suit', 'elvis', 'punk', 'tracksuit', 'hawaiian', 'raincoat'], mutOnly: { suit: 1, elvis: 1, punk: 1, tracksuit: 1, hawaiian: 1, raincoat: 1 } },
 ];
 
 // Wild-type expression for every locus (a plain blue-bar feral). Used to fill in genes that an
@@ -42,7 +45,7 @@ export const WILD = {
   almond: 'no', indigo: 'no', sheen: 'normal', fantasy: 'none', fpattern: 'none', glow: 'none', crest: 'none',
   muffs: 'clean', tail: 'normal', mane: 'plain', crop: 'normal', frill: 'smooth', curl: 'straight', beak: 'medium',
   wattle: 'small', eye: 'orange', size: 'normal', neck: 'normal', posture: 'normal', legs: 'normal', feather: 'normal',
-  behavior: 'steady', voice: 'coo',
+  behavior: 'steady', voice: 'coo', gait: 'normal', outfit: 'none',
 };
 export function normalizeGenome(g) {
   for (const l of LOCI) if (!Array.isArray(g[l.id]) || g[l.id].length !== 2 || !g[l.id].every(a => l.alleles.includes(a))) g[l.id] = [WILD[l.id], WILD[l.id]];
@@ -80,6 +83,8 @@ const FOUNDER_FREQ = {
   feather: { normal: .95, silky: .05 },
   behavior: { steady: .9, tumbler: .07, parlor: .03 },
   voice: { coo: .92, trumpet: .05, laugher: .03 },
+  gait: { normal: 1 },
+  outfit: { none: 1 },
 };
 
 // tier: 0 common, 1 uncommon, 2 rare, 3 impossible (fantasy)
@@ -133,6 +138,10 @@ export const ALLELE_META = {
   'size:king': { label: 'Very large', tier: 2 }, 'size:dinky': { label: 'Very small', tier: 2 },
   'behavior:tumbler': { label: 'Tumbler', tier: 2 },
   'voice:trumpet': { label: 'Trumpeter voice', tier: 2 },
+  'gait:speedy': { label: 'Speedy', tier: 2 }, 'gait:sluggish': { label: 'Sluggish', tier: 2 }, 'gait:jumpy': { label: 'Jumpy', tier: 2 },
+  'gait:strutter': { label: 'Strutter', tier: 2 }, 'gait:twirly': { label: 'Twirly', tier: 2 },
+  'outfit:suit': { label: 'Business suit', tier: 3 }, 'outfit:elvis': { label: 'Rhinestone jumpsuit', tier: 3 }, 'outfit:punk': { label: 'Punk leathers', tier: 3 },
+  'outfit:tracksuit': { label: 'Tracksuit', tier: 3 }, 'outfit:hawaiian': { label: 'Hawaiian shirt', tier: 3 }, 'outfit:raincoat': { label: 'Raincoat', tier: 3 },
 };
 
 function pickWeighted(weights) {
@@ -206,7 +215,7 @@ function derivePheno(e, accessory) {
     const m = ALLELE_META[l.id + ':' + e[l.id]];
     if (m) { traits.push({ key: l.id + ':' + e[l.id], label: m.label, tier: m.tier }); keys.push(l.id + ':' + e[l.id]); }
   }
-  if (accessory) traits.push({ key: 'acc:' + accessory, label: ACCESSORIES[accessory].label, tier: 2 });
+  for (const a of accList(accessory)) traits.push({ key: 'acc:' + a, label: ACCESSORIES[a].label, tier: 2 });
   const sparkTier = traits.reduce((m, t) => Math.max(m, t.tier), 0);
   return { e, accessory: accessory || null, colorKey, label, patternVisible, traits, sparkTier };
 }
@@ -237,7 +246,7 @@ let _tsKey = null, _tsLoc = '', _tsAl = ''; // the finder asks about one key for
 export function traitStatus(genome, pheno, key) {
   if (key !== _tsKey) { _tsKey = key; [_tsLoc, _tsAl] = key.split(':'); }
   const loc = _tsLoc, al = _tsAl;
-  if (loc === 'acc') return pheno.accessory === al ? 2 : 0;
+  if (loc === 'acc') return accList(pheno.accessory).includes(al) ? 2 : 0;
   if (pheno.e[loc] === al) return 2;
   const pair = genome[loc];
   return pair && (pair[0] === al || pair[1] === al) ? 1 : 0;
@@ -257,16 +266,28 @@ export function decodeGenome(s) {
   return g;
 }
 
+// Accessories are worn, not inherited (clones keep them). One per slot — head, face, neck — so a bird can
+// wear a hat, glasses and a chain at once. A bird's `accessory` is the items joined with '+', in slot order
+// (old single-item values are still valid).
 export const ACCESSORIES = {
-  tophat: { label: 'Top hat', w: 14 }, beret: { label: 'Beret', w: 14 }, cowboy: { label: 'Cowboy hat', w: 12 },
-  monocle: { label: 'Monocle', w: 12 }, sunglasses: { label: 'Sunglasses', w: 16 }, bowtie: { label: 'Bow tie', w: 14 },
-  scarf: { label: 'Tiny scarf', w: 10 }, propeller: { label: 'Propeller cap', w: 5 }, crown: { label: 'Crown', w: 3 },
-  partyhat: { label: 'Party hat', w: 8 }, chefhat: { label: 'Chef hat', w: 6 }, mustache: { label: 'Magnificent moustache', w: 7 },
+  tophat: { label: 'Top hat', w: 14, slot: 'head' }, beret: { label: 'Beret', w: 14, slot: 'head' }, cowboy: { label: 'Cowboy hat', w: 12, slot: 'head' },
+  monocle: { label: 'Monocle', w: 12, slot: 'face' }, sunglasses: { label: 'Sunglasses', w: 16, slot: 'face' }, bowtie: { label: 'Bow tie', w: 14, slot: 'neck' },
+  scarf: { label: 'Tiny scarf', w: 10, slot: 'neck' }, propeller: { label: 'Propeller cap', w: 5, slot: 'head' }, crown: { label: 'Crown', w: 3, slot: 'head' },
+  partyhat: { label: 'Party hat', w: 8, slot: 'head' }, chefhat: { label: 'Chef hat', w: 6, slot: 'head' }, mustache: { label: 'Magnificent moustache', w: 7, slot: 'face' },
+  blackhat: { label: 'Black fedora', w: 10, slot: 'head' }, goldchain: { label: 'Gold chain', w: 10, slot: 'neck' },
 };
-export function rollAccessory(chance = 0.02) {
+const SLOTS = ['head', 'face', 'neck'];
+export const accList = (acc) => acc ? acc.split('+').filter(a => ACCESSORIES[a]) : [];
+// Put `item` on: replaces whatever was in its slot, keeps the rest.
+export function withAccessory(acc, item) {
+  const list = accList(acc).filter(a => ACCESSORIES[a].slot !== ACCESSORIES[item].slot).concat(item);
+  return list.sort((a, b) => SLOTS.indexOf(ACCESSORIES[a].slot) - SLOTS.indexOf(ACCESSORIES[b].slot)).join('+');
+}
+export const freeSlots = (acc) => SLOTS.filter(sl => !accList(acc).some(a => ACCESSORIES[a].slot === sl));
+export function rollAccessory(chance = 0.02, slots = SLOTS) {
   if (rand() > chance) return null;
-  const w = {}; for (const k in ACCESSORIES) w[k] = ACCESSORIES[k].w;
-  return pickWeighted(w);
+  const w = {}; for (const k in ACCESSORIES) if (slots.includes(ACCESSORIES[k].slot)) w[k] = ACCESSORIES[k].w;
+  return Object.keys(w).length ? pickWeighted(w) : null;
 }
 
 export const BREEDS = [
@@ -341,13 +362,30 @@ export const BREEDS = [
   { id: 'partyanimal', name: 'Party Animal', real: 0, req: { accessory: 'partyhat', fpattern: 'dots' }, blurb: 'Arrived in 1987. The party never ended.' },
   { id: 'chef', name: 'Chef Pigeonnaire', real: 0, req: { accessory: 'chefhat' }, blurb: 'Specialises in crumbs. Michelin inspectors are too scared to visit.' },
   { id: 'mustachio', name: 'Signor Mustachio', real: 0, req: { accessory: 'mustache', voice: 'trumpet' }, blurb: 'Sings opera at dawn. The moustache is load-bearing.' },
+  // fashion: clothes are mutations (recessive, so it takes two dressed-up parents); hats and chains are worn
+  { id: 'homey', name: 'Homey Pigeon', real: 0, fashion: 1, req: { accessory: 'blackhat+goldchain' }, sample: { outfit: 'tracksuit', spread: 'spread' }, blurb: 'Black fedora, gold chain, tracksuit if the occasion demands. Walks this way. Talks this way.' },
+  { id: 'manager', name: 'Middle Management', real: 0, fashion: 1, req: { outfit: 'suit' }, blurb: 'Has a meeting at three. The meeting is about crumbs. It could have been an email.' },
+  { id: 'ceo', name: 'The CEO', real: 0, fashion: 1, req: { outfit: 'suit', accessory: 'tophat' }, blurb: 'Owns the bench. Leases it back to you. Very sorry about the layoffs.' },
+  { id: 'pigvis', name: 'Pigvis', real: 0, fashion: 1, req: { outfit: 'elvis' }, sample: { spread: 'spread' }, blurb: 'Thank you. Thank you very much. (Coo.) Pigvis has left the bench.' },
+  { id: 'vegas', name: 'Vegas Pigvis', real: 0, fashion: 1, req: { outfit: 'elvis', accessory: 'sunglasses' }, sample: { spread: 'spread' }, blurb: 'The late-career residency years. More rhinestones than bird.' },
+  { id: 'sexpigeons', name: 'The Sex Pigeons', real: 0, fashion: 1, req: { outfit: 'punk' }, blurb: 'Never mind the breadcrumbs. Three chords and an attitude.' },
+  { id: 'jogger', name: 'The Jogger', real: 0, fashion: 1, req: { outfit: 'tracksuit', gait: 'speedy' }, blurb: 'Training for a race nobody has scheduled. Personal best: the fountain, twice.' },
+  { id: 'tourist', name: 'The Tourist', real: 0, fashion: 1, req: { outfit: 'hawaiian', accessory: 'sunglasses' }, blurb: 'On holiday. Permanently. Has four hundred photos of the same fountain.' },
+  { id: 'fisherman', name: 'The Old Salt', real: 0, fashion: 1, req: { outfit: 'raincoat' }, blurb: 'Has never seen the sea. Dresses for it every day, just in case.' },
+  // quirky gaits
+  { id: 'roadrunner', name: 'Roadrunner', real: 0, req: { gait: 'speedy', legs: 'long' }, blurb: 'Beep beep. (Coo coo.) Leaves a little dust cloud. Allegedly.' },
+  { id: 'sloth', name: 'Sloth Pigeon', real: 0, req: { gait: 'sluggish' }, blurb: 'Will get there. Not today. Possibly not this week.' },
+  { id: 'popcorn', name: 'Popcorn', real: 0, req: { gait: 'jumpy', size: 'dinky' }, blurb: 'Small, startled, and constantly going off.' },
+  { id: 'peacock', name: 'Peacock (Allegedly)', real: 0, req: { gait: 'strutter', tail: 'fantail' }, blurb: 'Insists it is a peacock. Struts accordingly. Nobody has the heart to argue.' },
+  { id: 'ballerina', name: 'The Ballerina', real: 0, req: { gait: 'twirly', feather: 'silky' }, blurb: 'Pirouettes between pecks. Has never once been asked to.' },
   { id: 'voidlegend', name: 'THE VOID PIGEON', real: 0, legend: 1, req: { fantasy: 'void', glow: 'glow' }, blurb: 'It coos and reality briefly buffers. Summoned, never bred.' },
   { id: 'galaxylegend', name: 'THE GALAXY PIGEON', real: 0, legend: 1, req: { sheen: 'galaxy', fpattern: 'stars' }, blurb: 'Contains several billion stars and one (1) crumb. Summoned, never bred.' },
 ];
 
 export function matchBreeds(pheno) {
   return BREEDS.filter(b => Object.entries(b.req).every(([k, v]) => {
-    const val = k === 'colorKey' ? pheno.colorKey : k === 'accessory' ? pheno.accessory : pheno.e[k];
+    if (k === 'accessory') { const worn = accList(pheno.accessory); return (Array.isArray(v) ? v : [v]).some(want => want.split('+').every(a => worn.includes(a))); }
+    const val = k === 'colorKey' ? pheno.colorKey : pheno.e[k];
     return Array.isArray(v) ? v.includes(val) : val === v;
   }));
 }
@@ -367,7 +405,8 @@ export function colorTraits(key) {
 const REQ_HINTS = {
   colorKey: { blueSd: 'an icy color (blue + spread + dilute, all at once)', blued: 'a silvery color (blue + dilute, no spread)', indigoS: 'a slate color (indigo + spread on a blue bird)',
     blueS: 'a black or icy color (blue + spread)', redd: 'a golden-yellow color (recessive red + dilute)', brown: 'a brown color' },
-  accessory: { crown: 'be born wearing a very specific hat', partyhat: 'be born ready to party (hat included)', chefhat: 'hatch already employed in hospitality', mustache: 'grow a truly magnificent moustache' },
+  accessory: { crown: 'be born wearing a very specific hat', partyhat: 'be born ready to party (hat included)', chefhat: 'hatch already employed in hospitality', mustache: 'grow a truly magnificent moustache',
+    'blackhat+goldchain': 'wear a black fedora and a gold chain at the same time', tophat: 'wear a top hat', sunglasses: 'wear sunglasses' },
 };
 export function breedHint(b) {
   return Object.entries(b.req).map(([k, v]) => {
@@ -468,6 +507,17 @@ export const PEDIA = {
   'size:king': 'Very large. Technically still fits in one hand. Whose hand, unclear.',
   'size:dinky': 'Very small. Travel-sized for your convenience.',
   'behavior:tumbler': 'Tumbler. Does a little flip. Nobody knows why. Science gave up.',
+  'gait:speedy': 'Speedy. Walks like it has somewhere to be. It does not.',
+  'gait:sluggish': 'Sluggish. Moves at the speed of a Sunday. Eyelids permanently at half-mast.',
+  'gait:jumpy': 'Jumpy. Startles at leaves, crumbs, its own feet, and the concept of Tuesday.',
+  'gait:strutter': 'Strutter. Chest out, knees high, every walk a runway.',
+  'gait:twirly': 'Twirly. Stops now and then for a small, unprompted pirouette.',
+  'outfit:suit': 'Business suit. Hatched in a two-piece and a tie. Already has opinions about synergy.',
+  'outfit:elvis': 'Rhinestone jumpsuit. High collar, quiff, studs. The fountain is now a stage.',
+  'outfit:punk': 'Punk leathers. Studded jacket and a mohawk. Refuses to coo on the beat.',
+  'outfit:tracksuit': 'Tracksuit. Three stripes, zero intention of exercising.',
+  'outfit:hawaiian': 'Hawaiian shirt. Permanently on holiday, emotionally and sartorially.',
+  'outfit:raincoat': 'Raincoat. Bright yellow and ready for weather that rarely comes.',
   'voice:trumpet': 'Trumpeter voice. Jazz, unfortunately.',
   'fantasy:rainbow': 'Rainbow. Every colour, none of the restraint.',
   'fantasy:toast': 'Toasted. Crispy at the edges. Do not add butter.',

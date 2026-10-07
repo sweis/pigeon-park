@@ -1,5 +1,5 @@
 // Headless sim assertions — no browser. Run: node tests/sim.test.mjs
-import { Sim, PARK, FOUNTAIN, FIXED_DT, TREE_DEPTH, fountainClearance, coreOf, segGap } from '../src/sim.js';
+import { Sim, PARK, FOUNTAIN, FIXED_DT, TREE_DEPTH, fountainClearance, coreOf, segGap, pureGenome as pureG } from '../src/sim.js';
 import { setSeed } from '../src/rng.js';
 import * as M from '../src/genetics.js';
 import { HAPPENINGS, startHappening } from '../src/happenings.js';
@@ -130,6 +130,38 @@ for (const kind of Object.keys(HAPPENINGS)) {
     }
     ok(stalled / walkers < .05 && hops > 0 && hops < 120, `full park, 5 min: walkers rarely stall (${(stalled / walkers * 100).toFixed(1)}% not moving over 1 s), stuck birds hop out (${hops} hops)`);
   }
+}
+// v0.9: accessories by slot (hat + glasses + chain), the Homey Pigeon combo, clothes, gaits, the goddess
+{
+  ok(M.withAccessory('goldchain', 'blackhat') === 'blackhat+goldchain' && M.withAccessory('blackhat+goldchain', 'tophat') === 'tophat+goldchain', 'accessories stack by slot (a new hat replaces the old hat, the chain stays)');
+  const homey = M.computePheno(pureG({}), 'blackhat+goldchain'), hatOnly = M.computePheno(pureG({}), 'blackhat');
+  ok(M.matchBreeds(homey).some(b => b.id === 'homey') && !M.matchBreeds(hatOnly).some(b => b.id === 'homey'), 'black fedora + gold chain = Homey Pigeon (the hat alone is not)');
+  ok(M.matchBreeds(M.computePheno(pureG({ outfit: 'suit' }), 'tophat')).some(b => b.id === 'ceo'), 'suit + top hat = The CEO');
+  const carrier = { ...pureG({}), outfit: ['none', 'elvis'] };
+  ok(M.computePheno(carrier, null).e.outfit === 'none' && M.carriersOf(carrier).some(c => c.key === 'outfit:elvis'), 'clothes are recessive: one copy is carried, not worn');
+  setSeed(6); const S = new Sim(); S.initFlock(null);
+  const p = S.spawn({ genome: pureG({ outfit: 'punk' }), accessory: M.withAccessory(M.withAccessory('goldchain', 'blackhat'), 'sunglasses'), name: 'Z', adult: true });
+  const saved = JSON.parse(JSON.stringify(S.serialize())), b = new Sim(); b.restore(saved); b.initFlock(saved);
+  const q = b.pigeons.find(x => x.name === 'Z');
+  ok(q && q.accessory === 'blackhat+sunglasses+goldchain' && q.pheno.e.outfit === 'punk', `outfits and stacked accessories survive save/load (${q?.accessory})`);
+  // gaits: speedy birds cover more ground than sluggish ones; jumpy birds jump; twirly birds twirl
+  const walkRun = (gait) => {
+    setSeed(31); const W = new Sim(); W.initFlock(null); W.pigeons.length = 0; W.whimsy = 'off'; W.nextHappeningAt = Infinity;
+    const birds = Array.from({ length: 6 }, (_, i) => W.spawn({ genome: pureG({ gait }), name: 'g' + i, adult: true, quiet: true }));
+    let dist = 0; const states = new Set(); const last = birds.map(b => [b.x, b.z]);
+    for (let i = 0; i < 120 / FIXED_DT; i++) { W.step(); birds.forEach((b, k) => { dist += Math.hypot(b.x - last[k][0], b.z - last[k][1]); last[k] = [b.x, b.z]; states.add(b.state); }); }
+    return { dist, states };
+  };
+  const fast = walkRun('speedy'), slow = walkRun('sluggish'), norm = walkRun('normal'), jumpy = walkRun('jumpy'), twirly = walkRun('twirly');
+  ok(fast.dist > norm.dist * 1.2 && slow.dist < norm.dist * .8, `speedy birds roam further, sluggish ones less (2 min: ${fast.dist.toFixed(0)} / ${norm.dist.toFixed(0)} / ${slow.dist.toFixed(0)} m)`);
+  ok(jumpy.states.has('jump') && twirly.states.has('twirl') && !norm.states.has('jump') && !norm.states.has('twirl'), 'jumpy birds jump and twirly birds twirl (ordinary birds do neither)');
+  // the goddess blesses a few birds and leaves
+  setSeed(8); const G = new Sim(); G.initFlock(null); for (let i = 0; i < 8; i++) G.spawn({ genome: M.founderGenome(), name: 'x', adult: true, quiet: true });
+  const before = JSON.stringify(G.pigeons.map(b => [b.genome, b.accessory]));
+  ok(startHappening(G, 'goddess') && !!G.goddess, 'the goddess descends');
+  for (let i = 0; i < 20 / FIXED_DT; i++) G.step();
+  const blessed = G.pigeons.filter(b => (b.rev || 0) > 0).length;
+  ok(blessed >= 3 && !G.goddess && !G.happening && JSON.stringify(G.pigeons.map(b => [b.genome, b.accessory])) !== before, `the goddess blesses ${blessed} birds with mutations or finery, then ascends`);
 }
 // speech: big pools, and no line comes back until much of its pool has been used
 {

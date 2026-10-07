@@ -2,7 +2,8 @@
 
 import * as THREE from 'three';
 import { PigeonRig, sizeOf, birdHeight, pruneGeometryCache } from './pigeon3d.js';
-import { traitStatus } from './genetics.js';
+import { traitStatus, computePheno } from './genetics.js';
+import { pureGenome } from './sim.js';
 import { damp, raySphere } from './util.js';
 
 // Trait finder: 2 = shows the trait (green), 1 = carries it hidden (yellow).
@@ -61,7 +62,8 @@ class PigeonView {
     b.head.scale.setScalar(headK);
 
     const st = p.state, moving = (st === 'walk' || st === 'moonwalk') && Math.hypot(p.tx - p.x, p.tz - p.z) > .005;
-    const breathe = Math.sin(t * 2.3 + this.seed) * .5 + .5;
+    const gait = p.pheno.e.gait, quick = gait === 'speedy' ? 1.6 : gait === 'sluggish' ? .55 : 1; // fidget tempo
+    const breathe = Math.sin(t * 2.3 * quick + this.seed) * .5 + .5;
     let eyesOpen = 1;
     if (p.flying) {
       const f = Math.sin(t * 24 + this.seed);
@@ -69,6 +71,17 @@ class PigeonView {
       b.legL.rotation.z = b.legR.rotation.z = -1.1;
       b.body.rotation.z = .25;
       b.tail.rotation.z = -.2;
+    } else if (st === 'jump') { // jumpy: a quick startled hop on the spot, wings flicking
+      const k = Math.min(1, (simT - p.stateAt) / .55), up = Math.sin(k * Math.PI);
+      b.root.position.y = up * .09;
+      b.wingL.rotation.x = up * .7; b.wingR.rotation.x = -up * .7;
+      b.legL.rotation.z = b.legR.rotation.z = -up * .5;
+      b.head.rotation.z += up * .2;
+    } else if (st === 'twirl') { // twirly: one neat pirouette, wings out for balance
+      const k = Math.min(1, (simT - p.stateAt) / .9), e = k * k * (3 - 2 * k);
+      b.root.rotation.y = e * TAU;
+      b.wingL.rotation.x = .35 * Math.sin(k * Math.PI); b.wingR.rotation.x = -.35 * Math.sin(k * Math.PI);
+      b.root.position.y = Math.sin(k * Math.PI) * .02;
     } else if (st === 'hop') { // a short flutter over the crowd: quick wingbeats, feet tucked, leaning into it
       const f = Math.sin(t * 30 + this.seed);
       b.wingL.rotation.x = .9 + f * .8; b.wingR.rotation.x = -(.9 + f * .8);
@@ -126,15 +139,16 @@ class PigeonView {
       b.legL.scale.y = b.legR.scale.y = .8;
       eyesOpen = 0;
     } else if (moving || st === 'walk' || st === 'moonwalk') {
-      if (moving) this.walkPh += dt * (p.v / .5) * 13 * (st === 'moonwalk' ? -1 : 1); // moonwalk: the legs run backwards
-      const ph = this.walkPh, sw = Math.sin(ph);
-      b.legL.rotation.z = sw * .6; b.legR.rotation.z = -sw * .6;
-      b.body.position.y += Math.abs(Math.cos(ph)) * .012;
-      b.body.rotation.x = sw * .05;
+      if (moving) this.walkPh += dt * (p.v / .5) * 13 * (st === 'moonwalk' ? -1 : 1) * (gait === 'strutter' ? .8 : 1); // moonwalk: the legs run backwards
+      const ph = this.walkPh, sw = Math.sin(ph), strut = gait === 'strutter';
+      b.legL.rotation.z = sw * (strut ? .95 : .6); b.legR.rotation.z = -sw * (strut ? .95 : .6); // strutters: high steps
+      b.body.position.y += Math.abs(Math.cos(ph)) * (strut ? .02 : .012);
+      b.body.rotation.x = sw * (strut ? .09 : .05);
+      if (strut) { b.body.rotation.z += .12; b.body.scale.set(1.04, 1.06, 1.06); } // chest out
       // the pigeon head-bob: thrust forward fast, hold while the body catches up
       const f = ((ph / Math.PI) % 1 + 1) % 1;
-      b.head.position.x += (f < .28 ? f / .28 : 1 - (f - .28) / .72) * .042 - .02;
-      b.tail.rotation.z = -Math.cos(ph) * .06;
+      b.head.position.x += ((f < .28 ? f / .28 : 1 - (f - .28) / .72) * .042 - .02) * (strut ? 1.6 : 1);
+      b.tail.rotation.z = -Math.cos(ph) * .06 + (strut ? -.15 : 0);
     } else if (st === 'peck') {
       const k = ((simT - p.stateAt) * 1.25 + this.seed) % 1;
       const dip = k < .25 ? k / .25 : k < .4 ? 1 : Math.max(0, 1 - (k - .4) / .3);
@@ -149,10 +163,10 @@ class PigeonView {
       b.tail.rotation.z = .25 + k * .1;
       b.wingL.rotation.x = .15 * k; b.wingR.rotation.x = -.15 * k;
       b.root.rotation.y = Math.sin(t * 1.3 + this.seed) * .25;
-    } else { // idle
+    } else { // idle (speedy birds glance about twice as fast; sluggish ones barely bother)
       b.body.scale.y = 1 + breathe * .02;
-      b.head.rotation.y = Math.sin(t * .6 + this.seed * 3) * .45 * Math.max(0, Math.sin(t * .23 + this.seed));
-      b.head.rotation.z = Math.sin(t * .9 + this.seed) * .06;
+      b.head.rotation.y = Math.sin(t * .6 * quick + this.seed * 3) * .45 * Math.max(0, Math.sin(t * .23 * quick + this.seed));
+      b.head.rotation.z = Math.sin(t * .9 * quick + this.seed) * .06 - (gait === 'sluggish' ? .12 : 0);
     }
     // blinks
     if (eyesOpen === 1) {
@@ -160,7 +174,7 @@ class PigeonView {
       if (this.blinkAt < 0) { this.blinkT = .13; this.blinkAt = 2 + Math.random() * 4; }
       if (this.blinkT > 0) { this.blinkT -= dt; eyesOpen = 0; }
     }
-    b.eyeL.scale.y = b.eyeR.scale.y = eyesOpen ? 1 : .12;
+    b.eyeL.scale.y = b.eyeR.scale.y = eyesOpen ? (gait === 'sluggish' && eyesOpen === 1 ? .55 : 1) : .12; // sluggish: heavy-lidded
     if (this.googly) { // loose pupils wobble with every step and thought
       const w = moving ? 3.2 : 1;
       b.eyeL.rotation.x = Math.sin(t * 9.3 + this.seed) * .5 * w; b.eyeL.rotation.y = Math.cos(t * 7.1) * .3 * w;
@@ -217,6 +231,19 @@ export class FlockView {
     for (let i = 0; i < 8; i++) { const l = new THREE.Mesh(new THREE.SphereGeometry(.06, 8, 6), this.ufoLights); l.position.set(Math.cos(i / 8 * Math.PI * 2) * 1.02, -.02, Math.sin(i / 8 * Math.PI * 2) * 1.02); ufo.add(l); }
     this.beam = new THREE.Mesh(new THREE.CylinderGeometry(.25, 1.0, 1, 24, 1, true).translate(0, -.5, 0), new THREE.MeshBasicMaterial({ color: '#c8fbff', transparent: true, opacity: .3, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
     ufo.add(this.beam); ufo.visible = false; hull.castShadow = true; scene.add(ufo);
+    // the pigeon goddess (happening): a giant white lace-crowned fantail with a golden halo, a soft glow behind
+    // her and a golden beam to whoever she's blessing. Same material set-ups as the UFO / halos: no new programs.
+    const gp = computePheno(pureGenome({ pied: 'white', crest: 'lace', tail: 'fantail', glow: 'glow', eye: 'pearl', posture: 'upright' }), 'crown');
+    this.goddessRig = new PigeonRig(gp, mats, false);
+    const god = this.goddess = new THREE.Group(); god.add(this.goddessRig.group);
+    this.goddessRig.group.scale.setScalar(4.2);
+    const haloM = new THREE.MeshStandardMaterial({ color: '#fff3b0', emissive: new THREE.Color('#ffd24a'), emissiveIntensity: 1.5 });
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(.62, .05, 10, 40), haloM); halo.position.set(.75, 3.45, 0); halo.rotation.set(Math.PI / 2 - .25, 0, 0);
+    const aura = new THREE.Sprite(this.haloMat.clone()); aura.material.color.set('#ffe6a0'); aura.material.opacity = .55; aura.scale.setScalar(7); aura.position.set(0, 1.6, 0);
+    god.add(halo, aura); this.godHalo = halo; this.godAura = aura;
+    this.godBeam = new THREE.Mesh(new THREE.CylinderGeometry(.12, .5, 1, 20, 1, true).translate(0, -.5, 0), new THREE.MeshBasicMaterial({ color: '#ffe9a6', transparent: true, opacity: .35, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+    god.visible = false; this.godBeam.visible = false; scene.add(god, this.godBeam);
+
     // rain streaks
     this.rainN = 420;
     this.rainMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(.012, .35, .012), new THREE.MeshBasicMaterial({ color: '#dbe8f2', transparent: true, opacity: .55, depthWrite: false }), this.rainN);
@@ -306,6 +333,24 @@ export class FlockView {
       this.beam.visible = U.beam > 0; this.beam.scale.set(1, U.y, 1);
       this.beam.material.opacity = .22 + Math.sin(t * 9) * .08;
     }
+    // the goddess: hovering, wings spread and slowly beating, facing the park
+    const G = sim.goddess;
+    this.goddess.visible = !!G;
+    if (G) {
+      this.goddess.position.set(G.x, G.y, G.z); this.goddess.rotation.y = -Math.PI / 2 + Math.sin(t * .4) * .2; // faces +z, toward the default camera
+      const gb = this.goddessRig.bones, f = Math.sin(t * 2.2);
+      gb.wingL.rotation.x = 1.25 + f * .25; gb.wingR.rotation.x = -(1.25 + f * .25);
+      gb.legL.rotation.z = gb.legR.rotation.z = -.6; gb.tail.rotation.z = -.1;
+      this.godHalo.rotation.z = t * .6; this.godAura.material.opacity = .4 + Math.sin(t * 1.7) * .1;
+      const B = G.beam, beam = this.godBeam; beam.visible = !!B;
+      if (B) { // from her chest down to the blessed bird
+        _p.set(G.x, G.y + 1.3, G.z); _tgt.set(B.x - _p.x, .05 - _p.y, B.z - _p.z);
+        const len = _tgt.length(); beam.position.copy(_p);
+        beam.quaternion.setFromUnitVectors(_s.set(0, -1, 0), _tgt.normalize()); beam.scale.set(1, len, 1);
+        beam.material.opacity = .3 + Math.sin(t * 11) * .08;
+      }
+    } else this.godBeam.visible = false;
+
     // rain around the park
     this.rainAmt = (this.rainAmt || 0) + ((sim.rain ? 1 : 0) - (this.rainAmt || 0)) * Math.min(1, dt * 1.5);
     const rn = Math.floor(this.rainN * this.rainAmt);

@@ -301,13 +301,13 @@ Object.assign(HAPPENINGS, {
       U.y = Math.max(3.2, 9 - k * 3); U.x += (p.x - U.x) * .3; U.z += (p.z - U.z) * .3;
       U.beam = k > 2 && k < 11 ? 1 : 0;
       p.state = 'abducted';
-      if (k < 2) p.ty = 0; else if (k < 6) p.ty = 2.6; else if (k < 7.5) { p.ty = 2.6; if (!h.hat) { h.hat = 1; const acc = pick(Object.keys(M.ACCESSORIES).filter(a => a !== p.accessory)); S.setAccessory(p, acc); } } else p.ty = 0;
+      if (k < 2) p.ty = 0; else if (k < 6) p.ty = 2.6; else if (k < 7.5) { p.ty = 2.6; if (!h.hat) { h.hat = pick(Object.keys(M.ACCESSORIES).filter(a => !M.accList(p.accessory).includes(a))); S.setAccessory(p, M.withAccessory(p.accessory, h.hat)); } } else p.ty = 0;
       if (k > 3 && k < 4) say(S, p, pick(['take me to your breadder', 'wheeeee', 'hello?']), 1.5);
       return now < h.until;
     },
     end(S, h) {
       const p = S.byId(h.ids[0]); S.ufo = null;
-      if (p) { p.ty = 0; say(S, p, pick(['i have seen things', 'they were nice actually', 'do not ask']), 3); S.toast(`${p.name} is back, wearing a ${M.ACCESSORIES[p.accessory]?.label.toLowerCase() || 'new look'}. It will not discuss it.`, 'breed'); }
+      if (p) { p.ty = 0; say(S, p, pick(['i have seen things', 'they were nice actually', 'do not ask']), 3); S.toast(`${p.name} is back, wearing a ${M.ACCESSORIES[h.hat]?.label.toLowerCase() || 'new look'}. It will not discuss it.`, 'breed'); }
       release(S, h.ids);
     },
   },
@@ -346,6 +346,60 @@ Object.assign(HAPPENINGS, {
       return now < h.until;
     },
     end(S, h) { release(S, h.ids); S.toast('Fashion Week is over. The judges are still crying.'); },
+  },
+});
+
+// The pigeon goddess's gifts: an accessory for a free slot, or a mutation (a random mutation-only allele;
+// usually expressed, sometimes only carried — a gift for the next generation).
+function bless(S, p) {
+  const slots = M.freeSlots(p.accessory);
+  if (slots.length && rand() < .45) {
+    const item = M.rollAccessory(1, slots);
+    S.setAccessory(p, M.withAccessory(p.accessory, item));
+    return `${M.ACCESSORIES[item].label.toLowerCase()}`;
+  }
+  const pool = [];
+  for (const l of M.LOCI) for (const a of Object.keys(l.mutOnly || {})) if (!p.genome[l.id].includes(a)) pool.push([l.id, a]);
+  if (!pool.length) return null;
+  const [loc, al] = pick(pool), g = structuredClone(p.genome), shown = rand() < .7;
+  g[loc] = shown ? [al, al] : [g[loc][0], al];
+  S.regene(p, g);
+  const label = M.ALLELE_META[loc + ':' + al]?.label || al;
+  return shown ? label.toLowerCase() : `a hidden gift (carries ${label.toLowerCase()})`;
+}
+
+Object.assign(HAPPENINGS, {
+  goddess: {
+    label: 'Pigeon goddess', blurb: 'A radiant pigeon goddess descends, and a few lucky birds are blessed with mutations or finery.',
+    when: (S) => free(S).length >= 3,
+    start(S) {
+      const all = free(S), chosen = shuffle([...all]).slice(0, 3 + Math.floor(rand() * 4));
+      S.goddess = { x: 1.6, z: -1.5, y: 14, beam: null }; // beside the fountain, facing the park
+      for (const p of all) p.state = 'look';
+      S.toast(pick(['The sky opens. A pigeon goddess descends. Everyone is very quiet.', 'A radiant pigeon goddess appears above the fountain. Blessings are imminent.']), 'event');
+      S.sound('chime');
+      return { ids: enlist(S, all, 'goddess'), chosen: chosen.map(p => p.id), at: S.t, next: S.t + 3.4, i: 0, until: S.t + 17 };
+    },
+    tick(S, h, now) {
+      const G = S.goddess; if (!G) return false;
+      const k = now - h.at, left = h.until - now, ease = (x) => x * x * (3 - 2 * x);
+      const hover = 1.1;
+      G.y = k < 3 ? 14 - (14 - hover) * ease(k / 3) : left < 2.5 ? hover + (14 - hover) * ease(1 - left / 2.5) : hover + Math.sin(k * 1.3) * .15;
+      for (const p of live(S, h.ids)) { if (p.state !== 'jump') p.state = 'look'; p.dir = Math.atan2(G.z - p.z, G.x - p.x); }
+      if (G.beam && now > G.beam.until) G.beam = null;
+      if (now >= h.next && h.i < h.chosen.length && left > 3) {
+        const p = S.byId(h.chosen[h.i++]); h.next = now + 1.6;
+        if (p && !p.flying && !p.held) {
+          const gift = bless(S, p);
+          G.beam = { x: p.x, z: p.z, until: now + 1.2 };
+          S.sparkle(p.x, p.z, 3); S.sound('chime');
+          if (gift) { S.toast(`The goddess blesses ${p.name} with ${gift}.`, 'breed'); say(S, p, pick(['i feel different', 'ooh', 'blessed', 'thank u mother', 'sparkly', 'i am chosen']), 2.4); }
+        }
+      }
+      if (rand() < .12) say(S, pick(live(S, h.ids)), pick(['ooh', 'mother?', 'so shiny', 'pick me', 'is that god', 'aaaah (choir)']), 1.6);
+      return now < h.until;
+    },
+    end(S, h) { S.goddess = null; release(S, h.ids); S.toast(pick(['The goddess ascends. The park smells faintly of bread.', 'The goddess is gone. The blessed are insufferable already.'])); },
   },
 });
 

@@ -34,6 +34,9 @@ export function fountainClearance(p) {
 const CORE = { back: .3, front: .17, r: .11 };
 const SLOP = .02, MAX_PUSH = .01, MOVER_SHARE = .75;
 const MOVING = new Set(['walk', 'moonwalk', 'roll', 'blown']);
+// Quirky gaits (mutation): walking speed and how long a bird lingers between decisions.
+const GAIT_SPEED = { speedy: 1.55, sluggish: .6, strutter: .85 };
+const GAIT_PAUSE = { speedy: .6, sluggish: 1.7 };
 const byX = (a, b) => a.x - b.x;
 const chickK = (age) => age < 9 ? .58 : age < 18 ? .78 : 1; // same growth steps as the view
 export function coreOf(p, t, o = {}) {
@@ -138,7 +141,7 @@ export class Sim {
     this.speed = 1; this.mut = 'normal'; this.poopEnabled = true;
     this.events = [];
     this.ready = false;      // autosave gate: never save before the flock has loaded
-    this.happening = null; this.nextHappeningAt = 55; this.whimsy = 'some'; this.bread = null; this.ufo = null; this.rain = 0;
+    this.happening = null; this.nextHappeningAt = 55; this.whimsy = 'some'; this.bread = null; this.ufo = null; this.goddess = null; this.rain = 0;
     this.replies = [];       // queued "reply" bubbles: { id, at, text }
     this.said = new Map();   // recently said lines per pool (no quick repeats)
     this.night = nightOf(this.phase());
@@ -254,7 +257,7 @@ export class Sim {
 
   walkTo(p, tx, tz, speed) {
     [tx, tz] = this.clampToPark(tx, tz);
-    p.tx = tx; p.tz = tz; p.v = speed;
+    p.tx = tx; p.tz = tz; p.v = speed * (GAIT_SPEED[p.pheno.e.gait] || 1);
     const d = Math.hypot(tx - p.x, tz - p.z);
     p.state = 'walk'; p.stateAt = this.t;
     p.stateUntil = this.t + Math.max(.4, d / speed);
@@ -411,7 +414,7 @@ export class Sim {
       if (p.visitor && now > p.visitor.leaveAt && !p.busy) { this.fly(p, false); continue; }
       if (p.courting || p.busy || p.state === 'hop') continue;
       if (now >= p.stateUntil) {
-        const sleepy = this.night > .6, r = rand();
+        const sleepy = this.night > .6, r = rand(), gait = p.pheno.e.gait, pause = GAIT_PAUSE[gait] || 1;
         p.stateAt = now;
         if (sleepy && r < .55) { p.state = 'sleep'; p.stateUntil = now + 3 + rand() * 5; p.emote = { kind: 'zzz' }; p.emoteUntil = p.stateUntil; }
         else if (p.pheno.e.behavior === 'tumbler' && r < .08) { p.state = 'tumble'; p.stateUntil = now + .75; }
@@ -420,12 +423,15 @@ export class Sim {
           p.state = 'roll'; p.stateUntil = now + 1.1;
           [p.tx, p.tz] = this.clampToPark(p.x + Math.cos(p.dir) * .6, p.z + Math.sin(p.dir) * .6); p.v = .55;
         }
+        else if (gait === 'jumpy' && r < .14) { p.state = 'jump'; p.stateUntil = now + .55; }           // a startled little hop
+        else if (gait === 'twirly' && r < .1) { p.state = 'twirl'; p.stateUntil = now + .9; }           // an unprompted pirouette
+        else if (gait === 'sluggish' && r < .06) { p.state = 'sleep'; p.stateUntil = now + 4 + rand() * 4; p.emote = { kind: 'zzz' }; p.emoteUntil = p.stateUntil; } // dozes off by day
         else if (r < (sleepy ? .8 : .5)) {
           const [tx, tz] = this.randomSpot();
           this.walkTo(p, tx, tz, 42 * PX * sp);
         }
-        else if (r < .8) { p.state = 'peck'; p.stateUntil = now + 1.2 + rand() * 1.8; }
-        else { p.state = 'idle'; p.stateUntil = now + .9 + rand() * 2.2; }
+        else if (r < .8) { p.state = 'peck'; p.stateUntil = now + (1.2 + rand() * 1.8) * pause; }
+        else { p.state = 'idle'; p.stateUntil = now + (.9 + rand() * 2.2) * pause; }
       }
       if (!p.emote && p.state !== 'sleep' && rand() < .004) {
         p.emote = { kind: 'say', text: this.night > .5 && rand() < .4 ? M.say(M.NIGHT_THOUGHTS, this.said) : M.say(M.THOUGHTS, this.said) }; p.emoteUntil = now + 2.6;
@@ -527,6 +533,14 @@ export class Sim {
     const C = this.court; if (!C) return;
     for (const id of [C.a, C.b]) { const p = this.byId(id); if (p) { p.courting = false; p.stateUntil = this.t; } }
     this.court = null;
+  }
+
+  // Change a bird's genes in place (the goddess's mutations): new look, maybe new breeds, the view rebuilds.
+  regene(p, genome) {
+    p.genome = M.normalizeGenome(genome); p.pheno = M.computePheno(p.genome, p.accessory); p.breeds = M.matchBreeds(p.pheno);
+    p.rev = (p.rev || 0) + 1;
+    if (this.family[p.lid]) this.family[p.lid].g = M.encodeGenome(p.genome);
+    this.notice(p);
   }
 
   // ---------- player actions ----------

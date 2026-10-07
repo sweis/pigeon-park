@@ -94,6 +94,24 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 - Numbers (full 44-bird park): walkers not moving over 1 s ≈ 2%, ~45 hops / 5 min, overlaps > 5 cm clear within
   ~0.5 s. Tests assert those.
 
+## v0.9 — goddess, fashion, quirks
+- Accessories are slot-based (head / face / neck), stored as 'blackhat+sunglasses+goldchain' (old single values
+  still valid): `M.accList`, `M.withAccessory` (replaces within a slot), `M.freeSlots`, `rollAccessory(chance, slots)`.
+  Breed `req.accessory` items joined by '+' must all be worn. New: Black fedora (head), Gold chain (neck, rope +
+  medallion). UFO now adds its hat instead of replacing every accessory.
+- New loci (appended; mutation-only, recessive): `gait` speedy / sluggish / jumpy / strutter / twirly and
+  `outfit` suit / elvis / punk / tracksuit / hawaiian / raincoat. Outfits repaint body + wings (`OUTFITS` in
+  pigeon3d.js) and add trims (tie + lapels, studs + high collar + quiff + sideburns, mohawk + studs, toggles).
+  Gaits: walk speed ×1.55 / ×.6 / ×.85, idle time ×.6 / ×1.7, new states 'jump' (jumpy) and 'twirl' (twirly),
+  daytime dozes (sluggish), strut pose (high steps, chest out), heavy eyelids (sluggish).
+- 14 new breeds (87 total): Homey Pigeon (black fedora + gold chain; sample wears a tracksuit), Middle Management,
+  The CEO, Pigvis, Vegas Pigvis, The Sex Pigeons, The Jogger, The Tourist, The Old Salt (registry tag "fashion"),
+  plus Roadrunner, Sloth Pigeon, Popcorn, Peacock (Allegedly), The Ballerina. 12 new field notes.
+- Pigeon goddess happening (`goddess`, secret code "pray"): descends beside the fountain, blesses 3–6 birds
+  (accessory for a free slot, or a random mutation-only allele — usually expressed, sometimes only carried) with a
+  golden beam, then ascends. `Sim.regene()` updates genes in place (view rebuilds, family record follows).
+  Own song "Heavenly Coo" (choir "aah"s, harp, bells) with a harp-glissando sting. No new shader programs.
+
 ## Next
 - Try Clip on a real iPhone + Android (MP4 path, filming time); fall back to 720×1280 on phones if slow. Add a Cancel button to filming.
 - Listen to the new songs; tune levels/instruments by ear.
