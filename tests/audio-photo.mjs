@@ -1,7 +1,7 @@
 // Music + sound controls and photo mode, through the real UI.
-import { startServer, launch, boot, frames, shot, state, check, failures } from './lib.mjs';
+import { setup, finish, boot, frames, shot, state, check, checkNoErrors, clickSel, poll, reload } from './lib.mjs';
 import fs from 'node:fs';
-const srv = await startServer({ dist: process.argv.includes('--dist') }); const br = await launch();
+const { srv, br } = await setup();
 const { page, errors } = await boot(br, srv.url, 'seed=5&hour=15', { viewport: { width: 1280, height: 800 } });
 const A = () => page.evaluate(() => window.pp.audio());
 // peak RMS over ~1 s of 50 ms windows (a single window can fall between notes)
@@ -17,7 +17,7 @@ const onLvl = await level();
 check(onLvl > .002, `music is audible (rms ${onLvl?.toFixed(4)})`);
 
 // both toggles off → silence; music toggle alone → music back
-const click = async (sel) => { const b = await page.locator(sel).boundingBox(); await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); };
+const click = (sel) => clickSel(page, sel);
 await click('#b-music'); await click('#b-sfx');
 a = await A();
 await page.waitForTimeout(400);
@@ -34,11 +34,11 @@ check((await A()).musicOn && !(await A()).sfxOn && musicOnly > .002, `music togg
   check(['strut', 'waltz', 'shuffle'].includes(day), `daytime plays a park song (${day})`);
   for (const [kind, want] of [['ufo', 'ufo'], ['dance', 'disco'], ['conga', 'conga']]) {
     await page.evaluate((k) => window.pp.happen(k), kind);
-    const ok = await page.waitForFunction((w) => window.pp.audio().song === w, want, { timeout: 8000, polling: 50 }).then(() => true, () => false);
+    const ok = await poll(page, (w) => window.pp.audio().song === w, want, 8000);
     check(ok, `${kind} happening cuts to its song (${await songOf()})`);
   }
   await page.evaluate(() => { const S = window.__game.sim; S.happening.until = 0; S.t += 1; window.pp.step(20); window.pp.resume(); });
-  const back = await page.waitForFunction(() => ['strut', 'waltz', 'shuffle'].includes(window.pp.audio().song), null, { timeout: 8000, polling: 50 }).then(() => true, () => false);
+  const back = await poll(page, () => ['strut', 'waltz', 'shuffle'].includes(window.pp.audio().song), null, 8000);
   check(back, `after the happening the park song returns (${await songOf()})`);
   const lv = await page.evaluate(async () => { const r = {}; for (const id of window.pp.songs()) r[id] = (await window.pp.songLevel(id, 6)).rms; return r; });
   check(Object.values(lv).every(v => v > .008 && v < .08), `every song renders at a sane level offline (${Object.entries(lv).map(([k, v]) => k + ' ' + v).join(', ')})`);
@@ -81,7 +81,7 @@ await click('#b-settings');
 
 // settings survive a reload
 await page.evaluate(() => window.__game.save());
-await page.reload(); await page.waitForFunction(() => window.ppReady === true);
+await reload(page);
 a = await A();
 check(Math.abs(a.musicVol - .3) < .08 && Math.abs(a.sfxVol - .6) < .08 && a.musicOn && a.sfxOn, 'sound settings are saved');
 
@@ -123,6 +123,5 @@ await (await dl2).saveAs('captures/photo-roost.png');
 check(fs.statSync('captures/photo-roost.png').size > 100000, 'roost bird studio photo downloads');
 const s = await state(page);
 check(s.render.programs === p0 && s.render.programs === s.render.programsAfterBoot, `photo mode compiles no new shaders (${s.render.programs})`);
-check(errors.length === 0, 'no console errors ' + errors.join(' | '));
-await br.close(); await srv.close();
-process.exit(failures() ? 1 : 0);
+checkNoErrors(errors);
+await finish(br, srv, 'audio + photo');

@@ -3,7 +3,8 @@
 import * as THREE from 'three';
 import { PARK, FOUNTAIN, DOVECOTE } from './sim.js';
 import { damp } from './util.js';
-// how far the camera may pan: out to the monument ring
+
+// how far the camera may pan
 const REACH = { x: PARK.w / 2 + 4.6, z: PARK.d / 2 + 4.6 }; // a little past the monument ring, so edge pieces can be centred
 
 const TAU = Math.PI * 2;

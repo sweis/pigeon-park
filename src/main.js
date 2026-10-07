@@ -3,20 +3,20 @@
 import * as THREE from 'three';
 import * as M from './genetics.js';
 import { setSeed, isSeeded, rngState, restoreRng } from './rng.js';
-import { Sim, FIXED_DT, PARK, pureGenome, migrateLegacy } from './sim.js';
+import { Sim, FIXED_DT, PARK, JACOB_AFTER, migrateLegacy } from './sim.js';
 import { World } from './world.js';
 import { FlockView } from './view.js';
-import { makeMaterials, PigeonRig, geometryCacheSize, birdHeight } from './pigeon3d.js';
+import { makeMaterials, PigeonRig, geometryCacheSize } from './pigeon3d.js';
 import { CameraRig } from './camera.js';
 import { Fx } from './fx.js';
-import { Audio, SONGS, renderMusic } from './audio.js';
+import { Audio, SONGS, PLAYLISTS, renderMusic } from './audio.js';
 import { Portraits } from './portraits.js';
 import { UI } from './ui.js';
 import { Diagnostics } from './debug.js';
 import { startHappening, HAPPENINGS } from './happenings.js';
 import { Monuments } from './monuments.js';
 import { ACHIEVEMENTS, checkAchievements } from './achievements.js';
-import { toScreen } from './util.js';
+import { toScreen, percentile, pickUnseeded, fileSlug, loadFonts, store, BRAND } from './util.js';
 
 const BUILD = typeof __BUILD__ !== 'undefined' ? __BUILD__ : { version: 'dev', hash: 'local', date: '' };
 const SAVE_KEY = 'pigeon-park-3d-v1', LEGACY_KEY = 'pigeon-park-save-v1', GFX_KEY = 'pigeon-park-gfx';
@@ -27,7 +27,7 @@ const flag = (k) => params.has(k) && params.get(k) !== '0';
 function pickQuality() {
   const ua = navigator.userAgent;
   const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && Math.min(innerWidth, innerHeight) < 820);
-  let tier = params.get('quality') || (() => { try { return localStorage.getItem(GFX_KEY); } catch { return null; } })() || (mobile ? 'medium' : 'high');
+  let tier = params.get('quality') || store.get(GFX_KEY) || (mobile ? 'medium' : 'high');
   const Q = {
     // birdShadows: birds cast sun shadows (high only; elsewhere their soft contact shadow does the job)
     high: { tier: 'high', antialias: true, shadows: true, shadowMap: 2048, lampLights: 4, low: false, pr: 2, birdShadows: true },
@@ -39,6 +39,7 @@ function pickQuality() {
 
 class Game {
   constructor() {
+    if (params.has('seed')) setSeed(+params.get('seed')); // before the sim exists: a seeded park ignores the calendar
     this.q = pickQuality();
     this.version = BUILD;
     this.sim = new Sim();
@@ -52,7 +53,6 @@ class Game {
   }
 
   async boot() {
-    if (params.has('seed')) setSeed(+params.get('seed'));
     const canvas = document.getElementById('c');
     const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: this.q.antialias, powerPreference: 'high-performance' });
     r.setPixelRatio(Math.min(devicePixelRatio || 1, this.q.pr));
@@ -82,11 +82,8 @@ class Game {
     this.ui = new UI(this);
     this.ui.seen = { ...this.ui.seen, ...(this.savedUI?.seen || {}) };
     this.ui.introDone = !!this.savedUI?.introDone;
-    const su = this.savedUI || {};
-    this.audio.sfxOn = su.sfxOn ?? !su.muted; this.audio.musicOn = su.musicOn ?? true;
-    if (su.sfxVol != null) this.audio.sfxVol = su.sfxVol; if (su.musicVol != null) this.audio.musicVol = su.musicVol;
+    this.audio.applyPrefs(this.savedUI || {});
     this.ui.renderSound();
-    this.monuments.sync(this.sim.achievements, false);
     checkAchievements(this.sim, true); // catch an older save up on anything it has already earned
     this.monuments.sync(this.sim.achievements, false);
     this.diag = new Diagnostics(this, flag('debug'));
@@ -111,7 +108,7 @@ class Game {
     const kinds = { clay: {}, metal: { fantasy: 'gold' }, glow: { glow: 'glow' }, voidglow: { glow: 'glow', fantasy: 'void' }, facet: { fantasy: 'coalore' }, gem: { fantasy: 'diamond' } };
     const rigs = [];
     Object.values(kinds).forEach((over, i) => {
-      const ph = M.computePheno(pureGenome(over), null);
+      const ph = M.computePheno(M.pureGenome(over), null);
       const rig = new PigeonRig(ph, this.mats);
       rig.group.position.set(i * .8 - 1.6, 0, 2); this.scene.add(rig.group); rigs.push(rig);
       this.portraits.get(ph);
@@ -122,7 +119,7 @@ class Game {
     this.sim.goddess = { x: 0, z: -1, y: 4, beam: { x: 0, z: 1 } };
     this.fx.burst(0, .5, 2, 3);
     const rs = rngState(); // the warm-up bird must not advance the seeded stream
-    this.sim.spawn({ genome: pureGenome({}), name: 'warm-up', adult: true, quiet: true, x: 0, z: 1, dir: 0 }); // a finder marker target
+    this.sim.spawn({ genome: M.pureGenome(), name: 'warm-up', adult: true, quiet: true, x: 0, z: 1, dir: 0 }); // a finder marker target
     restoreRng(rs);
     this.flock.update(this.sim, 0, 0, null, 'pattern:bar');
     this.sim.family = {}; this.sim.lids = 1; this.sim.ids = 1;
@@ -141,10 +138,8 @@ class Game {
   load() {
     let d = null;
     if (!flag('fresh')) {
-      try {
-        d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
-        if (!d) { d = migrateLegacy(JSON.parse(localStorage.getItem(LEGACY_KEY) || 'null')); if (d) this.migrated = true; }
-      } catch (e) { d = null; }
+      d = store.get(SAVE_KEY);
+      if (!d) { d = migrateLegacy(store.get(LEGACY_KEY)); if (d) this.migrated = true; }
     }
     if (d) { this.sim.restore(d); this.savedUI = d.ui; }
     if (params.has('hour')) this.sim.setTimeOfDay(+params.get('hour'));
@@ -157,12 +152,10 @@ class Game {
   }
   save() {
     if (this.nosave || !this.sim.ready) return; // never write before the flock has loaded
-    try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(this.sim.serialize({ ui: { seen: this.ui?.seen, introDone: this.ui?.introDone, sfxOn: this.audio?.sfxOn, musicOn: this.audio?.musicOn, sfxVol: this.audio?.sfxVol, musicVol: this.audio?.musicVol }, build: BUILD })));
-    } catch (e) { /* storage full or blocked — fine */ }
+    store.set(SAVE_KEY, this.sim.serialize({ ui: { seen: this.ui?.seen, introDone: this.ui?.introDone, ...this.audio?.prefs() }, build: BUILD })); // (full or blocked storage: fine)
   }
   resetAll() {
-    try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+    store.del(SAVE_KEY);
     const keep = { speed: this.sim.speed, mut: this.sim.mut, whimsy: this.sim.whimsy, ph: this.sim.phase() }, nextId = this.sim.ids;
     this.sim.reset(); this.sim.restore(keep);
     this.sim.ids = nextId; // ids keep counting so no new bird inherits an old bird's 3D view
@@ -170,7 +163,7 @@ class Game {
     this.sim.initFlock(null);
     this.monuments.clear();
     this.ui.roostSel = null; this.ui.seen = { pedia: 0, breeds: 0 };
-    this.cam.shot('overview', { snap: false });
+    this.recenter();
     this.ui.toast('A fresh delegation of civic pigeons arrives.', 'note');
     this.save();
   }
@@ -179,11 +172,13 @@ class Game {
   select(id, keepRoost) {
     this.sim.selId = id;
     if (!keepRoost) this.ui.roostSel = null;
-    if (id == null && this.cam.follow != null) this.cam.shot('overview', { snap: false });
+    if (id == null && this.cam.follow != null) this.recenter();
     this.ui.refreshT = 0;
   }
+  selectRoost(i) { this.ui.roostSel = i; this.select(null, true); } // a roost perch's card
+  recenter() { this.cam.shot('overview', { snap: false }); }       // back to the whole-park view (eased)
   toggleFollow(id) {
-    if (this.cam.follow === id) this.cam.shot('overview', { snap: false });
+    if (this.cam.follow === id) this.recenter();
     else { this.select(id); this.cam.shot('follow', { id, snap: false }); }
     this.ui.refreshT = 0;
   }
@@ -225,7 +220,7 @@ class Game {
         cand = null; orbit = null;
         const [a, b] = [...pointers.values()];
         pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
-        if (drag) { const p = this.sim.byId(drag.id); if (p) this.sim.drop(drag.id, p.x, p.z); drag = null; this.ui.ghost(null); this.ui.setOverRoost(false); }
+        if (drag) { this.sim.dropInPlace(drag.id); drag = null; this.ui.ghost(null); this.ui.setOverRoost(false); }
         return;
       }
       const id = this.pickAt(e.clientX, e.clientY, e.pointerType === 'touch');
@@ -257,13 +252,13 @@ class Game {
         return;
       }
       if (cand && !drag && Math.hypot(e.clientX - cand.x, e.clientY - cand.y) > 8) {
-        const p = this.sim.grab(cand.id); if (p) drag = { id: cand.id, pheno: p.pheno };
+        const p = this.sim.grab(cand.id); if (p) drag = { id: cand.id, pheno: p.pheno, rr: this.ui.roostRect() }; // (the roost bar doesn't move mid-drag)
         if (this.cam.follow === cand.id) this.cam.follow = null;
       }
       if (drag) {
         const g = ground(e.clientX, e.clientY);
         if (g) this.sim.carry(drag.id, Math.max(-PARK.w / 2, Math.min(PARK.w / 2, g.x)), Math.max(-PARK.d / 2, Math.min(PARK.d / 2, g.z)));
-        const rr = this.ui.roostRect(), over = e.clientX >= rr.left && e.clientX <= rr.right && e.clientY >= rr.top - 10 && e.clientY <= rr.bottom + 10;
+        const rr = drag.rr, over = e.clientX >= rr.left && e.clientX <= rr.right && e.clientY >= rr.top - 10 && e.clientY <= rr.bottom + 10;
         this.ui.setOverRoost(over);
         this.ui.ghost(over ? drag.pheno : null, e.clientX, e.clientY);
       } else if (orbit) {
@@ -279,13 +274,13 @@ class Game {
       if (pointers.size < 2) pinch = null;
       if (drag) {
         const S = this.sim;
-        if (this.ui.overRoost) { if (S.roostAdd(drag.id)) { this.ui.roostSel = S.roost.length - 1; this.select(null, true); } else { const p = S.byId(drag.id); if (p) S.drop(drag.id, p.x, p.z); } }
-        else { const p = S.byId(drag.id); if (p) S.drop(drag.id, p.x, p.z); }
+        if (this.ui.overRoost && S.roostAdd(drag.id)) this.selectRoost(S.roost.length - 1);
+        else S.dropInPlace(drag.id);
         this.ui.setOverRoost(false); this.ui.ghost(null);
         drag = null;
       } else if (orbit && orbit.moved < 6 && e.type === 'pointerup') {
         const now = performance.now();
-        if (now - (this.lastEmptyTap || 0) < 350 && this.cam.name !== 'overview') this.cam.shot('overview', { snap: false }); // double-tap empty ground: recenter
+        if (now - (this.lastEmptyTap || 0) < 350 && this.cam.name !== 'overview') this.recenter(); // double-tap empty ground
         this.lastEmptyTap = now;
         this.select(null); this.ui.roostSel = null;
       }
@@ -302,7 +297,7 @@ class Game {
     addEventListener('keydown', (e) => {
       if (!e.key || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
       if (CAM_KEYS[e.code] && !this.ui.dialog && !e.ctrlKey && !e.metaKey && !e.altKey) { this.keys.add(e.code); if (e.code.startsWith('Arrow')) e.preventDefault(); }
-      if (e.key === 'Escape') { if (this.ui.dialog) { if (!this.clipBusy) this.ui.closeDialog(); } else if (this.find) this.findTrait(null); else if (this.cam.follow != null) this.cam.shot('overview', { snap: false }); else this.select(null); return; }
+      if (e.key === 'Escape') { if (this.ui.dialog) { if (!this.clipBusy) this.ui.closeDialog(); } else if (this.find) this.findTrait(null); else if (this.cam.follow != null) this.recenter(); else this.select(null); return; }
       if ((e.key === 'p' || e.key === ' ') && !e.repeat) { if (e.key === ' ') e.preventDefault(); this.togglePause(); if (e.key === 'p') cheat = ''; return; }
       if (e.key === '?') { this.ui.dialog === 'help' ? this.ui.closeDialog() : this.ui.openDialog('help'); return; }
       if (e.key.length !== 1) return;
@@ -317,7 +312,7 @@ class Game {
   enterCode(raw) {
     const code = String(raw || '').toLowerCase().replace(/[^a-z]/g, '');
     const fn = CODES[code];
-    if (!fn) { this.ui.toast(pick(['Nothing happens. A pigeon somewhere laughs at you.', 'The park does not recognise that word.', 'Incorrect. The pigeons judge you silently.'])); return false; }
+    if (!fn) { this.ui.toast(pickUnseeded(['Nothing happens. A pigeon somewhere laughs at you.', 'The park does not recognise that word.', 'Incorrect. The pigeons judge you silently.'])); return false; }
     fn(this.sim);
     return true;
   }
@@ -334,9 +329,9 @@ class Game {
   }
 
   onContextLost() {
-    try { const t = ['high', 'medium', 'low'], i = t.indexOf(this.q.tier); localStorage.setItem(GFX_KEY, t[Math.min(2, i + 1)]); } catch (e) {}
+    const t = ['high', 'medium', 'low']; store.set(GFX_KEY, t[Math.min(2, t.indexOf(this.q.tier) + 1)]); // step down a tier
     const el = document.createElement('div'); el.className = 'ctxlost';
-    el.innerHTML = '<div class="card"><b>Graphics reset</b><p>Your device’s GPU took a nap. Tap to reload at a lighter quality.</p></div>';
+    el.appendChild(errorCard('Graphics reset', 'Your device’s GPU took a nap. Tap to reload at a lighter quality.'));
     el.onclick = () => location.reload();
     document.body.appendChild(el);
   }
@@ -373,11 +368,11 @@ class Game {
       this.cam.keyMove(Math.sign(f), Math.sign(r), Math.sign(rot), this.camDt || 1 / 60);
     }
     let fp = null;
-    if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.cam.shot('overview', { snap: false }); }
+    if (this.cam.follow != null) { const v = this.flock.view(this.cam.follow), p = S.byId(this.cam.follow); if (v && p && !p.flying) fp = v.vis; else this.recenter(); }
     this.cam.update(this.camDt || 1 / 60, fp);
     this.world.updateOcclusion(this.cam.cam.position, this.cam.cur.target, this.camDt || 1 / 60);
     this.renderer.render(this.scene, this.cam.cam);
-    this.ui?.frame(dt, this.cam.cam);
+    this.ui?.frame(this.camDt || 1 / 60, this.cam.cam); // (wall time: the HUD keeps refreshing while paused)
     this.diag?.frame();
   }
   // Everything that moves with world time (after the sim has stepped): events, sky, water, birds, effects.
@@ -393,7 +388,7 @@ class Game {
     this.fx.update(dt);
     this.monuments.update();
   }
-  musicMood() { return EVENT_MUSIC[this.sim.happening?.kind] || (this.sim.night > .55 ? 'night' : 'day'); }
+  musicMood() { const k = this.sim.happening?.kind; return PLAYLISTS[k] ? k : this.sim.night > .55 ? 'night' : 'day'; } // happenings with a song of their own
   // Each bird has its own voice: big birds low, small birds high, plus a fixed per-genome offset.
   cooPitch(p) { return (COO_PITCH[p.pheno.e.size] || 1) / Math.pow(p.jit || 1, 2.5); }
 
@@ -408,19 +403,19 @@ class Game {
       const p = S.byId(id), v = this.flock.view(id); if (!p || !v) return null;
       pheno = p.pheno; name = p.name; gen = p.gen;
       // frame the whole bird: aim at half its standing height, back off for tall ones (raised heads, stilts, hats)
-      const s = v.size(p, S.t), ht = birdHeight(p.pheno) * s, c = new THREE.Vector3(v.vis.x + Math.cos(p.dir) * .04 * s, v.vis.y + ht * .52, v.vis.z + Math.sin(p.dir) * .04 * s);
+      const s = v.size(p, S.t), ht = v.height * s, c = new THREE.Vector3(v.vis.x + Math.cos(p.dir) * .04 * s, v.vis.y + ht * .52, v.vis.z + Math.sin(p.dir) * .04 * s);
       const cam = new THREE.PerspectiveCamera(30, 1, .05, 400), a = p.dir + .8, d = 1.9 * Math.max(ht, .6 * s) + .3;
       cam.position.set(c.x + Math.cos(a) * d, c.y + .12 * s + .12, c.z + Math.sin(a) * d); cam.lookAt(c);
       shot = this.renderView(cam, W, W);
     } else {
       const b = S.roost[roost]; if (!b) return null;
-      pheno = M.computePheno(b.genome, b.accessory); name = b.name; gen = b.gen;
+      pheno = S.roostPheno(b); name = b.name; gen = b.gen;
       shot = this.portraits.studio(pheno, W);
     }
     this.audio.play('shutter');
     const card = await composeCard(shot, { name, gen, pheno, studio: id == null });
     const blob = await new Promise(res => card.toBlob(res, 'image/png'));
-    return { blob, url: URL.createObjectURL(blob), name, file: 'pigeon-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.png', w: card.width, h: card.height };
+    return { blob, url: URL.createObjectURL(blob), name, file: `pigeon-${fileSlug(name)}.png`, mime: 'image/png', w: card.width, h: card.height };
   }
 
   // ---------- video clips ----------
@@ -483,10 +478,8 @@ class Game {
   }
 }
 
-const pick = (a) => a[Math.floor(Math.random() * a.length)];
 const FIND_MS = 30000;
 const COO_PITCH = { king: .78, dinky: 1.32, chonk: .84 }; // big birds low, small birds high
-const EVENT_MUSIC = { dance: 'dance', conga: 'conga', ufo: 'ufo', goddess: 'goddess' }; // happenings with their own song
 // Desktop camera keys by physical position (works on AZERTY too): [forward, right, rotate].
 const CAM_KEYS = {
   KeyW: [1, 0, 0], ArrowUp: [1, 0, 0], KeyS: [-1, 0, 0], ArrowDown: [-1, 0, 0],
@@ -506,22 +499,22 @@ async function composeCard(shot, { name, gen, pheno, studio }) {
   const W = shot.width, cap = Math.round(W * .2), c = document.createElement('canvas');
   c.width = W; c.height = W + cap;
   const g = c.getContext('2d');
-  try { await Promise.all([document.fonts.load(`${W * .06}px Caprasimo`), document.fonts.load(`600 ${W * .03}px Figtree`)]); } catch (e) {}
+  await loadFonts(`${W * .06}px Caprasimo`, `600 ${W * .03}px Figtree`);
   if (studio) { // soft backdrop + contact shadow for studio portraits
     const bg = g.createRadialGradient(W / 2, W * .42, W * .05, W / 2, W / 2, W * .75);
     bg.addColorStop(0, '#f0fae1'); bg.addColorStop(1, '#ccdbb2'); g.fillStyle = bg; g.fillRect(0, 0, W, W);
     g.fillStyle = 'rgba(46,43,37,.16)'; g.beginPath(); g.ellipse(W / 2, W * .86, W * .26, W * .045, 0, 0, Math.PI * 2); g.fill();
   }
   g.drawImage(shot, 0, 0, W, W);
-  g.fillStyle = '#f5ead8'; g.fillRect(0, W, W, cap);
+  g.fillStyle = BRAND.paper; g.fillRect(0, W, W, cap);
   const pad = W * .05;
-  g.fillStyle = '#201e1d'; g.font = `${W * .058}px Caprasimo, serif`; g.textBaseline = 'alphabetic';
+  g.fillStyle = BRAND.ink; g.font = `${W * .058}px Caprasimo, serif`; g.textBaseline = 'alphabetic';
   g.fillText(name, pad, W + cap * .38, W - pad * 2);
   g.font = `600 ${W * .027}px Figtree, sans-serif`; g.fillStyle = '#474238';
   g.fillText(`${pheno.label} · Generation ${gen}`, pad, W + cap * .6, W - pad * 2);
-  const breeds = M.matchBreeds(pheno, { gen, found: game.sim.breeds }).map(b => '★ ' + b.name).join('   ');
+  const breeds = game.sim.breedsOf({ pheno, gen }).map(b => '★ ' + b.name).join('   ');
   const traits = pheno.traits.slice(0, 5).map(t => t.label).join(' · ');
-  g.fillStyle = breeds ? '#c67139' : '#645c50'; g.font = `700 ${W * .024}px Figtree, sans-serif`;
+  g.fillStyle = breeds ? BRAND.accent : '#645c50'; g.font = `700 ${W * .024}px Figtree, sans-serif`;
   g.fillText(breeds || traits || 'A perfectly ordinary pigeon', pad, W + cap * .8, W - pad * 2);
   g.textAlign = 'right'; g.fillStyle = 'rgba(32,30,29,.45)'; g.font = `600 ${W * .018}px Figtree, sans-serif`;
   g.fillText('Pigeon Park · pigeonpark.live', W - pad, W + cap * .93);
@@ -532,15 +525,21 @@ const game = new Game();
 window.__game = game;
 game.boot().then(() => { window.pp = makeDebugApi(game); window.ppReady = true; }).catch((e) => {
   console.error(e);
-  document.getElementById('loading').innerHTML = '<div class="card"><b>The pigeons could not commute.</b><p>' + String(e.message || e) + '</p></div>';
+  document.getElementById('loading').replaceChildren(errorCard('The pigeons could not commute.', String(e.message || e)));
 });
+
+// A small card with a bold title and a line of text (boot failure, lost graphics context).
+function errorCard(title, text) {
+  const card = document.createElement('div'), b = document.createElement('b'), p = document.createElement('p');
+  card.className = 'card'; b.textContent = title; p.textContent = text; card.append(b, p);
+  return card;
+}
 
 // ---------- debug API ----------
 function makeDebugApi(g) {
   const S = g.sim;
-  const pct = (a, p) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(2); };
+  const pct = (a, q) => +percentile(a, q).toFixed(2);
   const api = {
-    build: BUILD,
     getState() {
       const info = g.renderer.info;
       return {
@@ -565,7 +564,7 @@ function makeDebugApi(g) {
     setSeed(n) { setSeed(n); },
     setSpeed(v) { S.speed = v; },
     setSeason(s) { S.season = M.SEASONS[s] ? s : null; return S.season; },
-    jacob() { S.stats.playTime = Math.max(S.stats.playTime, 20 * 60); g.render(0); return S.stats.jacob; },
+    jacob() { S.stats.playTime = Math.max(S.stats.playTime, JACOB_AFTER); g.render(0); return S.stats.jacob; },
     happen(kind) { const ok = startHappening(S, kind); g.render(0); return ok; },
     happenings: () => Object.keys(HAPPENINGS),
     achievements: () => ({ earned: Object.keys(S.achievements), built: [...g.monuments.built.keys()], total: ACHIEVEMENTS.length }),
@@ -582,7 +581,7 @@ function makeDebugApi(g) {
       const b = M.BREEDS.find(x => x.id === kind);
       let genome;
       if (b) { const bg = M.breedGenome(b); return S.spawn({ ...bg, name: b.name, adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id; }
-      genome = typeof kind === 'object' ? pureGenome(kind) : M.founderGenome();
+      genome = typeof kind === 'object' ? M.pureGenome(kind) : M.founderGenome();
       return S.spawn({ genome, accessory: pos.accessory || null, name: M.randomName(), adult: true, x: pos.x, z: pos.z, dir: pos.dir }).id;
     },
     clearAll() { S.pigeons.length = 0; S.eggs.length = 0; S.poops.length = 0; S.court = null; S.selId = null; S.events.length = 0; g.fx.parts.length = 0; g.fx.rings.forEach(r => { r.userData.t = 1; }); g.render(0); },

@@ -17,7 +17,13 @@
 - `src/view.js` — animation (walk head-bob, peck, sleep, tumble, parlor roll, fly, held, court, blinks), eggs, poop, contact shadows, selection ring.
 - `src/audio.js` — all synthesised: per-bird coo pitch + 5 coo shapes, trumpet/laugher voices, SFX; generative soundtrack as a song table (`SONGS`): day playlist Pigeon Strut / Breadcrumb Waltz (3/4) / Bench Shuffle (swing) rotating every 16 bars, night Strut-after-dark / Streetlamp Lullaby, and event songs that cut in with a sting: UFO → Close Encounter, dance → Coo Fever (disco), conga → Conga Line. `renderMusic()` renders any song offline (clip soundtracks, level tests). Ducked when paused. Separate sfx/music buses (toggles + sliders, saved). Master compressor.
 - `src/clip.js` — 6 s vertical (1080×1920, 30 fps) video clips of a bird: offline frame-by-frame render, orbit camera (fountain-aware, blockers hidden), sticker captions, offline soundtrack, WebCodecs + mediabunny (lazy chunk) → MP4 H.264/AAC or WebM VP9/Opus. See `notes/video-clips.md` for platform requirements and what direct posting would take.
-- `src/util.js` — shared helpers: `damp`, `raySphere`, `toScreen`.
+- `src/util.js` — view/UI helpers: `damp`, `angDamp`, `raySphere`, `toScreen`, `percentile`, `pickUnseeded` (cosmetic
+  randomness that never touches the seeded stream), `fileSlug`, `loadFonts`, `nextFrame`, `store` (throw-free JSON
+  localStorage), `emoteText/emoteKind`, `CLIP` (clip format), `BRAND` (canvas colours).
+- `src/geom.js` — three.js geometry helpers shared by birds, park, monuments, markers: `V`, `col`, `hex` (cached,
+  read-only colours for paint callbacks), `mix`, `trs`, `rel`, `alongY`, `basis`, `lathe`, `groundRing`, `pooled`
+  (fixed-size instanced pool), `paintVertices`. `src/noise.js` — `hash3`, `vnoise3`, `vnoise2`.
+  `rng.js` also exports `mulberry32(seed)` for independent scenery streams.
 - Family tree: `sim.family` (lineage id → name, compact genome, parents, origin), persistent lineage ids (`p.lid`, `sim.lids`), pruned to great-grandparents on save; `sim.familyTree(lid)`, `sim.whereIs(lid)`; UI `openFamily`.
 - Trait finder: `Game.findTrait(key)` (30 s), `M.traitStatus` (2 show / 1 carry), instanced gems + rings in `FlockView.updateFind` (reuse the sparkle program), `#finder` banner. Entry points: inspector chips, Pigeonpedia "Find in park", registry recipe chips.
 - Desktop camera keys: WASD / arrows pan (relative to view, speed ∝ zoom), Q/E rotate; orbit unclamped (full 360°), `nearAz` makes recentring take the short way.
@@ -39,7 +45,8 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 - `node tests/e2e.mjs [--dist]` — Playwright, real mouse/touch/keyboard: cold boot 10 s, program count constant, birds render (pixel diff), select/clone/drag-to-roost/drag-drop/orbit/zoom, dialogs, Start over (two-tap), cheats, save→reload, legacy save import, seeded replay, 7-hour stills sweep, phone.
 - `node tests/audio-photo.mjs [--dist]` (music audible via analyser RMS, toggles/sliders/persistence, per-bird pitch, photo download park + roost)
 - `node tests/happenings.mjs` (every happening in-game + pause button), `node tests/fountain.mjs` (rim crowding)
-- `node tests/lifecycle.mjs` (court→egg→hatch captures), `tests/lineup.mjs` (every breed + accessories), `tests/census.mjs` (full park budget), `tests/look.mjs` (quick look-dev).
+- `node tests/lifecycle.mjs` (court→egg→hatch captures), `tests/lineup.mjs` (every breed + every accessory), `tests/perf.mjs` (full park budget + CPU per frame; was also census.mjs), `tests/look.mjs` (quick look-dev).
+- Suite plumbing lives in `tests/lib.mjs`: `setup()` / `finish()` (every suite takes `--dist`), `poll`, `reload`, `clickSel` (mouse or touch), `screenOf`, `checkNoErrors`, `checkPrograms`, `PHONE`. `tests/assert.mjs`: `check` / `failures` (shared with the sim suite). `run.mjs` finds suites itself.
 
 ## Numbers (headless SwiftShader — timings meaningless, counts are real) — `node tests/perf.mjs --dist [--medium]`
 - Perf pass (v0.7): bird frustum culling (fixed bounds sphere), no bird sun-shadows on medium/low tiers (blob
@@ -131,6 +138,31 @@ URL params: `seed`, `hour`, `simdt`, `nosave`, `fresh`, `quality=high|medium|low
 - Verified: sim suite (season boost 355 vs 43 per 40k eggs; festive hatch rate; Jacob timing/once/saved; Anomaly and
   Omnipigeon gating; accessory notes + catch-up) and the browser suites. Not verified: a real 20-minute session
   for Jacob (forced via playTime), seasons on the actual dates other than today's (Halloween).
+
+## v0.9.2 — code quality + performance pass
+- **Shared modules:** `geom.js`, `noise.js`, more of `util.js` (above). Removed copies of V/col/trs/lathe/basis/
+  mulberry/vnoise/angDamp/percentile/slug/font-loading/bubble text, and the local `pureGenome`/`wildPheno`.
+- **Registries instead of if-chains:** accessories (`ACC` in pigeon3d: builder + height per item; tests check every
+  ACCESSORIES entry has one), outfits carry their height, seasons carry their date window (`SEASONS[k].on`), songs
+  carry `mood` + `sting` (PLAYLISTS and the happening→music map are derived — a happening gets a song by adding one
+  SONGS entry), lead instruments and sound effects are tables, settings rows are a table, `M.MUT_ONLY` lists the
+  cryptid alleles once, `ACCESSORIES[x].stays` replaces the hard-coded Jacob check.
+- **Sim helpers:** `speak/speakFrom`, `face`, `nearest`, `keepInPark`, `refresh` (pheno + breeds + rev + notice),
+  `breedsOf({pheno, gen})`, `dropInPlace`, `roostPheno` (cached), `summon`, `cloneName`, `M.copy(kind, name)`.
+  Happenings: `hold`, `ring`, `needFree`, optional `end`. No change to the seeded rand() call order.
+- **Bugs fixed:** seeded runs depended on today's date (season) → seeded parks ignore the calendar; two birds in the
+  exact same spot never separated (zero normal); the golden egg could hatch Jacob's jersey; happening errors were
+  swallowed silently (now logged); a clip's caption consumed the sim's seeded RNG; releasing a long-named roost
+  clone could exceed the name limit; the HUD stopped refreshing while paused (it ran on sim time).
+- **Performance:** geometry-cache prune keyed by look, keeping both LODs (it used to evict every far bird's close-up
+  geometry, so zooming in / photos rebuilt them: ~20 ms each); new birds build only the LOD they're seen at; LOD
+  hysteresis; far LOD scales small-primitive segments (−20 % triangles over all looks, frillbacks −48 %; close-up
+  geometry byte-identical, checked over 120 looks); `Static` merges stay indexed; monuments dispose geometry on
+  reset; no MSAA photo target on phones; per-step allocation removed from collisions / fountain checks; achievements
+  only re-checked when progress changes; rain/drops/poop/tree-fade/HUD skip redundant writes; toast placement only
+  measures layout when a sheet changes.
+- Verified: sim suite + new checks (registries, seeded season, same-spot push, jersey, LOD, prune), browser suites,
+  before/after overview captures (identical to 0.03 % of pixels). Not verified: real devices.
 
 ## Next
 - Try Clip on a real iPhone + Android (MP4 path, filming time); fall back to 720×1280 on phones if slow. Add a Cancel button to filming.

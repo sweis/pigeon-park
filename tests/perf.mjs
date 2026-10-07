@@ -1,8 +1,9 @@
-// Before/after numbers for the perf pass: draw calls + triangles (full park, overview and close-up) and a CPU
-// micro-benchmark of the per-frame JS work (sim step + flock animation + lighting + FX + UI), no GPU.
-import { startServer, launch, boot, state } from './lib.mjs';
-const srv = await startServer({ dist: process.argv.includes('--dist') }); const br = await launch();
-const { page } = await boot(br, srv.url, 'nosave&seed=9&hour=16.5' + (process.argv.includes('--medium') ? '&quality=medium' : ''));
+// Budget census for a full park (45 birds): draw calls + triangles (overview and close-up), programs, geometry /
+// texture counts, and a CPU micro-benchmark of the per-frame JS work (sim step + flock animation + lighting + FX +
+// UI), no GPU. Run: node tests/perf.mjs [--dist] [--medium]
+import { setup, boot, state } from './lib.mjs';
+const { srv, br } = await setup();
+const { page, errors } = await boot(br, srv.url, 'nosave&seed=9&hour=16.5' + (process.argv.includes('--medium') ? '&quality=medium' : ''));
 await page.evaluate(() => { const pp = window.pp; for (let i = 0; i < 38; i++) pp.spawn('founder'); pp.spawn('legends'); pp.step(3); pp.cam('overview'); });
 const over = (await state(page)).render;
 await page.evaluate(() => window.pp.cam('hero-close', { x: 1, z: 0, dist: 3 }));
@@ -14,5 +15,6 @@ const cpu = await page.evaluate(() => {
   for (let i = 0; i < 120; i++) run(); // warm JIT
   const t0 = performance.now(); for (let i = 0; i < 600; i++) run(); return (performance.now() - t0) / 600;
 });
-console.log(JSON.stringify({ birds: (await state(page)).pigeons.length, overview: { draws: over.drawCalls, tris: over.triangles }, close: { draws: close.drawCalls, tris: close.triangles }, programs: over.programs, geometries: over.geometries, cpuMsPerFrame: +cpu.toFixed(3) }));
+console.log(JSON.stringify({ birds: (await state(page)).pigeons.length, overview: { draws: over.drawCalls, tris: over.triangles }, close: { draws: close.drawCalls, tris: close.triangles },
+  programs: over.programs, boot: over.programsAfterBoot, geoCache: over.pigeonGeoCache, geometries: over.geometries, textures: over.textures, cpuMsPerFrame: +cpu.toFixed(3), errors }));
 await br.close(); await srv.close();

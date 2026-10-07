@@ -8,13 +8,13 @@
 
 import * as THREE from 'three';
 import * as M from './genetics.js';
-import { birdHeight } from './pigeon3d.js';
 import { renderMusic } from './audio.js';
 import { FOUNTAIN } from './sim.js';
+import { CLIP, toScreen, pickUnseeded, loadFonts, fileSlug, emoteText, BRAND } from './util.js';
 // named imports so only the MP4/WebM writers + encoders are bundled (this module itself is loaded lazily)
 import { Output, Mp4OutputFormat, WebMOutputFormat, BufferTarget, CanvasSource, AudioBufferSource, getFirstEncodableVideoCodec, getFirstEncodableAudioCodec } from 'mediabunny';
 
-export const CLIP = { w: 1080, h: 1920, fps: 30, secs: 6 };
+export { CLIP };
 
 // Which container/codecs this browser can make, best first. null: no WebCodecs video encoder at all.
 export async function clipSupport(w = CLIP.w, h = CLIP.h) {
@@ -31,7 +31,7 @@ export function clipScript(p) {
   const breed = p.breeds[0], ph = p.pheno;
   const rare = [...ph.traits].sort((a, b) => b.tier - a.tier)[0];
   const hidden = M.carriersOf(p.genome);
-  const line = breed ? breed.blurb : rare && M.PEDIA[rare.key] ? M.PEDIA[rare.key] : M.pick(M.THOUGHTS) + '.';
+  const line = breed ? breed.blurb : rare && M.PEDIA[rare.key] ? M.PEDIA[rare.key] : pickUnseeded(M.THOUGHTS) + '.'; // (never the sim's seeded stream)
   const shown = breed ? ph.traits.filter(x => !(x.key.split(':')[0] in breed.req)).sort((a, b) => b.tier - a.tier)[0] : rare;
   const facts = [
     `Generation ${p.gen}`,
@@ -81,16 +81,16 @@ export function drawCaptions(g, sc, t, W, H) {
   const u = W / 1080, L = 72 * u, maxW = 820 * u, B = sc.beats;
   const out = t > B.end ? 1 - ease((t - B.end) / .25) : 1; // everything clears for the end card
   // corner bug: small "Pigeon Park" pill for the whole clip
-  sticker(g, ['Pigeon Park'], { x: L, y: 130 * u, font: `${34 * u}px Caprasimo, serif`, lh: 40 * u, pad: 22 * u, bg: 'rgba(245,234,216,.92)', fg: '#201e1d', s: pop((t - .05) / .35), a: out, maxW });
+  sticker(g, ['Pigeon Park'], { x: L, y: 130 * u, font: `${34 * u}px Caprasimo, serif`, lh: 40 * u, pad: 22 * u, bg: 'rgba(245,234,216,.92)', fg: BRAND.ink, s: pop((t - .05) / .35), a: out, maxW });
   // lower block
   let y = 1020 * u;
-  sticker(g, ['MEET'], { x: L, y, font: `800 ${30 * u}px Figtree, sans-serif`, lh: 34 * u, pad: 16 * u, bg: '#201e1d', fg: '#f5ead8', rot: -.05, s: pop((t - B.kicker) / .3), a: out, maxW });
+  sticker(g, ['MEET'], { x: L, y, font: `800 ${30 * u}px Figtree, sans-serif`, lh: 34 * u, pad: 16 * u, bg: BRAND.ink, fg: BRAND.paper, rot: -.05, s: pop((t - B.kicker) / .3), a: out, maxW });
   y += 70 * u;
   g.font = `${88 * u}px Caprasimo, serif`;
   const nameLines = wrap(g, sc.name, maxW - 60 * u).slice(0, 2);
-  y += sticker(g, nameLines, { x: L, y, font: `${88 * u}px Caprasimo, serif`, lh: 96 * u, pad: 30 * u, bg: '#f5ead8', fg: '#201e1d', rot: -.015, s: pop((t - B.name) / .4), a: out, maxW }) + 22 * u;
+  y += sticker(g, nameLines, { x: L, y, font: `${88 * u}px Caprasimo, serif`, lh: 96 * u, pad: 30 * u, bg: BRAND.paper, fg: BRAND.ink, rot: -.015, s: pop((t - B.name) / .4), a: out, maxW }) + 22 * u;
   const bs = pop((t - B.badge) / .35);
-  y += sticker(g, [sc.badge], { x: L + 12 * u, y, font: `800 ${46 * u}px Figtree, sans-serif`, lh: 54 * u, pad: 24 * u, bg: sc.badgeBreed ? '#c67139' : '#7a8a5e', fg: '#fff7e8', rot: .03, s: bs, a: out, maxW }) + 26 * u;
+  y += sticker(g, [sc.badge], { x: L + 12 * u, y, font: `800 ${46 * u}px Figtree, sans-serif`, lh: 54 * u, pad: 24 * u, bg: sc.badgeBreed ? BRAND.accent : '#7a8a5e', fg: BRAND.cream, rot: .03, s: bs, a: out, maxW }) + 26 * u;
   // the funny line, then the facts one after another in its place
   if (t < B.lineOut + .3) {
     g.font = `600 ${40 * u}px Figtree, sans-serif`;
@@ -105,10 +105,10 @@ export function drawCaptions(g, sc, t, W, H) {
   // end card
   if (t > B.end) {
     const k = pop((t - B.end - .12) / .4);
-    g.save(); g.globalAlpha = Math.min(1, (t - B.end) / .3) * .5; g.fillStyle = '#201e1d'; g.fillRect(0, 0, W, H); g.restore();
+    g.save(); g.globalAlpha = Math.min(1, (t - B.end) / .3) * .5; g.fillStyle = BRAND.ink; g.fillRect(0, 0, W, H); g.restore();
     const y0 = H * .4;
-    sticker(g, ['Pigeon Park'], { x: W / 2 - 330 * u, y: y0, font: `${110 * u}px Caprasimo, serif`, lh: 118 * u, pad: 40 * u, bg: '#f5ead8', fg: '#201e1d', rot: -.03, s: k, maxW: 900 * u });
-    sticker(g, ['breed your own → pigeonpark.live'], { x: W / 2 - 330 * u, y: y0 + 210 * u, font: `800 ${40 * u}px Figtree, sans-serif`, lh: 46 * u, pad: 24 * u, bg: '#c67139', fg: '#fff7e8', rot: .02, s: pop((t - B.end - .3) / .35), maxW: 900 * u });
+    sticker(g, ['Pigeon Park'], { x: W / 2 - 330 * u, y: y0, font: `${110 * u}px Caprasimo, serif`, lh: 118 * u, pad: 40 * u, bg: BRAND.paper, fg: BRAND.ink, rot: -.03, s: k, maxW: 900 * u });
+    sticker(g, ['breed your own → pigeonpark.live'], { x: W / 2 - 330 * u, y: y0 + 210 * u, font: `800 ${40 * u}px Figtree, sans-serif`, lh: 46 * u, pad: 24 * u, bg: BRAND.accent, fg: BRAND.cream, rot: .02, s: pop((t - B.end - .3) / .35), maxW: 900 * u });
   }
 }
 
@@ -150,17 +150,15 @@ function hideBlockers(g, S, id, cam, tgt) {
 }
 
 // Speech bubbles (thoughts, hearts, zzz) as the HUD shows them, drawn into the frame at each bird's head.
-const _v = new THREE.Vector3();
 function drawBubbles(g, S, flock, cam, W, H) {
   const u = W / 1080;
   g.save(); g.font = `700 ${34 * u}px Figtree, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
   for (const p of S.pigeons) {
     if (!p.emote || p.flying) continue;
     const v = flock.view(p.id); if (!v || !v.g.visible) continue;
-    _v.set(v.vis.x, v.vis.y + .72 * v.size(p, S.t), v.vis.z).project(cam);
-    if (_v.z > 1 || Math.abs(_v.x) > 1.1 || Math.abs(_v.y) > 1.1) continue;
-    const x = (_v.x * .5 + .5) * W, y = (-_v.y * .5 + .5) * H;
-    const text = p.emote.kind === 'heart' ? '♥' : p.emote.kind === 'zzz' ? 'z z z' : p.emote.text || '!';
+    const sp = toScreen(v.vis.x, v.vis.y + .72 * v.size(p, S.t), v.vis.z, cam, W, H);
+    if (sp.z > 1 || Math.abs(sp.ndcX) > 1.1 || Math.abs(sp.ndcY) > 1.1) continue;
+    const x = sp.x, y = sp.y, text = emoteText(p.emote);
     const tw = g.measureText(text).width + 36 * u, th = 56 * u;
     g.shadowColor = 'rgba(32,30,29,.25)'; g.shadowBlur = 10 * u; g.shadowOffsetY = 3 * u;
     g.fillStyle = '#f9f4ed'; rrect(g, x - tw / 2, y - th, tw, th, th / 2); g.fill();
@@ -171,13 +169,13 @@ function drawBubbles(g, S, flock, cam, W, H) {
 }
 
 // Record a clip of park bird `id`. onProgress(0..1). opts: { w, h, fps, secs } for tests. Returns
-// { blob, url, file, mime, w, h, codec, audioCodec, frames } — or throws if the browser can't encode video.
+// { blob, url, file, mime, w, h, codec, audioCodec, frames, name, peeks } — or throws if the browser can't encode video.
 export async function recordClip(game, id, { w = CLIP.w, h = CLIP.h, fps = CLIP.fps, secs = CLIP.secs, onProgress, peek } = {}) {
   const g = game, S = g.sim, p0 = S.byId(id);
   if (!p0 || p0.flying) throw new Error('That pigeon has left the park.');
   const sup = await clipSupport(w, h);
   if (!sup) throw new Error('This browser can’t make videos (no WebCodecs video encoder). Try a recent Chrome, Edge or Safari.');
-  try { await Promise.all([document.fonts.load(`${88 * w / 1080}px Caprasimo`), document.fonts.load(`800 ${40 * w / 1080}px Figtree`)]); } catch (e) { /* fall back to system fonts */ }
+  await loadFonts(`${88 * w / 1080}px Caprasimo`, `800 ${40 * w / 1080}px Figtree`);
   const sc = clipScript(p0), N = Math.round(secs * fps);
   const output = new Output({
     format: sup.container === 'mp4' ? new Mp4OutputFormat({ fastStart: 'in-memory' }) : new WebMOutputFormat(),
@@ -211,7 +209,7 @@ export async function recordClip(game, id, { w = CLIP.w, h = CLIP.h, fps = CLIP.
       const p = S.byId(id), v = g.flock.view(id);
       // camera: a slow push-in orbit from the bird's three-quarter front, easing along with it as it walks
       if (p && v) {
-        const s = v.size(p, S.t), ht = birdHeight(p.pheno) * s;
+        const s = v.size(p, S.t), ht = v.height * s;
         look.set(v.vis.x, v.vis.y + ht * .5, v.vis.z);
         if (i === 0) tgt.copy(look); else tgt.lerp(look, .12);
         // start near the bird's three-quarter front (like photos), swing round toward its face while closing in
@@ -263,7 +261,6 @@ export async function recordClip(game, id, { w = CLIP.w, h = CLIP.h, fps = CLIP.
   onProgress?.(1);
   const mime = output.format.mimeType, ext = output.format.fileExtension;
   const blob = new Blob([output.target.buffer], { type: mime });
-  const slug = p0.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return { blob, url: URL.createObjectURL(blob), file: `pigeon-${slug}${ext}`, mime, w, h, codec: sup.video, audioCodec: sup.audio, frames: N, name: p0.name, peeks };
+  return { blob, url: URL.createObjectURL(blob), file: `pigeon-${fileSlug(p0.name)}${ext}`, mime, w, h, codec: sup.video, audioCodec: sup.audio, frames: N, name: p0.name, peeks };
   }
 }

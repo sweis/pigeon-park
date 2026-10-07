@@ -5,56 +5,35 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { damp } from './util.js';
 import { PARK, FOUNTAIN, DOVECOTE } from './sim.js';
-import { statueGeometry } from './pigeon3d.js';
-import { computePheno, WILD, LOCI } from './genetics.js';
+import { wildStatue } from './pigeon3d.js';
+import { V, col, trs, lathe, groundRing, paintVertices } from './geom.js';
+import { vnoise2 } from './noise.js';
+import { mulberry32 as mulberry } from './rng.js'; // deterministic scatter, independent of the sim's stream
 
-export const wildPheno = () => computePheno(Object.fromEntries(LOCI.map(l => [l.id, [WILD[l.id], WILD[l.id]]])), null);
-
-const V = (x, y, z) => new THREE.Vector3(x, y, z);
-const col = (h) => new THREE.Color(h);
-
-// deterministic scatter RNG (independent of the sim's RNG)
-function mulberry(seed) { return () => { seed = (seed + 0x6d2b79f5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-function vnoise2(x, y, s = 0) {
-  const h = (i, j) => { const v = Math.sin(i * 127.1 + j * 311.7 + s * 91.3) * 43758.5453; return v - Math.floor(v); };
-  const fx = Math.floor(x), fy = Math.floor(y), tx = x - fx, ty = y - fy;
-  const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
-  return (h(fx, fy) * (1 - sx) + h(fx + 1, fy) * sx) * (1 - sy) + (h(fx, fy + 1) * (1 - sx) + h(fx + 1, fy + 1) * sx) * sy;
-}
-
-// Collects vertex-coloured geometry and merges it into one static mesh.
+// Collects vertex-coloured geometry and merges it into one static mesh. add() takes ownership of `geo`.
+// color: a Color, or (x, y, z) → Color per vertex (world position after `matrix`); ao: darken toward the bottom.
 export class Static {
   constructor() { this.geos = []; }
   add(geo, color, matrix, ao = 0) {
     let g = geo;
     if (g.attributes.uv) g.deleteAttribute('uv');
     if (g.attributes.uv1) g.deleteAttribute('uv1');
-    g = g.index ? g.toNonIndexed() : g;
+    if (!g.index) g = mergeVertices(g); // indexed: shared vertices are shaded once (faceted normals stay split)
     if (matrix) g.applyMatrix4(matrix);
-    g.computeBoundingBox();
-    const pos = g.attributes.position, n = pos.count, cols = new Float32Array(n * 3);
-    const c = typeof color === 'function' ? null : color;
-    const { min, max } = g.boundingBox, hgt = Math.max(1e-3, max.y - min.y);
-    for (let i = 0; i < n; i++) {
-      const cc = c || color(pos.getX(i), pos.getY(i), pos.getZ(i));
-      // cheap baked AO: darken toward the bottom of each piece
-      const k = ao ? 1 - ao * (1 - Math.min(1, (pos.getY(i) - min.y) / hgt)) : 1;
-      cols[i * 3] = cc.r * k; cols[i * 3 + 1] = cc.g * k; cols[i * 3 + 2] = cc.b * k;
-    }
-    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-    this.geos.push(g);
+    this.geos.push(paintVertices(g, color, ao));
   }
   mesh(material) {
     const g = mergeGeometries(this.geos, false);
     for (const x of this.geos) x.dispose();
+    this.geos = [];
     g.computeBoundingSphere();
     const m = new THREE.Mesh(g, material);
     m.castShadow = true; m.receiveShadow = true;
     return m;
   }
 }
-export const trs = (p, r = [0, 0, 0], s = [1, 1, 1]) => new THREE.Matrix4().compose(p, new THREE.Quaternion().setFromEuler(new THREE.Euler(...r)), new THREE.Vector3(...s));
 
 export function lumpy(radius, detail, amp, seed) {
   let g = new THREE.IcosahedronGeometry(radius, detail);
@@ -103,8 +82,9 @@ function isMoon(h) { h = ((h % 24) + 24) % 24; return h >= 19.3 || h < 5.2; }
 
 export class World {
   constructor(renderer, scene, quality) {
-    this.renderer = renderer; this.scene = scene; this.q = quality;
+    this.scene = scene; this.q = quality;
     this.t = 0;
+    this.matte = new THREE.MeshStandardMaterial({ roughness: .9 }); // instanced paving + grass (instance colours)
     this.propMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .86, metalness: 0 });
     this.buildLights();
     this.buildSky();
@@ -209,8 +189,7 @@ export class World {
         spots.push([cx, z, r()]);
       }
     }
-    const mat = new THREE.MeshStandardMaterial({ roughness: .9 });
-    const inst = new THREE.InstancedMesh(geo, mat, spots.length);
+    const inst = new THREE.InstancedMesh(geo, this.matte, spots.length);
     const m = new THREE.Matrix4(), c = new THREE.Color();
     const tones = ['#cfc3ad', '#c5b79f', '#d6ccb9', '#bcae96', '#cbbda4'].map(col);
     spots.forEach(([x, z, k], i) => {
@@ -232,15 +211,16 @@ export class World {
 
   buildFountain() {
     const S = this.static, F = FOUNTAIN, stone = col('#d9d0c0'), stone2 = col('#c9bfad');
-    const lathe = (pts, seg = 40) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg);
-    S.add(lathe([[0, 0], [F.r + .08, 0], [F.r + .1, .08], [F.r, .44], [F.r + .1, .5], [F.r + .06, .56], [F.r - .16, .56], [F.r - .18, .12], [0, .12]]), (x, y) => y > .5 ? stone : stone2, trs(V(F.x, 0, F.z)), .3);
+    S.add(lathe([[0, 0], [F.r + .08, 0], [F.r + .1, .08], [F.r, .44], [F.r + .1, .5], [F.r + .06, .56], [F.r - .16, .56], [F.r - .18, .12], [0, .12]], 40), (x, y) => y > .5 ? stone : stone2, trs(V(F.x, 0, F.z)), .3);
     S.add(lathe([[0, 0], [.34, 0], [.28, .2], [.2, .35], [.18, .9], [.24, 1.02], [0, 1.02]], 20), stone2, trs(V(F.x, .1, F.z)), .3);
     S.add(lathe([[0, 0], [.2, 0], [.62, .12], [.72, .26], [.66, .3], [.2, .2], [0, .2]], 28), stone, trs(V(F.x, 1.0, F.z)), .2);
     // crown of the fountain: a short column, a plinth, and a stone pigeon statue that spits into the upper bowl
     S.add(lathe([[0, 0], [.1, 0], [.085, .12], [.085, .2], [.16, .24], [.17, .3], [0, .3]], 20), stone, trs(V(F.x, 1.18, F.z)), .2);
-    const statue = statueGeometry(wildPheno());
+    const statue = wildStatue();
     const SY = 1.48, SK = 1.25, yaw = .35; // stands on the plinth in three-quarter profile
-    this.statue = { x: F.x, y: SY, z: F.z, k: SK, yaw };
+    // where its beak is: the spout the top-tier droplets arc from
+    const ca = Math.cos(yaw), sa = Math.sin(yaw);
+    this.spout = { x: F.x + ca * .29 * SK, z: F.z + sa * .29 * SK, y: SY + .485 * SK, ca, sa };
     const statueStone = col('#cfc5b3'), statueDark = col('#b7ac98');
     S.add(statue, (x, y) => (y - SY) / SK > .42 ? statueDark : statueStone, trs(V(F.x, SY, F.z), [0, -yaw, 0], [SK, SK, SK]), .15);
     const water = new THREE.MeshStandardMaterial({ color: '#86bfcf', roughness: .08, metalness: .05, transparent: true, opacity: .88 });
@@ -255,7 +235,7 @@ export class World {
     this.dropData = Array.from({ length: n }, (_, i) => ({ a: r() * Math.PI * 2, ph: r(), tier: i % 3 === 0 ? 0 : 1, sp: .8 + r() * .4 }));
     this.scene.add(this.drops);
     // ripple rings
-    this.ripples = new THREE.InstancedMesh(new THREE.RingGeometry(.9, 1, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#e6f4f6', transparent: true, opacity: .35, depthWrite: false }), 4);
+    this.ripples = new THREE.InstancedMesh(groundRing(.9, 1, 32), new THREE.MeshBasicMaterial({ color: '#e6f4f6', transparent: true, opacity: .35, depthWrite: false }), 4);
     this.ripples.frustumCulled = false;
     this.scene.add(this.ripples);
   }
@@ -316,8 +296,8 @@ export class World {
       for (let i = 0; i < blobs; i++) {
         const a = i / blobs * Math.PI * 2 + r(), rr = i === 0 ? 0 : .55 + r() * .35;
         const g = lumpy(.75 + r() * .35, 2, .35, r() * 50);
-        const cc = greens[Math.floor(r() * greens.length)];
-        T.add(g, (px, py) => cc.clone().multiplyScalar(.8 + .25 * Math.min(1, Math.max(0, (py - 2) / 2.4))), b.clone().multiply(trs(V(Math.cos(a) * rr, 2.6 + (i === 0 ? .7 : r() * .6), Math.sin(a) * rr))));
+        const cc = greens[Math.floor(r() * greens.length)], tmp = new THREE.Color();
+        T.add(g, (px, py) => tmp.copy(cc).multiplyScalar(.8 + .25 * Math.min(1, Math.max(0, (py - 2) / 2.4))), b.clone().multiply(trs(V(Math.cos(a) * rr, 2.6 + (i === 0 ? .7 : r() * .6), Math.sin(a) * rr))));
       }
       // always "transparent" (opacity 1 when solid) so fading never changes the shader program
       const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .86, transparent: true, opacity: 1 });
@@ -349,7 +329,7 @@ export class World {
       if (Math.abs(x) < PARK.w / 2 + 1.1 && Math.abs(z) < PARK.d / 2 + 1.1) continue;
       spots.push([x, z]);
     }
-    const inst = new THREE.InstancedMesh(tuft, new THREE.MeshStandardMaterial({ roughness: .9 }), spots.length);
+    const inst = new THREE.InstancedMesh(tuft, this.matte, spots.length);
     const c = new THREE.Color(), gA = col('#7f9a58'), gB = col('#a9bd7c');
     spots.forEach(([x, z], i) => {
       const s = .7 + r() * .7;
@@ -390,7 +370,7 @@ export class World {
 
   // ---------- per-frame ----------
   setHour(h, night) {
-    // the sky changes slowly: skip the (allocating) keyframe blend unless the time moved a little
+    // the sky changes slowly: skip the keyframe blend and light updates unless the time moved a little
     if (this.hour !== undefined && Math.abs(h - this.hour) < .01 && night === this.night && !this.dirtyLight) return;
     this.dirtyLight = false;
     const k = sampleKeys(h), moon = isMoon(h);
@@ -437,7 +417,8 @@ export class World {
         block = q.distanceTo(T.c) < T.r && q.distanceTo(e) > .5;
       }
       const want = block ? .18 : 1;
-      T.o += (want - T.o) * Math.min(1, dt * 6 || 1);
+      if (T.o === want) continue; // settled
+      T.o = Math.abs(want - T.o) < .002 ? want : damp(T.o, want, 6, dt);
       T.mat.opacity = T.o; T.mat.depthWrite = T.o > .95;
     }
   }
@@ -447,21 +428,18 @@ export class World {
     this.t += dt;
     const F = FOUNTAIN, m = this._m || (this._m = new THREE.Matrix4()), t = this.t;
     const Q = this._qi || (this._qi = new THREE.Quaternion()), P = this._p || (this._p = new THREE.Vector3()), Sc = this._sc || (this._sc = new THREE.Vector3());
-    this.dropData.forEach((d, i) => {
-      const k = (t * d.sp * .8 + d.ph) % 1;
-      let x, y, z;
+    const sp = this.spout, D = this.dropData;
+    for (let i = 0; i < D.length; i++) {
+      const d = D[i], k = (t * d.sp * .8 + d.ph) % 1;
       if (d.tier === 0) { // a stream from the statue's beak arcing down into the upper bowl
-        const st = this.statue, ca = Math.cos(st.yaw), sa = Math.sin(st.yaw);
-        const bx = st.x + ca * .29 * st.k, bz = st.z + sa * .29 * st.k, by = st.y + .485 * st.k;
         const j = (d.a - Math.PI) * .01, h = .03 + k * .26;
-        x = bx + ca * h - sa * j; z = bz + sa * h + ca * j; y = by + k * .28 - k * k * (by + .28 - 1.27);
-        m.compose(P.set(x, y, z), Q, Sc.set(.6, .6, .6)); this.drops.setMatrixAt(i, m); return;
+        m.makeScale(.6, .6, .6).setPosition(sp.x + sp.ca * h - sp.sa * j, sp.y + k * .28 - k * k * (sp.y + .28 - 1.27), sp.z + sp.sa * h + sp.ca * j);
       } else {            // spill from upper bowl rim to lower pool
-        const rr = .72 + k * .35; x = F.x + Math.cos(d.a) * rr; z = F.z + Math.sin(d.a) * rr; y = 1.28 - k * k * .84;
+        const rr = .72 + k * .35;
+        m.makeTranslation(F.x + Math.cos(d.a) * rr, 1.28 - k * k * .84, F.z + Math.sin(d.a) * rr);
       }
-      m.makeTranslation(x, y, z);
       this.drops.setMatrixAt(i, m);
-    });
+    }
     this.drops.instanceMatrix.needsUpdate = true;
     for (let i = 0; i < 4; i++) {
       const k = (t * .35 + i / 4) % 1, s = .85 + k * .45;

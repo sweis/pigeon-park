@@ -1,6 +1,7 @@
 // Pigeon Park — event-driven sparkles and pop rings (pooled, fixed-size instanced meshes).
 
 import * as THREE from 'three';
+import { groundRing, pooled } from './geom.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const COLS = { 1: ['#e8b64c', '#fff7e0'], 2: ['#e8b64c', '#c67139', '#fff7e0'], 3: ['#e8b64c', '#c67139', '#7a8a5e', '#8f5fae', '#5aa2c8', '#fff7e0'] };
@@ -8,13 +9,11 @@ const COLS = { 1: ['#e8b64c', '#fff7e0'], 2: ['#e8b64c', '#c67139', '#fff7e0'], 
 export class Fx {
   constructor(scene) {
     this.N = 220;
-    this.mesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1, 0), new THREE.MeshBasicMaterial({ toneMapped: false }), this.N);
-    this.mesh.frustumCulled = false; this.mesh.count = 0;
-    this.mesh.setColorAt(0, new THREE.Color());
-    scene.add(this.mesh);
+    this.mesh = pooled(scene, new THREE.OctahedronGeometry(1, 0), new THREE.MeshBasicMaterial({ toneMapped: false }), this.N, { colors: true });
     this.parts = [];
+    const ring = groundRing(.9, 1, 40);
     this.rings = Array.from({ length: 6 }, () => {
-      const m = new THREE.Mesh(new THREE.RingGeometry(.9, 1, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#c67139', transparent: true, depthWrite: false, toneMapped: false }));
+      const m = new THREE.Mesh(ring, new THREE.MeshBasicMaterial({ color: '#c67139', transparent: true, depthWrite: false, toneMapped: false }));
       m.visible = false; m.renderOrder = 3; scene.add(m); m.userData.t = 1;
       return m;
     });
@@ -55,7 +54,7 @@ export class Fx {
     this.parts.length = n;
     this.mesh.count = n;
     this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.mesh.instanceColor.needsUpdate = true;
     for (const r of this.rings) {
       if (r.userData.t >= 1) { r.visible = false; continue; }
       r.userData.t = Math.min(1, r.userData.t + dt / .9);

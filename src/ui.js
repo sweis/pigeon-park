@@ -1,7 +1,7 @@
 // Pigeon Park — DOM HUD over the 3D canvas. Plain DOM, event delegation via data-act attributes.
 
 import * as M from './genetics.js';
-import { toScreen } from './util.js';
+import { toScreen, emoteText, emoteKind, nextFrame, CLIP } from './util.js';
 import { SPEEDS, MUTATIONS, ROOST_SIZE, phaseToHour } from './sim.js';
 import { HAPPENINGS, WHIMSY, gapFor } from './happenings.js';
 import { ACHIEVEMENTS } from './achievements.js';
@@ -51,6 +51,24 @@ const ORIGIN = {
   superfan: 'Pigeon Park Superfan #1. Has been coming every day since opening.',
 };
 function chip(tier) { return tier >= 3 ? 'chip-t3' : tier === 2 ? 'chip-t2' : 'chip-t1'; }
+// A breed's registry tag: [chip class, label].
+function breedKind(b) {
+  if (b.legend) return ['chip-breed', 'legendary'];
+  if (b.special) return ['chip-breed', 'superfan'];
+  if (b.real) return ['chip-t1', b.exotic ? 'exotic' : 'real breed'];
+  if (b.fashion) return ['chip-t2', 'fashion'];
+  if (b.seasonal) return ['chip-t2', M.SEASONS[b.seasonal].label];
+  return ['chip-t3', 'cryptid'];
+}
+// The park settings rows: one segmented control each (picked option → set(sim, data-arg)).
+const SETTINGS = [
+  { act: 'speed', label: 'Park speed', list: SPEEDS, arg: o => o.v, on: (S, o) => Math.abs(S.speed - o.v) < .05, set: (S, v) => { S.speed = +v; } },
+  { act: 'mut', label: 'Mutations', list: MUTATIONS, arg: o => o.id, on: (S, o) => S.mut === o.id, set: (S, v) => { S.mut = v; } },
+  { act: 'whimsy', label: 'Weirdness', list: WHIMSY, arg: o => o.id, on: (S, o) => S.whimsy === o.id, set: (S, v) => { S.whimsy = v; S.nextHappeningAt = S.t + gapFor(S); } },
+];
+// Dialogs with a "new" dot on their top-bar button: how many things they hold right now.
+const COUNTS = { pedia: (S) => Object.keys(S.discovered).length, breeds: (S) => Object.keys(S.breeds).length };
+const canShareFile = (f) => !!(navigator.canShare && navigator.canShare({ files: [f] }));
 function fmtAge(s) { if (s < 20) return 'freshly hatched'; if (s < 60) return 'a chick'; const m = Math.floor(s / 60); return m < 60 ? m + 'm in the park' : Math.floor(m / 60) + 'h in the park'; }
 function fmtHour(h) { const hh = Math.floor(h), mm = Math.floor((h - hh) * 60 / 15) * 15; const ap = hh >= 12 ? 'pm' : 'am'; return ((hh + 11) % 12 + 1) + ':' + String(mm).padStart(2, '0') + ' ' + ap; }
 
@@ -112,7 +130,7 @@ export class UI {
       <button id="paused" class="pill panel hidden" data-act="pause">${I.play}<span>Paused — tap to resume</span></button>
       <div id="finder" class="pill panel hidden"></div>
       <aside id="inspector" class="card panel hidden"></aside>
-      <div id="settings" class="card panel pop hidden"></div>
+      <div id="settings" class="card panel hidden"></div>
       <div id="intro" class="card panel hidden">
         <div class="card-title">Tap a pigeon. Any pigeon.</div>
         <p>They wander, they flirt, they multiply. Every egg reshuffles real pigeon DNA — dominant and recessive — so the rare stuff hides for generations.</p>
@@ -154,7 +172,10 @@ export class UI {
   }
   // Toasts sit above the roost bar; on phones the bird card / intro are bottom sheets over that spot,
   // so lift the toasts to just above whichever sheet is open (they never draw over the UI).
+  // Measuring forces a layout, so only re-measure when a sheet opens, closes or changes, or the window resizes.
   placeToasts() {
+    const sig = PHONE.matches ? [this._insKey, this.$('intro').classList.contains('hidden'), innerWidth, innerHeight].join('|') : '';
+    if (sig === this._toastSig) return; this._toastSig = sig;
     const box = this.$('toasts'); let bottom = '';
     if (PHONE.matches) for (const id of ['inspector', 'intro']) {
       const el = this.$(id); if (el.classList.contains('hidden')) continue;
@@ -171,35 +192,31 @@ export class UI {
     g.audio.unlock();
     if (act === 'backdrop' && e.target !== a) return;
     switch (act) {
-      case 'pedia': this.openDialog('pedia'); break;
-      case 'breeds': this.openDialog('breeds'); break;
-      case 'help': this.openDialog('help'); break;
+      case 'pedia': case 'breeds': case 'help': this.openDialog(act); break;
       case 'backdrop': case 'close': this.closeDialog(); break;
       case 'pause': g.togglePause(); break;
-      case 'recenter': g.cam.shot('overview', { snap: false }); break;
-      case 'whimsy': S.whimsy = arg; S.nextHappeningAt = S.t + gapFor(S); this.renderSettings(true); g.save(); break;
+      case 'recenter': g.recenter(); break;
+      case 'speed': case 'mut': case 'whimsy': SETTINGS.find(x => x.act === act).set(S, arg); this.renderSettings(true); g.save(); break;
       case 'sfx': g.audio.setSfx(!g.audio.sfxOn); if (g.audio.sfxOn && g.audio.sfxVol < .05) g.audio.setSfx(true, .8); this.renderSound(); this.renderSettings(true); g.save(); break;
       case 'music': g.audio.setMusic(!g.audio.musicOn); if (g.audio.musicOn && g.audio.musicVol < .05) g.audio.setMusic(true, .55); this.renderSound(); this.renderSettings(true); g.save(); break;
       case 'settings': this.$('settings').classList.toggle('hidden'); this.renderSettings(true); break;
       case 'photo': this.openPhoto({ id: +arg }); break;
       case 'photo-roost': this.openPhoto({ roost: +arg }); break;
       case 'clip': this.openClip(+arg); break;
-      case 'share-clip': this.shareClip(); break;
-      case 'share': this.sharePhoto(); break;
+      case 'share-clip': this.share(this.clipRes, ' — Pigeon Park 🐦 pigeonpark.live'); break;
+      case 'share': this.share(this.photoRes, ' — Pigeon Park'); break;
       case 'copy-photo': this.copyPhoto(a); break;
-      case 'speed': S.speed = +arg; this.renderSettings(true); g.save(); break;
-      case 'mut': S.mut = arg; this.renderSettings(true); g.save(); break;
-      case 'reset': // two-tap confirm; the armed state lives here because the panel re-renders every 0.4 s
+      case 'reset': // two-tap confirm; the armed state lives here (the panel is rebuilt on changes)
         if (this.resetArmed && performance.now() - this.resetArmed < 5000) { this.resetArmed = 0; g.resetAll(); this.$('settings').classList.add('hidden'); }
         else { this.resetArmed = performance.now(); this.renderSettings(true); setTimeout(() => this.renderSettings(true), 5100); }
         break;
       case 'intro-ok': this.introDone = true; this.$('intro').classList.add('hidden'); g.save(); break;
       case 'clone': { const q = S.clonePigeon(+arg); if (q) g.select(q.id); break; }
-      case 'roost-add': S.roostAdd(+arg); this.roostSel = S.roost.length - 1; g.select(null, true); break;
+      case 'roost-add': S.roostAdd(+arg); g.selectRoost(S.roost.length - 1); break;
       case 'dismiss': S.dismissPigeon(+arg); g.select(null); break;
       case 'follow': g.toggleFollow(+arg); break;
       case 'deselect': g.select(null); this.roostSel = null; break;
-      case 'perch': if (S.roost[+arg]) { this.roostSel = +arg; g.select(null, true); } break;
+      case 'perch': if (S.roost[+arg]) g.selectRoost(+arg); break;
       case 'release': { const p = S.releaseRoost(+arg, false); if (p) { this.roostSel = null; g.select(p.id); } break; }
       case 'clone-out': { const p = S.releaseRoost(+arg, true); if (p) g.select(p.id); break; }
       case 'let-go': S.removeRoost(+arg); this.roostSel = null; break;
@@ -210,7 +227,7 @@ export class UI {
       case 'ft-go': { // jump to a relative who is still around
         const w = S.whereIs(+arg); if (!w) break;
         this.closeDialog();
-        if (w.park != null) g.select(w.park); else { this.roostSel = w.roost; g.select(null, true); }
+        if (w.park != null) g.select(w.park); else g.selectRoost(w.roost);
         break;
       }
     }
@@ -225,7 +242,8 @@ export class UI {
     this.$('paused').classList.toggle('hidden', !p);
   }
   renderSound() {
-    const A = this.g.audio;
+    const A = this.g.audio, key = `${A.sfxOn}|${A.musicOn}`;
+    if (key === this._soundKey) return; this._soundKey = key; // (called on every slider tick)
     this.$('b-sfx').innerHTML = A.sfxOn ? I.sound : I.mute;
     this.$('b-music').innerHTML = A.musicOn ? I.music : I.musicOff;
     this.$('b-sfx').classList.toggle('off', !A.sfxOn); this.$('b-music').classList.toggle('off', !A.musicOn);
@@ -240,7 +258,7 @@ export class UI {
     for (let i = 0; i < ROOST_SIZE; i++) {
       const r = S.roost[i];
       if (!r) { h += `<div class="perch empty" title="empty perch"></div>`; continue; }
-      h += `<button class="perch ${this.roostSel === i ? 'on' : ''}" data-act="perch" data-arg="${i}" title="${esc(r.name)}"><img src="${P.get(M.computePheno(r.genome, r.accessory))}" alt=""></button>`;
+      h += `<button class="perch ${this.roostSel === i ? 'on' : ''}" data-act="perch" data-arg="${i}" title="${esc(r.name)}"><img src="${P.get(S.roostPheno(r))}" alt=""></button>`;
     }
     h += `</div><div class="roost-hint">Drag a favorite here to keep it forever. Or at least until you change your mind.</div>`;
     const el = this.$('roost'); el.innerHTML = h;
@@ -273,9 +291,9 @@ export class UI {
                   <button class="btn ghost" data-act="dismiss" data-arg="${live.id}">Dismiss<span class="opt"> politely</span></button>`,
         follow: live.id, photo: `data-act="photo" data-arg="${live.id}"`, lid: live.lid, clip: live.id };
     } else {
-      const ph = M.computePheno(r.genome, r.accessory);
+      const ph = S.roostPheno(r);
       d = { img: P.get(ph), kicker: 'Roost resident', name: r.name, meta: 'Generation ' + r.gen + ' · kept bird', color: ph.label,
-        breeds: M.matchBreeds(ph, { gen: r.gen, found: S.breeds }), traits: ph.traits, carries: M.carriersOf(r.genome),
+        breeds: S.breedsOf({ pheno: ph, gen: r.gen }), traits: ph.traits, carries: M.carriersOf(r.genome),
         actions: `<button class="btn primary" data-act="clone-out" data-arg="${ri}">${I.clone} Clone into park</button>
                   <button class="btn" data-act="release" data-arg="${ri}">Release to park</button>
                   <button class="btn ghost" data-act="let-go" data-arg="${ri}">Let go</button>`, photo: `data-act="photo-roost" data-arg="${ri}"`, lid: r.lid };
@@ -291,7 +309,7 @@ export class UI {
       ${d.breeds.length ? `<div class="chips">${d.breeds.map(b => `<span class="chip chip-breed">★ ${esc(b.name)}</span>`).join('')}</div>` : ''}
       ${d.traits.length ? `<div class="chips">${d.traits.map(t => findChip(t.key, chip(t.tier), esc(t.label))).join('')}</div>` : ''}
       ${d.carries.length ? `<div><div class="label">Hidden in the DNA</div><div class="chips">${d.carries.map(c => findChip(c.key, 'chip-carry', '½ ' + esc(c.label))).join('')}</div></div>` : ''}
-      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera}<span class="opt"> Photo</span></button>${d.clip != null ? `<button class="btn ghost" data-act="clip" data-arg="${d.clip}" title="Make a 6-second vertical video">${I.film}<span class="opt"> Clip</span></button>` : ''}${d.lid != null && this.sim.family[d.lid] ? `<button class="btn ghost" data-act="family" data-arg="${d.lid}" title="Family tree">${I.tree}<span class="opt"> Family</span></button>` : ''}${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye}<span class="opt"> ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</span></button>` : ''}</div>`;
+      <div class="actions">${d.actions}<button class="btn ghost" ${d.photo} title="Take a high-res photo">${I.camera}<span class="opt"> Photo</span></button>${d.clip != null ? `<button class="btn ghost" data-act="clip" data-arg="${d.clip}" title="Make a ${CLIP.secs}-second vertical video">${I.film}<span class="opt"> Clip</span></button>` : ''}${d.lid != null && this.sim.family[d.lid] ? `<button class="btn ghost" data-act="family" data-arg="${d.lid}" title="Family tree">${I.tree}<span class="opt"> Family</span></button>` : ''}${d.follow ? `<button class="btn ghost ${this.g.cam.follow === d.follow ? 'on' : ''}" data-act="follow" data-arg="${d.follow}" title="Follow with camera (F)">${I.eye}<span class="opt"> ${this.g.cam.follow === d.follow ? 'Following' : 'Follow'}</span></button>` : ''}</div>`;
   }
 
   // ---------- settings ----------
@@ -304,13 +322,14 @@ export class UI {
     const stats = `<div><b>${alive}</b><span>residents</span></div><div><b>${S.stats.births}</b><span>hatched</span></div>
         <div><b>${S.stats.flown}</b><span>departed</span></div><div><b>gen ${S.stats.maxGen}</b><span>deepest line</span></div>`;
     const song = this.g.audio.songTitle, playing = song ? `♪ ${esc(song)}` : '';
-    if (!full && el.querySelector('.stats')) {
-      const st = el.querySelector('.stats'); if (st.innerHTML !== stats) st.innerHTML = stats;
-      const np = el.querySelector('.nowplaying'); if (np && np.innerHTML !== playing) np.innerHTML = playing;
+    if (!full && el.querySelector('.stats')) { // (compare with what was written, not by reading the DOM back)
+      if (stats !== this._stats) { this._stats = stats; el.querySelector('.stats').innerHTML = stats; }
+      if (playing !== this._playing) { this._playing = playing; el.querySelector('.nowplaying').innerHTML = playing; }
       return;
     }
+    this._stats = stats; this._playing = playing;
     const A = this.g.audio, vol = (act, v, on) => `<input type="range" min="0" max="100" value="${on ? Math.round(v * 100) : 0}" data-act="${act}" aria-label="${act}">`;
-    const seg = (list, cur, act) => `<div class="seg">${list.map(o => `<button class="${cur(o) ? 'on' : ''}" data-act="${act}" data-arg="${act === 'speed' ? o.v : o.id}">${o.label}</button>`).join('')}</div>`;
+    const seg = (R) => `<div class="row"><div class="label">${R.label}</div><div class="seg">${R.list.map(o => `<button class="${R.on(S, o) ? 'on' : ''}" data-act="${R.act}" data-arg="${R.arg(o)}">${o.label}</button>`).join('')}</div></div>`;
     el.innerHTML = `
       <div class="row phone"><button class="btn icon ${A.sfxOn ? '' : 'off'}" data-act="sfx" aria-label="Sound effects">${A.sfxOn ? I.sound : I.mute}</button>
         <button class="btn icon ${A.musicOn ? '' : 'off'}" data-act="music" aria-label="Music">${A.musicOn ? I.music : I.musicOff}</button>
@@ -318,70 +337,74 @@ export class UI {
       <div class="row"><div class="label">Music</div>${vol('musicvol', A.musicVol, A.musicOn)}</div>
       <div class="nowplaying">${playing}</div>
       <div class="row"><div class="label">Sounds</div>${vol('sfxvol', A.sfxVol, A.sfxOn)}</div>
-      <div class="row"><div class="label">Park speed</div>${seg(SPEEDS, o => Math.abs(S.speed - o.v) < .05, 'speed')}</div>
-      <div class="row"><div class="label">Mutations</div>${seg(MUTATIONS, o => S.mut === o.id, 'mut')}</div>
-      <div class="row"><div class="label">Weirdness</div>${seg(WHIMSY, o => S.whimsy === o.id, 'whimsy')}</div>
+      ${SETTINGS.map(seg).join('')}
       <div class="stats">${stats}</div>
       <form class="row code" data-code><input name="code" placeholder="Secret code" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" aria-label="Secret code"><button class="btn small" type="submit">Enter</button></form>
       <button class="btn ghost small" data-act="reset">${this.resetArmed && performance.now() - this.resetArmed < 5000 ? 'Really? Tap again to start over' : 'Start over with fresh ferals'}</button>`;
   }
 
   // ---------- dialogs ----------
-  openDialog(kind) {
-    const S = this.sim;
+  // Open the dialog layer as `kind` with this content (cls: extra classes on the card). Returns the layer.
+  showDialog(kind, html, cls = '') {
     this.dialog = kind;
-    if (kind === 'pedia') this.seen.pedia = Object.keys(S.discovered).length;
-    if (kind === 'breeds') this.seen.breeds = Object.keys(S.breeds).length;
-    this.g.save();
     const el = this.$('dialog'); el.classList.remove('hidden');
-    el.innerHTML = `<div class="dialog card" role="dialog">${this['dlg_' + kind]()}</div>`;
+    el.innerHTML = `<div class="dialog card ${cls}" role="dialog">${html}</div>`;
+    return el;
+  }
+  openDialog(kind) {
+    if (COUNTS[kind]) { this.seen[kind] = COUNTS[kind](this.sim); this.g.save(); }
+    this.showDialog(kind, this['dlg_' + kind]());
   }
   openAchievement(id) {
     const A = ACHIEVEMENTS.find(a => a.id === id), S = this.sim; if (!A) return;
-    this.dialog = 'achievement';
-    const el = this.$('dialog'); el.classList.remove('hidden');
     const img = this.g.monumentPicture(id), got = S.achievements[id], n = Object.keys(S.achievements).length;
     const list = ACHIEVEMENTS.map(a => {
       const [have, need] = a.progress(S), done = !!S.achievements[a.id];
       return `<div class="ach ${done ? 'done' : ''} ${a.id === id ? 'this' : ''}"><div class="ach-top"><b>${done ? esc(a.name) : '???'}</b><span>${done ? '🏆' : `${have} / ${need}`}</span></div>
         <div class="note">${esc(a.how)}</div>${done ? '' : `<div class="bar"><i style="width:${Math.round(have / need * 100)}%"></i></div>`}</div>`;
     }).join('');
-    el.innerHTML = `<div class="dialog card ach-dlg" role="dialog">${this.dlgHead(esc(A.name), `<span class="chip chip-breed">🏆 ${n} / ${ACHIEVEMENTS.length}</span>`)}
+    this.showDialog('achievement', `${this.dlgHead(esc(A.name), `<span class="chip chip-breed">🏆 ${n} / ${ACHIEVEMENTS.length}</span>`)}
       <div class="ach-body">
         <div class="ach-hero">${img ? `<img src="${img}" alt="">` : ''}
           <p class="ach-blurb">${esc(A.blurb)}</p>
           <div class="foot">${esc(A.how)}${got ? ` · Earned ${new Date(got.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}</div></div>
         <div class="ach-list">${list}</div>
-      </div></div>`;
+      </div>`, 'ach-dlg');
+  }
+  // A finished photo / clip (kind 'photo' | 'clip'): swap the placeholder for the media, add Download /
+  // extra buttons / Share (where the OS share sheet takes the file) and a footnote. If the dialog was closed
+  // while it was being made, just release the file.
+  showResult(kind, res, media, { download, extra = '', foot }) {
+    if (this.dialog !== kind) { URL.revokeObjectURL(res.url); return; }
+    const k = kind + 'Res'; if (this[k]) URL.revokeObjectURL(this[k].url);
+    this[k] = res;
+    const el = this.$('dialog');
+    el.querySelector('.photo-wrap').innerHTML = media;
+    el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
+        <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} ${download}</a>${extra}
+        ${canShareFile(new File([res.blob], res.file, { type: res.mime })) ? `<button class="btn" data-act="${kind === 'clip' ? 'share-clip' : 'share'}">${I.share} Share</button>` : ''}
+        <span class="foot">${foot}</span></div>`);
+  }
+  async share(r, tail) {
+    if (!r) return;
+    try { await navigator.share({ files: [new File([r.blob], r.file, { type: r.mime })], title: r.name, text: r.name + tail }); } catch (e) { /* cancelled */ }
   }
   async openPhoto(target) {
-    this.dialog = 'photo';
-    const el = this.$('dialog'); el.classList.remove('hidden');
-    el.innerHTML = `<div class="dialog card photo-dlg" role="dialog">${this.dlgHead('Photo', '')}<div class="photo-wrap"><div class="developing">Developing…</div></div></div>`;
-    await new Promise(r => requestAnimationFrame(r));
+    this.showDialog('photo', `${this.dlgHead('Photo', '')}<div class="photo-wrap"><div class="developing">Developing…</div></div>`, 'photo-dlg');
+    await nextFrame();
     const res = await this.g.photo(target);
-    if (this.dialog !== 'photo') { if (res) URL.revokeObjectURL(res.url); return; }
-    if (!res) { this.closeDialog(); return; }
-    if (this.photoRes) URL.revokeObjectURL(this.photoRes.url);
-    this.photoRes = res;
+    if (!res) { if (this.dialog === 'photo') this.closeDialog(); return; }
     const canCopy = !!(window.ClipboardItem && navigator.clipboard?.write);
-    const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File([res.blob], res.file, { type: 'image/png' })] }));
-    el.querySelector('.photo-wrap').innerHTML = `<img src="${res.url}" alt="${esc(res.name)}" class="photo-img">`;
-    el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
-        <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} Download PNG</a>
-        ${canCopy ? `<button class="btn" data-act="copy-photo">${I.clone} <span>Copy image</span></button>` : ''}
-        ${canShare ? `<button class="btn" data-act="share">${I.share} Share</button>` : ''}
-        <span class="foot">${res.w} × ${res.h} px</span></div>`);
+    this.showResult('photo', res, `<img src="${res.url}" alt="${esc(res.name)}" class="photo-img">`, {
+      download: 'Download PNG', extra: canCopy ? `<button class="btn" data-act="copy-photo">${I.clone} <span>Copy image</span></button>` : '', foot: `${res.w} × ${res.h} px` });
   }
   // Video clip: film 6 s of this bird with captions (see clip.js), then preview / download / share.
   async openClip(id) {
     if (this.g.recording) return;
-    this.dialog = 'clip';
-    const el = this.$('dialog'); el.classList.remove('hidden');
-    el.innerHTML = `<div class="dialog card photo-dlg clip-dlg busy" role="dialog">${this.dlgHead('Video clip', '<span class="chip chip-t1">6 s · vertical</span>')}
+    const el = this.showDialog('clip', `${this.dlgHead('Video clip', `<span class="chip chip-t1">${CLIP.secs} s · vertical</span>`)}
       <div class="photo-wrap"><div class="filming"><div class="developing">Filming…</div><div class="bar clipbar"><i style="width:0%"></i></div>
-      <div class="foot">Rendering every frame at 1080 × 1920 — the park keeps living while the camera rolls.</div></div></div></div>`;
-    await new Promise(r => requestAnimationFrame(r));
+      <div class="foot">Rendering every frame at ${CLIP.w} × ${CLIP.h} — the park keeps living while the camera rolls.</div></div></div>`, 'photo-dlg clip-dlg busy');
+    await nextFrame();
     const bar = el.querySelector('.clipbar i');
     let res;
     try { res = await this.g.clip(id, (k) => { if (bar) bar.style.width = Math.round(k * 100) + '%'; }); }
@@ -391,21 +414,9 @@ export class UI {
       return;
     }
     el.querySelector('.clip-dlg')?.classList.remove('busy');
-    if (this.dialog !== 'clip') { URL.revokeObjectURL(res.url); return; }
-    if (this.clipRes) URL.revokeObjectURL(this.clipRes.url);
-    this.clipRes = res;
-    const file = new File([res.blob], res.file, { type: res.mime });
-    const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
-    const kind = `${res.mime.includes('mp4') ? 'MP4' : 'WebM'} (${{ avc: 'H.264', vp9: 'VP9', av1: 'AV1', vp8: 'VP8' }[res.codec] || res.codec}${res.audioCodec ? ' + ' + res.audioCodec.toUpperCase() : ', silent'})`;
-    el.querySelector('.photo-wrap').innerHTML = `<video class="photo-img clip-video" src="${res.url}" autoplay loop muted playsinline controls></video>`;
-    el.querySelector('.dialog').insertAdjacentHTML('beforeend', `<div class="actions photo-actions">
-        <a class="btn primary" href="${res.url}" download="${esc(res.file)}" data-act="download">${I.download} Download</a>
-        ${canShare ? `<button class="btn" data-act="share-clip">${I.share} Share</button>` : ''}
-        <span class="foot">${res.w} × ${res.h} · ${kind} · ${(res.blob.size / 1e6).toFixed(1)} MB${res.mime.includes('mp4') ? '' : ' · for Instagram, convert to MP4 first'}</span></div>`);
-  }
-  async shareClip() {
-    const r = this.clipRes; if (!r) return;
-    try { await navigator.share({ files: [new File([r.blob], r.file, { type: r.mime })], title: r.name, text: `${r.name} — Pigeon Park 🐦 pigeonpark.live` }); } catch (e) { /* cancelled */ }
+    const mp4 = res.mime.includes('mp4'), kind = `${mp4 ? 'MP4' : 'WebM'} (${{ avc: 'H.264', vp9: 'VP9', av1: 'AV1', vp8: 'VP8' }[res.codec] || res.codec}${res.audioCodec ? ' + ' + res.audioCodec.toUpperCase() : ', silent'})`;
+    this.showResult('clip', res, `<video class="photo-img clip-video" src="${res.url}" autoplay loop muted playsinline controls></video>`, {
+      download: 'Download', foot: `${res.w} × ${res.h} · ${kind} · ${(res.blob.size / 1e6).toFixed(1)} MB${mp4 ? '' : ' · for Instagram, convert to MP4 first'}` });
   }
   // Put the picture itself on the clipboard (paste straight into chats, docs, email).
   async copyPhoto(btn) {
@@ -417,13 +428,8 @@ export class UI {
     } catch (e) { label.textContent = 'Copy failed'; }
     setTimeout(() => { if (label.isConnected) label.textContent = 'Copy image'; }, 1800);
   }
-  async sharePhoto() {
-    const r = this.photoRes; if (!r) return;
-    try { await navigator.share({ files: [new File([r.blob], r.file, { type: 'image/png' })], title: r.name, text: r.name + ' — Pigeon Park' }); } catch (e) { /* cancelled */ }
-  }
   openFamily(lid) {
     const S = this.sim, P = this.g.portraits, T = S.familyTree(lid), me = T.root; if (!me) return;
-    this.dialog = 'family';
     const cells = [];
 
     const cell = (node, d, i) => {
@@ -431,7 +437,7 @@ export class UI {
       if (!node) { cells.push(`<div class="ft-cell ${pos}" style="${area}"><div class="ft-node unknown"><span class="ft-q">?</span><span class="ft-txt"><b>Unknown</b><small>records lost</small></span></div></div>`); return; }
       const r = node.rec, w = S.whereIs(node.lid), alive = !!w, kids = node.par && node.par.length;
       const where = w ? (w.park != null ? 'in the park' : 'in the roost') : 'flown off';
-      const ph = M.computePheno(M.decodeGenome(r.g), r.a), breed = M.matchBreeds(ph, { gen: r.ge, found: S.breeds })[0];
+      const ph = M.computePheno(M.decodeGenome(r.g), r.a), breed = S.breedsOf({ pheno: ph, gen: r.ge })[0];
       cells.push(`<div class="ft-cell ${pos} ${kids ? 'kids' : ''}" style="${area}">
         <button class="ft-node ${d ? '' : 'self'} ${alive ? 'live' : ''}" ${alive && d ? `data-act="ft-go" data-arg="${node.lid}"` : ''} title="${esc(r.n)} — ${esc(ph.label)}${breed ? ' · ' + esc(breed.name) : ''}">
           <img src="${P.get(ph)}" alt=""><span class="ft-txt"><b>${esc(r.n)}</b><small>${breed ? '★ ' + esc(breed.name) + ' · ' : ''}gen ${r.ge} · ${where}</small></span></button></div>`);
@@ -442,11 +448,10 @@ export class UI {
     const origin = r.how === 'hatch' ? `Hatched in the park to ${esc(pa?.rec.n || 'a bird lost to history')} and ${esc(pb?.rec.n || 'a bird lost to history')}.` : typeof ORIGIN[r.how] === 'function' ? ORIGIN[r.how](r) : ORIGIN[r.how] || ORIGIN.unknown;
     const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
     const kin = T.chicks || T.grandchicks ? ` In the park now: ${[T.chicks && plural(T.chicks, 'chick'), T.grandchicks && plural(T.grandchicks, 'grandchick')].filter(Boolean).join(', ')}.` : '';
-    const el = this.$('dialog'); el.classList.remove('hidden');
-    el.innerHTML = `<div class="dialog card fam-dlg" role="dialog">${this.dlgHead('Family of ' + esc(r.n), `<span class="chip chip-t1">generation ${r.ge}</span>`)}
+    this.showDialog('family', `${this.dlgHead('Family of ' + esc(r.n), `<span class="chip chip-t1">generation ${r.ge}</span>`)}
       <p class="fam-sum">${origin}${kin}</p>
       <div class="ftree-wrap"><div class="ftree ${me.par ? '' : 'solo'}">${cells.join('')}</div></div>
-      <div class="foot">Parents, grandparents and great-grandparents. Tap a relative who's still around to go to them.</div></div>`;
+      <div class="foot">Parents, grandparents and great-grandparents. Tap a relative who's still around to go to them.</div>`, 'fam-dlg');
   }
   // Banner for the trait finder: what's being searched for, how many show / carry it, and a way out.
   renderFind() {
@@ -505,11 +510,11 @@ export class UI {
     // (special breeds' recipes stay a surprise until they turn up)
     const n = Object.keys(S.breeds).length;
     return this.dlgHead('Breed Registry', `<span class="chip chip-breed">${n} / ${M.BREEDS.length} discovered</span>`) +
-      `<div class="grid breeds">${list.map(({ b, got }) => { const missing = b.legend || got ? 0 : this.missingTraits(b).length, recipe = got || (!b.legend && !missing) ? this.recipeTraits(b) : []; return `
+      `<div class="grid breeds">${list.map(({ b, got }) => { const missing = b.legend || got ? 0 : this.missingTraits(b).length, recipe = got || (!b.legend && !missing) ? this.recipeTraits(b) : [], [kcls, klabel] = breedKind(b); return `
         <div class="entry breed">
           <img src="${P.get(M.breedSample(b))}" class="${got ? '' : 'silhouette'}" alt="">
           <b>${got ? esc(b.name) : '???'}</b>
-          <span class="chip tiny ${b.legend || b.special ? 'chip-breed' : b.real ? 'chip-t1' : b.fashion || b.seasonal ? 'chip-t2' : 'chip-t3'}">${b.legend ? 'legendary' : b.special ? 'superfan' : b.real ? (b.exotic ? 'exotic' : 'real breed') : b.fashion ? 'fashion' : b.seasonal ? M.SEASONS[b.seasonal].label : 'cryptid'}</span>
+          <span class="chip tiny ${kcls}">${klabel}</span>
           <div class="note">${got ? esc(b.blurb) : b.legend ? 'Whispered of in park lore. There is a word…' : b.special ? 'Turns up on his own, if you spend long enough in the park.' : missing ? `Recipe unknown — needs ${missing} trait${missing > 1 ? 's' : ''} you haven't observed yet.` : 'Recipe: ' + esc(M.breedHint(b)) + '.'}${!got && b.seasonal ? ` Far more likely around ${M.SEASONS[b.seasonal].label}.` : ''}</div>
           ${recipe.length ? `<div class="chips recipe">${recipe.map(k => findChip(k, 'chip-t1', I.search + ' ' + esc(traitLabel(k)))).join('')}</div>` : ''}
           ${got ? `<div class="by">first bred by ${esc(got.by)}</div><button class="btn small" data-act="clone-breed" data-arg="${b.id}">${I.clone} Clone into park</button>` : ''}
@@ -538,7 +543,7 @@ export class UI {
           <li><b>Family</b> on a bird's card shows its parents, grandparents and great-grandparents.</li>
           <li>Holiday costumes (Halloween, Christmas, Easter) hatch far more often around their holidays — but can turn up any time.</li>
           <li>Accessories have field notes too: the Pigeonpedia shows which ones you've spotted.</li>
-          <li>Tap <b>Photo</b> on any bird for a high-res picture card, or <b>Clip</b> for a 6-second vertical video (with captions and music) to post.</li>
+          <li>Tap <b>Photo</b> on any bird for a high-res picture card, or <b>Clip</b> for a ${CLIP.secs}-second vertical video (with captions and music) to post.</li>
           <li>Music and sound effects have separate buttons in the top bar and volume sliders in settings.</li>
           <li>Milestones build <b>monuments</b> on the lawn around the plaza. Tap one to see what it's for and how close you are to the rest.</li>
           <li>Some words, typed while the park is open (or entered under <b>Secret code</b> in settings), do things.</li>
@@ -553,14 +558,11 @@ export class UI {
     this.refreshT -= dt;
     if (this.refreshT <= 0) {
       this.refreshT = .4;
-      const alive = S.alive();
-      this.$('pop').textContent = alive + ' / ' + S.cap + ' pigeons';
+      const top = `${S.alive()} / ${S.cap} pigeons|${COUNTS.breeds(S)}/${M.BREEDS.length}`;
+      if (top !== this._top) { this._top = top; const [pop, bc] = top.split('|'); this.$('pop').textContent = pop; this.$('breedcount').textContent = bc; }
       const clock = (S.night > .5 ? 'm' : 's') + fmtHour(phaseToHour(S.phase()));
       if (clock !== this._clock) { this._clock = clock; this.$('clock').innerHTML = (S.night > .5 ? I.moon : I.sun) + `<span>${clock.slice(1)}</span>`; }
-      const nB = Object.keys(S.breeds).length, nP = Object.keys(S.discovered).length;
-      this.$('breedcount').textContent = nB + '/' + M.BREEDS.length;
-      this.$('b-breeds').classList.toggle('new', nB > this.seen.breeds);
-      this.$('b-pedia').classList.toggle('new', nP > this.seen.pedia);
+      for (const k in COUNTS) this.$('b-' + k).classList.toggle('new', COUNTS[k](S) > this.seen[k]);
       this.renderInspector(); this.renderSettings(); this.renderRoost(); this.renderFind();
       this.$('intro').classList.toggle('hidden', this.introDone || S.selId != null || this.roostSel != null || !!this.dialog);
       this.placeToasts();
@@ -579,17 +581,20 @@ export class UI {
       if (!p.emote && !isSel) continue;
       const view = this.g.flock.view(p.id); if (!view) continue;
       const s = view.size(p, S.t), top = toScreen(view.vis.x, view.vis.y + .72 * s, view.vis.z, cam);
-      if (top.z > 1) continue; // behind the camera
+      const behind = top.z > 1; // behind the camera: hide its bubble (not remove it, so it doesn't pop in again)
       if (p.emote) {
         seen.add(p.id);
         let b = this.bubbles.get(p.id);
-        const text = p.emote.kind === 'heart' ? '♥' : p.emote.kind === 'zzz' ? 'z z z' : p.emote.text || '!';
+        const text = emoteText(p.emote), cls = 'bubble ' + emoteKind(p.emote);
         if (!b) { b = document.createElement('div'); box.appendChild(b); this.bubbles.set(p.id, b); }
-        if (b.textContent !== text) { b.textContent = text; b.className = 'bubble ' + (p.emote.kind === 'heart' ? 'heart' : p.emote.kind === 'zzz' ? 'zzz' : 'say'); }
+        if (b._behind !== behind) { b._behind = behind; b.style.display = behind ? 'none' : ''; }
+        if (behind) continue;
+        if (b.textContent !== text) b.textContent = text;
+        if (b.className !== cls) b.className = cls;
         const tr = `translate(${top.x | 0}px, ${top.y | 0}px) translate(-50%, -100%)`;
         if (b._tr !== tr) { b._tr = tr; b.style.transform = tr; } // birds standing still: no style writes
       }
-      if (isSel) {
+      if (isSel && !behind) {
         let n = this.nameTag;
         if (!n) { n = this.nameTag = document.createElement('div'); n.className = 'nametag'; box.appendChild(n); }
         const feet = toScreen(view.vis.x, view.vis.y, view.vis.z, cam);

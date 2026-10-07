@@ -48,6 +48,16 @@ export const WILD = {
   wattle: 'small', eye: 'orange', size: 'normal', neck: 'normal', posture: 'normal', legs: 'normal', feather: 'normal',
   behavior: 'steady', voice: 'coo', gait: 'normal', outfit: 'none',
 };
+// Wild-type genome with some loci overridden: an allele (homozygous) or an explicit [a, b] pair.
+export function pureGenome(over = {}) {
+  const g = {};
+  for (const l of LOCI) g[l.id] = [WILD[l.id], WILD[l.id]];
+  for (const [k, v] of Object.entries(over)) g[k] = Array.isArray(v) ? [...v] : [v, v];
+  return g;
+}
+// Every mutation-only ("cryptid") allele as [locus, allele], in LOCI order — minus the ones that are never
+// rolled at random (Jacob's jersey). What the golden egg and the goddess pick from.
+export const MUT_ONLY = LOCI.flatMap(l => Object.keys(l.mutOnly || {}).filter(a => !l.never?.[a]).map(a => [l.id, a]));
 export function normalizeGenome(g) {
   for (const l of LOCI) if (!Array.isArray(g[l.id]) || g[l.id].length !== 2 || !g[l.id].every(a => l.alleles.includes(a))) g[l.id] = [WILD[l.id], WILD[l.id]];
   return g;
@@ -180,10 +190,14 @@ export function offspring(gA, gB, mutFactor = 1, season = null) {
 
 // ---------- seasons ----------
 // Holiday windows (real calendar): costumes for that holiday are much more likely then, still possible otherwise.
+// A season's id is also its `outfit` allele (and the costume breed's `seasonal`). First matching window wins.
 export const SEASONS = {
-  halloween: { label: 'Halloween', blurb: 'Pumpkin costumes are hatching more often.' },
-  christmas: { label: 'Christmas', blurb: 'Santa suits are hatching more often.' },
-  easter: { label: 'Easter', blurb: 'Bunny costumes are hatching more often.' },
+  halloween: { label: 'Halloween', blurb: 'Pumpkin costumes are hatching more often.', // October → first week of November
+    on: (m, d) => m === 9 || (m === 10 && d <= 7) },
+  christmas: { label: 'Christmas', blurb: 'Santa suits are hatching more often.', // December → Twelfth Night
+    on: (m, d) => m === 11 || (m === 0 && d <= 6) },
+  easter: { label: 'Easter', blurb: 'Bunny costumes are hatching more often.', // three weeks before Easter → a week after
+    on: (m, d, date) => { const days = (date - easterSunday(date.getFullYear())) / 864e5; return days >= -21 && days <= 8; } },
 };
 function easterSunday(y) { // anonymous Gregorian algorithm
   const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
@@ -192,11 +206,8 @@ function easterSunday(y) { // anonymous Gregorian algorithm
   return new Date(y, month - 1, day);
 }
 export function seasonOf(date = new Date()) {
-  const m = date.getMonth(), d = date.getDate(), y = date.getFullYear();
-  if (m === 9 || (m === 10 && d <= 7)) return 'halloween';                  // October → first week of November
-  if (m === 11 || (m === 0 && d <= 6)) return 'christmas';                  // December → Twelfth Night
-  const e = easterSunday(y), days = (date - e) / 864e5;
-  if (days >= -21 && days <= 8) return 'easter';                             // three weeks before Easter → a week after
+  const m = date.getMonth(), d = date.getDate();
+  for (const [id, S] of Object.entries(SEASONS)) if (S.on(m, d, date)) return id;
   return null;
 }
 
@@ -221,6 +232,7 @@ const COLOR_LABELS = {
   coalore: 'Coal Ore', gemore: 'Mixed Gemstone', rainbow: 'Rainbow', toast: 'Toasted', zebra: 'Zebra', sunset: 'Sunset',
 };
 const PATTERN_LABELS = { tcheck: 'T-Check', check: 'Check', bar: 'Bar', barless: 'Barless' };
+const PIED_SUFFIX = { splash: 'splashed', saddle: 'saddled', capped: 'capped', rosewing: 'rosewinged', baldhead: 'baldheaded', beard: 'bearded', magpie: 'magpie-marked', gazzi: 'gazzi-marked', shield: 'wing-shielded' };
 
 function derivePheno(e, accessory) {
   let colorKey;
@@ -234,12 +246,11 @@ function derivePheno(e, accessory) {
   let label = COLOR_LABELS[colorKey];
   if (patternVisible) label += ' ' + PATTERN_LABELS[e.pattern];
   if (e.grizzle === 'grizzle' && e.pied !== 'white' && e.fantasy === 'none') label = 'Grizzled ' + label;
-  const PIED_SUFFIX = { splash: 'splashed', saddle: 'saddled', capped: 'capped', rosewing: 'rosewinged', baldhead: 'baldheaded', beard: 'bearded', magpie: 'magpie-marked', gazzi: 'gazzi-marked', shield: 'wing-shielded' };
   if (PIED_SUFFIX[e.pied] && e.fantasy === 'none') label += ', ' + PIED_SUFFIX[e.pied];
-  const traits = [], keys = [];
+  const traits = [];
   for (const l of LOCI) {
-    const m = ALLELE_META[l.id + ':' + e[l.id]];
-    if (m) { traits.push({ key: l.id + ':' + e[l.id], label: m.label, tier: m.tier }); keys.push(l.id + ':' + e[l.id]); }
+    const key = l.id + ':' + e[l.id], m = ALLELE_META[key];
+    if (m) traits.push({ key, label: m.label, tier: m.tier });
   }
   for (const a of accList(accessory)) traits.push({ key: 'acc:' + a, label: ACCESSORIES[a].label, tier: 2 });
   const sparkTier = traits.reduce((m, t) => Math.max(m, t.tier), 0);
@@ -250,7 +261,7 @@ function derivePheno(e, accessory) {
 
 export function computePheno(genome, accessory) { return derivePheno(expressedOf(genome), accessory); }
 // How many mutation-only ("cryptid") traits a bird shows at once — one per gene.
-export function cryptidCount(pheno) { let n = 0; for (const l of LOCI) if (l.mutOnly?.[pheno.e[l.id]]) n++; return n; }
+function cryptidCount(pheno) { let n = 0; for (const l of LOCI) if (l.mutOnly?.[pheno.e[l.id]]) n++; return n; }
 
 export function phenoKey(pheno) {
   return LOCI.map(l => pheno.e[l.id]).join('|') + '|' + (pheno.accessory || '-');
@@ -305,8 +316,9 @@ export const ACCESSORIES = {
   scarf: { label: 'Tiny scarf', w: 10, slot: 'neck' }, propeller: { label: 'Propeller cap', w: 5, slot: 'head' }, crown: { label: 'Crown', w: 3, slot: 'head' },
   partyhat: { label: 'Party hat', w: 8, slot: 'head' }, chefhat: { label: 'Chef hat', w: 6, slot: 'head' }, mustache: { label: 'Magnificent moustache', w: 7, slot: 'face' },
   blackhat: { label: 'Black fedora', w: 10, slot: 'head' }, goldchain: { label: 'Gold chain', w: 10, slot: 'neck' },
-  fancap: { label: 'Superfan cap', w: 0, slot: 'head' }, // Jacob's — never handed out at random
+  fancap: { label: 'Superfan cap', w: 0, slot: 'head', stays: 1 }, // Jacob's — never handed out at random
 };
+// w: random-roll weight (0 = never rolled or gifted). stays: its wearer never flies off.
 export const giftable = (a) => ACCESSORIES[a].w > 0;
 const SLOTS = ['head', 'face', 'neck'];
 export const accList = (acc) => acc ? acc.split('+').filter(a => ACCESSORIES[a]) : [];
@@ -427,8 +439,9 @@ export const BREEDS = [
 ];
 
 // ctx (from the sim): { gen, found } — a bird's generation and the registry so far, for the breeds that need them.
+const REQS = new Map(BREEDS.map(b => [b, Object.entries(b.req)]));
 export function matchBreeds(pheno, ctx = null) {
-  return BREEDS.filter(b => Object.entries(b.req).every(([k, v]) => {
+  return BREEDS.filter(b => REQS.get(b).every(([k, v]) => {
     if (k === 'cryptids') return pheno.cryptids >= v;
     if (k === 'gen') return !ctx || ctx.gen >= v;
     if (k === 'after') return !ctx || !!ctx.found?.[v];
@@ -607,9 +620,9 @@ const EPITHETS = ['the Unwise', 'the Damp', 'of the Gutter', 'III', ', Esq.', 't
   'the Undercover Cop', 'the Unhinged', 'PhD', 'of LinkedIn', 'the Influencer', 'the Chronically Online', 'the Wet',
   'Who Owes Money', 'the Theatre Kid', 'the Accountant', 'of the Car Park', 'the Twelfth', 'Formerly of the Zoo'];
 export function randomName() {
-  const f = FIRSTS[Math.floor(rand() * FIRSTS.length)];
+  const f = pick(FIRSTS);
   if (rand() < .55) {
-    const e = EPITHETS[Math.floor(rand() * EPITHETS.length)];
+    const e = pick(EPITHETS);
     return e.startsWith(',') ? f + e : f + ' ' + e;
   }
   return f;
@@ -670,7 +683,7 @@ export const BUMP_LINES = ['excuse me', 'oof', 'watch it', 'sorry!', 'personal s
 // Pick a line from a pool without repeating anything said recently (the last ~half of the pool is held
 // back), so small pools don't loop and big ones feel fresh. Seeded like everything else.
 // `said` holds the history (a Map, one per park — the Sim owns it, so seeded replays stay identical).
-export function say(pool, said = new Map()) {
+export function say(pool, said) {
   let r = said.get(pool); if (!r) said.set(pool, r = []);
   const hold = Math.min(r.length, Math.floor(pool.length / 2));
   let line, tries = 0;
@@ -688,4 +701,6 @@ export const COPY = {
   roostFull: ['The roost is full. Curate ruthlessly.', 'No perch left. Evict a favorite first.'],
   roosted: ['{n} moved into the roost. Rent: one coo.', '{n} is now a kept bird.', '{n} accepted the penthouse perch.'],
 };
+// A line of park copy, with the bird's name filled in.
+export const copy = (kind, name = '') => pick(COPY[kind]).replace('{n}', name);
 export function pick(arr) { return arr[Math.floor(rand() * arr.length)]; }

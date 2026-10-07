@@ -1,6 +1,6 @@
 // Capture the breeding loop: courtship hearts → egg in nest → hatch → chick. Real-time frames.
-import { startServer, launch, boot, frames, shot, state, check, failures } from './lib.mjs';
-const srv = await startServer(); const br = await launch();
+import { setup, finish, boot, shot, check, checkNoErrors } from './lib.mjs';
+const { srv, br } = await setup();
 const { page, errors } = await boot(br, srv.url, 'nosave&seed=4&hour=16.5');
 await page.evaluate(() => { window.pp.setSpeed(2.5); });
 await page.waitForFunction(() => !!window.__game.sim.court, null, { timeout: 60000, polling: 100 });
@@ -16,7 +16,6 @@ for (let i = 0; i < 70; i++) {
   if (sawEgg && s.births > 0 && !sawChick) { sawChick = true; await page.waitForTimeout(700); out.push(await shot(page, 'life-3-chick.png', { hud: false })); break; }
 }
 check(sawHeart, 'courting pair shows hearts'); check(sawEgg, 'an egg is laid'); check(sawChick, 'the egg hatches');
-check(errors.length === 0, 'no console errors ' + errors.join('|'));
+checkNoErrors(errors);
 console.log(out.join('\n'));
-await br.close(); await srv.close();
-process.exit(failures() ? 1 : 0);
+await finish(br, srv, 'lifecycle');

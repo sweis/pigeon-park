@@ -1,11 +1,11 @@
 // Achievements in-game: monuments appear on the lawn, clicking one (real mouse) opens its pane; no shader compiles.
-import { startServer, launch, boot, frames, shot, state, check, failures } from './lib.mjs';
-const srv = await startServer({ dist: process.argv.includes('--dist') }); const br = await launch();
+import { setup, finish, boot, frames, shot, state, check, checkNoErrors, poll } from './lib.mjs';
+const { srv, br } = await setup();
 const { page, errors } = await boot(br, srv.url, 'nosave&seed=6&hour=16.5');
 const p0 = (await state(page)).render.programs;
 await page.keyboard.type('rizz');
 // achievements are awarded on the next sim think tick; poll (software-GPU frames can take > 1 s each)
-await page.waitForFunction(() => window.pp.achievements().built.includes('legend'), null, { timeout: 30000, polling: 200 }).catch(() => {});
+await poll(page, () => window.pp.achievements().built.includes('legend'), null, 30000);
 let a = await page.evaluate(() => window.pp.achievements());
 check(a.built.includes('legend') && a.built.includes('firstbreed') && a.built.length === a.earned.length, `rizz earns achievements and builds their monuments (${a.built.join(', ')})`);
 // the monument ring sits beyond the default framing: zoom out with the real wheel, like a player would
@@ -22,7 +22,7 @@ check(await page.locator('.ach-list .ach').count() === a.total, `pane lists all 
 await shot(page, 'ach-pane.png');
 await page.keyboard.press('Escape');
 // everything at once: all monuments on the lawn
-await page.evaluate(() => { window.pp.win(); const S = window.__game.sim; S.stats.maxGen = 10; S.stats.births = 100; S.stats.happenings = 10; for (let i = 0; i < 8; i++) S.roost.push({ ...S.roost[0] || { name: 'x', genome: S.pigeons[0].genome, accessory: null, gen: 1 } }); });
+await page.evaluate(() => window.pp.win({ all: true }));
 await page.waitForTimeout(2500);
 a = await page.evaluate(() => window.pp.achievements());
 check(a.built.length === a.total, `all ${a.total} monuments built`);
@@ -36,7 +36,6 @@ for (const [n, az] of [['left', -1.1], ['right', 1.1], ['back', 0]]) {
 }
 const s = await state(page);
 check(s.render.programs === p0, `monuments compile no new shaders (${p0} → ${s.render.programs})`);
-check(errors.length === 0, 'no console errors ' + errors.join(' | '));
+checkNoErrors(errors);
 console.log('version', JSON.stringify(await page.evaluate(() => window.pp.version())));
-await br.close(); await srv.close();
-process.exit(failures() ? 1 : 0);
+await finish(br, srv, 'achievement');

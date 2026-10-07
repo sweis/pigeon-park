@@ -1,5 +1,7 @@
 // Pigeon Park — on-screen diagnostics overlay (?debug). Works on phones; tap it to cycle cameras.
 
+import { percentile } from './util.js';
+
 const CAMS = ['overview', 'fountain', 'dovecote', 'hero-close'];
 
 export class Diagnostics {
@@ -15,8 +17,8 @@ export class Diagnostics {
   frame() {
     if (!this.on) return;
     const now = performance.now(); if (now - this.t < 250) return; this.t = now;
-    const g = this.g, i = g.renderer.info, a = [...g.frameMs].sort((x, y) => x - y);
-    const p = (q) => a.length ? a[Math.min(a.length - 1, Math.floor(q * a.length))].toFixed(1) : '-';
+    const g = this.g, i = g.renderer.info;
+    const p = (q) => g.frameMs.length ? percentile(g.frameMs, q).toFixed(1) : '-';
     this.el.textContent = [
       `gpu   ${String(g.gpu).slice(0, 48)}`,
       `tier  ${g.q.tier}  dpr ${g.renderer.getPixelRatio()}  shadows ${g.q.shadows ? 'on' : 'off'}`,

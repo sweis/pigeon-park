@@ -2,11 +2,11 @@
 // hook to check the file (container, codecs, duration, frame count) and sampled caption frames.
 // Headless Chromium is a software GPU: a full 1080×1920 × 180-frame clip takes minutes there, so the
 // button path uses the real pipeline at a reduced size via ?clipscale. Run: node tests/clip.mjs [--dist]
-import { startServer, launch, boot, state, shot, check, failures } from './lib.mjs';
+import { setup, finish, boot, state, shot, check, checkNoErrors, checkPrograms, clickSel, poll } from './lib.mjs';
 import fs from 'node:fs';
 import { Input, BufferSource, ALL_FORMATS } from 'mediabunny';
 
-const srv = await startServer({ dist: process.argv.includes('--dist') }); const br = await launch();
+const { srv, br } = await setup();
 const { page, errors } = await boot(br, srv.url, 'nosave&seed=8&hour=15.5');
 const sup = await page.evaluate(() => window.pp.clipSupport());
 console.log('  encoders:', JSON.stringify(sup));
@@ -31,28 +31,24 @@ const vt = await input.getPrimaryVideoTrack(), at = await input.getPrimaryAudioT
 check(vt && vt.displayWidth === 360 && vt.displayHeight === 640, `file has a 360×640 video track (${vt?.codec})`);
 check(!sup.audio || (at && at.numberOfChannels === 2), `file has a stereo audio track (${at?.codec || 'none'})`);
 check(Math.abs(dur - 2) < .15, `duration ≈ 2 s (${dur.toFixed(2)})`);
-let st = await state(page);
-check(st.render.programs === st.render.programsAfterBoot, `recording compiles no new shaders (${st.render.programs})`);
+await checkPrograms(page, 'recording compiles no new shaders');
 const size = await page.evaluate(() => [window.__game.renderer.domElement.width, innerWidth]);
 check(size[0] === size[1], `renderer restored to the window size after filming (${size})`);
-const t1 = st.t;
+const t1 = (await state(page)).t;
 await page.waitForTimeout(1500);
 check((await state(page)).t > t1, 'the live park resumes after filming');
 
 // 2. the real button path (Clip in the inspector → progress → video preview with Download)
 await page.evaluate(() => { window.__clipOpts = { w: 270, h: 480, secs: 1 }; const g = window.__game, orig = g.clip.bind(g); g.clip = (id, cb) => orig(id, cb, window.__clipOpts); });
 await page.evaluate((id) => { window.pp.select(id); window.pp.render(); }, id);
-await page.waitForFunction(() => !!document.querySelector('#inspector [data-act="clip"]'), null, { timeout: 15000 });
-const b = await page.locator('#inspector [data-act="clip"]').boundingBox();
-await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+await poll(page, () => !!document.querySelector('#inspector [data-act="clip"]'), null, 15000);
+await clickSel(page, '#inspector [data-act="clip"]');
 check(await page.locator('.clip-dlg .clipbar').count() === 1, 'Clip button opens the filming dialog with a progress bar');
-const ok = await page.waitForFunction(() => !!document.querySelector('.clip-dlg video'), null, { timeout: 180000, polling: 250 }).then(() => true, () => false);
+const ok = await poll(page, () => !!document.querySelector('.clip-dlg video'), null, 180000);
 check(ok, 'the finished clip previews in the dialog');
 const foot = ok ? await page.textContent('.clip-dlg .photo-actions .foot') : '';
 const dl = ok ? await page.getAttribute('.clip-dlg a[download]', 'download') : '';
 check(/^pigeon-.+\.(mp4|webm)$/.test(dl), `Download offers ${dl} (${foot.trim()})`);
 await shot(page, 'clip-dialog.png');
-check(errors.length === 0, `no console errors ${errors.join(' | ')}`);
-await br.close(); await srv.close();
-console.log(failures() ? `\n${failures()} FAILED` : '\nall clip checks passed');
-process.exit(failures() ? 1 : 0);
+checkNoErrors(errors);
+await finish(br, srv, 'clip');

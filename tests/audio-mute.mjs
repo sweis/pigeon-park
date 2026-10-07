@@ -1,7 +1,7 @@
 // Muting both sound + music must be absolute: engine suspended, and not a single audio source started —
 // whichever way the player mutes (buttons, sliders, before first tap, after a reload).
-import { startServer, launch, check, failures } from './lib.mjs';
-const srv = await startServer({ dist: process.argv.includes('--dist') }); const br = await launch();
+import { setup, finish, check, clickSel, screenOf, PHONE } from './lib.mjs';
+const { srv, br } = await setup();
 
 async function open(ctx, clear) {
   const page = await ctx.newPage();
@@ -15,13 +15,13 @@ async function open(ctx, clear) {
   await page.evaluate(() => { for (let i = 0; i < 25; i++) window.pp.spawn('founder'); window.pp.setSpeed(2.5); });
   return page;
 }
-const click = async (page, sel) => { const b = await page.locator(sel).boundingBox(); await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); };
+const click = clickSel;
 // count sources started over a window while also tapping birds (which normally coo)
 async function silentFor(page, ms) {
   await page.waitForTimeout(300);
   const s0 = await page.evaluate(() => window.__starts);
   for (let i = 0; i < 4; i++) {
-    const p = await page.evaluate((i) => window.pp.screenOf(window.__game.sim.pigeons[i].id), i);
+    const p = await screenOf(page, await page.evaluate((i) => window.__game.sim.pigeons[i].id, i));
     if (p?.onScreen) await page.mouse.click(p.x, p.y);
     await page.waitForTimeout(ms / 4);
   }
@@ -66,15 +66,14 @@ async function silentFor(page, ms) {
   await ctx.close();
 }
 { // E: phone — mute both from the Settings panel's phone row, with real taps
-  const ctx = await br.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }), page = await open(ctx, true);
-  const tapSel = async (sel) => { const b = await page.locator(sel).first().boundingBox(); await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2); await page.waitForTimeout(200); };
+  const ctx = await br.newContext({ viewport: PHONE.viewport, isMobile: true, hasTouch: true }), page = await open(ctx, true);
+  const tapSel = async (sel) => { await clickSel(page, sel, { touch: true }); await page.waitForTimeout(200); };
   await page.touchscreen.tap(200, 500); await page.waitForTimeout(800);
   await tapSel('#b-settings'); await tapSel('#settings .row.phone [data-act="sfx"]'); await tapSel('#settings .row.phone [data-act="music"]');
   const s0 = await page.evaluate(() => window.__starts);
-  for (let i = 0; i < 5; i++) { const p = await page.evaluate((i) => window.pp.screenOf(window.__game.sim.pigeons[i].id), i); await page.touchscreen.tap(p.x, p.y); await page.waitForTimeout(700); }
+  for (let i = 0; i < 5; i++) { const p = await screenOf(page, await page.evaluate((i) => window.__game.sim.pigeons[i].id, i)); await page.touchscreen.tap(p.x, p.y); await page.waitForTimeout(700); }
   const r = await page.evaluate((s0) => ({ started: window.__starts - s0, ac: !!window.__game.audio.ac }), s0);
   check(r.started === 0 && !r.ac, `E · phone Settings row: both muted → ${r.started} sources while tapping birds, engine closed`);
   await ctx.close();
 }
-await br.close(); await srv.close();
-process.exit(failures() ? 1 : 0);
+await finish(br, srv, 'mute');

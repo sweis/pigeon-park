@@ -4,9 +4,7 @@ import { setSeed } from '../src/rng.js';
 import * as M from '../src/genetics.js';
 import { HAPPENINGS, startHappening } from '../src/happenings.js';
 import { ACHIEVEMENTS, MONUMENT_SLOTS, checkAchievements } from '../src/achievements.js';
-
-let fails = 0;
-const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
+import { check as ok, failures } from './assert.mjs';
 
 let worst = 0;
 function run(seed, seconds) {
@@ -251,5 +249,25 @@ for (const kind of Object.keys(HAPPENINGS)) {
   const caught = checkAchievements(c, true);
   ok(caught.length === got.length && !c.events.some(e => e.type === 'achievement'), `an older save is caught up quietly (${caught.length} awarded, one toast)`);
 }
-console.log(fails ? `\n${fails} FAILED` : '\nall sim tests passed');
-process.exit(fails ? 1 : 0);
+// v0.9.2 cleanup: registries line up, determinism doesn't depend on the date, LOD/caching
+{
+  const P = await import('../src/pigeon3d.js');
+  const outfits = M.LOCI.find(l => l.id === 'outfit').alleles.filter(a => a !== 'none');
+  ok(Object.keys(M.ACCESSORIES).every(a => P.ACCESSORY_BUILDERS[a]) && outfits.every(o => P.OUTFIT_LOOKS[o]), `every accessory has a builder and every outfit a look (${Object.keys(M.ACCESSORIES).length} + ${outfits.length})`);
+  ok(Object.keys(M.SEASONS).every(k => outfits.includes(k) && M.BREEDS.some(b => b.seasonal === k)), 'every season has its costume allele and a seasonal breed');
+  setSeed(5); ok(new Sim().season === null, 'a seeded park ignores the calendar (same replay any day)');
+  const A = { ax: 0, az: 0, bx: .4, bz: 0 }, g = segGap(A, { ...A });
+  ok(Math.hypot(g.nx, g.nz) > .99, 'two birds in exactly the same spot still get pushed apart');
+  ok(!M.MUT_ONLY.some(([l, a]) => l === 'outfit' && a === 'jersey') && M.MUT_ONLY.length > 30, `the golden egg / goddess pool never includes Jacob's jersey (${M.MUT_ONLY.length} cryptid alleles)`);
+  setSeed(8); const S = new Sim(); S.initFlock(null);
+  for (let i = 0; i < 6; i++) { startHappening(S, 'goldenegg'); for (let k = 0; k < 400; k++) S.step(); }
+  ok(!S.pigeons.some(p => p.genome.outfit.includes('jersey')), 'golden eggs never hatch a superfan jersey');
+  const curly = M.computePheno(pureG({ curl: 'curly' }), null), mats = P.makeMaterials(), rig = new P.PigeonRig(curly, mats, false, 1);
+  const t1 = rig.mesh.geometry.index.count / 3; rig.setLod(0); const t0 = rig.mesh.geometry.index.count / 3;
+  ok(t1 < t0 * .35, `far LOD is light even for frillbacks (${t1} vs ${t0} triangles)`);
+  new P.PigeonRig(M.computePheno(pureG({ crest: 'rose' }), null), mats, false, 1).setLod(0); // a second look, not live
+  const n0 = P.geometryCacheSize(); P.pruneGeometryCache(new Set([rig.key]));
+  ok(P.geometryCacheSize() === 2, `the cache prune keeps both LODs of a live look (${n0} → ${P.geometryCacheSize()})`);
+}
+console.log(failures() ? `\n${failures()} FAILED` : '\nall sim tests passed');
+process.exit(failures() ? 1 : 0);
