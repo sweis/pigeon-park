@@ -107,7 +107,7 @@ const { srv, br } = await setup();
   await poll(page, () => !document.getElementById('inspector').classList.contains('hidden'));
   await page.evaluate(() => window.__game.ui.toast('A test toast that should float above the card.'));
   await page.waitForTimeout(700); await frames(page, 2); // let the slide-in animation finish
-  const r = await page.evaluate(() => { const i = document.getElementById('inspector').getBoundingClientRect(), t = document.querySelector('#toasts .toast').getBoundingClientRect(); return { insTop: Math.round(i.top), toastBottom: Math.round(t.bottom) }; });
+  const r = await page.evaluate(() => { const i = document.getElementById('inspector').getBoundingClientRect(), t = document.getElementById('toasts').getBoundingClientRect(); return { insTop: Math.round(i.top), toastBottom: Math.round(t.bottom) }; }); // (the column: a toast mid slide-in sits lower)
   check(r.toastBottom <= r.insTop, `phone: toast sits above the bird card (toast bottom ${r.toastBottom} ≤ card top ${r.insTop})`);
   await shot(page, 'feat-phone-toast.png');
   await page.evaluate(() => window.pp.select(null)); await page.evaluate(() => { window.__game.ui.introDone = true; window.__game.ui.refreshT = 0; }); await frames(page, 3);
@@ -150,6 +150,26 @@ const { srv, br } = await setup();
   check(/Behaviour 2\/9/.test(r.tab) && r.n === 9 && r.got.includes('Jumpy') && r.got.includes('Trumpeter voice'), `Pigeonpedia Behaviour tab lists the 9 behaviours, 2 seen (${r.tab}: ${r.got.join(', ')})`);
   await shot(page, 'feat-pedia-behaviour.png');
   checkNoErrors(errors, '(pedia)');
+  await ctx.close();
+}
+
+// ---------- Breed Registry: clone several in a row ----------
+{
+  const { page, errors, ctx } = await boot(br, srv.url, 'nosave&seed=3&hour=16');
+  await page.evaluate(() => { window.pp.win(); window.pp.render(); });
+  const pop0 = (await state(page)).pop;
+  await clickSel(page, '#b-breeds');
+  for (let i = 0; i < 2; i++) await clickSel(page, '.grid.breeds [data-act="clone-breed"][data-arg="fantail"]');
+  await page.waitForTimeout(300);
+  const s = await state(page);
+  const r = await page.evaluate(() => { const t = [...document.querySelectorAll('#toasts .toast')].pop(), b = t.getBoundingClientRect();
+    // (toasts ignore the pointer, so elementFromPoint can't see them: compare stacking within the HUD instead)
+    const z = (id) => +getComputedStyle(document.getElementById(id)).zIndex || 0, d = document.getElementById('dialog');
+    return { label: document.querySelector('[data-act="clone-breed"][data-arg="fantail"]').textContent.trim(), onTop: z('toasts') > z('dialog') && !d.classList.contains('hidden') && b.height > 0 }; });
+  check(s.dialog === 'breeds' && s.pop === pop0 + 2, `cloning from the registry keeps it open for more (${pop0} → ${s.pop} birds, dialog ${s.dialog})`);
+  check(r.label === 'Added to the park' && r.onTop, `the button confirms and the toast shows above the dialog (“${r.label}”)`);
+  await shot(page, 'feat-registry-clone.png');
+  checkNoErrors(errors, '(registry clone)');
   await ctx.close();
 }
 
